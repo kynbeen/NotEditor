@@ -8,6 +8,8 @@ const state = {
   active: null,
   thumbnailCache: new Map(),
   previewToken: 0,
+  bridgeReady: false,
+  bridgeFailed: false,
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -21,11 +23,26 @@ const refs = {
   previewEyebrow: $("#previewEyebrow"), previewHeading: $("#previewHeading"),
   previewMeta: $("#previewMeta"), busy: $("#busyOverlay"), busyText: $("#busyText"),
   toastRegion: $("#toastRegion"),
+  sourceHelp: $("#sourceHelp"), connectionError: $("#connectionError"),
 };
 
 const pageKey = (docId, index) => `${docId}:${index}`;
 const refKey = (ref) => pageKey(ref.document_id, ref.page_index);
-const api = () => window.pywebview?.api;
+function requireApi() {
+  const bridge = window.pywebview?.api;
+  if (!bridge) {
+    throw new Error("앱 내부 연결이 준비되지 않았습니다. 서버를 실행할 필요는 없습니다. 앱 바로가기로 다시 실행해 주세요.");
+  }
+  return bridge;
+}
+
+async function callApi(method, ...args) {
+  const bridge = requireApi();
+  if (typeof bridge[method] !== "function") {
+    throw new Error(`앱 기능을 찾을 수 없습니다: ${method}. 앱을 다시 설치해 주세요.`);
+  }
+  return bridge[method](...args);
+}
 
 function toast(message, type = "") {
   const node = document.createElement("div");
@@ -38,6 +55,39 @@ function toast(message, type = "") {
 function setBusy(on, text = "처리 중…") {
   refs.busyText.textContent = text;
   refs.busy.hidden = !on;
+}
+
+function setBridgeState(ready, failed = false) {
+  state.bridgeReady = ready;
+  state.bridgeFailed = failed;
+  refs.add.disabled = !ready;
+  refs.emptyAdd.disabled = !ready;
+  refs.emptyAdd.textContent = ready ? "파일 선택" : (failed ? "앱으로 다시 실행하세요" : "준비 중…");
+  refs.sourceHelp.textContent = ready
+    ? "여러 파일을 한 번에 선택할 수 있습니다."
+    : (failed ? "일반 브라우저에서는 파일을 추가할 수 없습니다." : "앱 내부 연결을 준비하는 중입니다.");
+  refs.connectionError.hidden = !failed;
+  renderSummary();
+}
+
+async function initializeBridge() {
+  if (state.bridgeReady) return;
+  try {
+    const response = await callApi("health");
+    if (!response?.ok) throw new Error(response?.error || "앱 응답이 올바르지 않습니다.");
+    setBridgeState(true, false);
+  } catch (error) {
+    console.error(error);
+  }
+}
+
+async function reportClientError(value) {
+  const message = value instanceof Error ? `${value.message}\n${value.stack || ""}` : String(value);
+  try {
+    if (window.pywebview?.api?.log_client_error) {
+      await window.pywebview.api.log_client_error(message);
+    }
+  } catch (_) { /* Logging must never hide the original UI error. */ }
 }
 
 function documentById(id) { return state.documents.find((doc) => doc.id === id); }
@@ -75,7 +125,7 @@ function formatRanges(indices) {
 async function loadImage(docId, pageIndex, kind = "thumbnail") {
   const key = `${docId}:${pageIndex}:${kind}`;
   if (state.thumbnailCache.has(key)) return state.thumbnailCache.get(key);
-  const response = await api().page_image(docId, pageIndex, kind);
+  const response = await callApi("page_image", docId, pageIndex, kind);
   if (!response.ok) throw new Error(response.error);
   state.thumbnailCache.set(key, response.image);
   return response.image;
@@ -153,14 +203,19 @@ function setDocumentSelection(doc, indices) {
 }
 
 async function applyRange(doc, input, errorNode) {
-  const response = await api().parse_range(input.value, doc.page_count);
-  if (!response.ok) {
-    errorNode.textContent = response.error;
-    input.focus();
-    return;
+  try {
+    const response = await callApi("parse_range", input.value, doc.page_count);
+    if (!response.ok) {
+      errorNode.textContent = response.error;
+      input.focus();
+      return;
+    }
+    errorNode.textContent = "";
+    setDocumentSelection(doc, response.indices);
+  } catch (error) {
+    errorNode.textContent = error.message;
+    reportClientError(error);
   }
-  errorNode.textContent = "";
-  setDocumentSelection(doc, response.indices);
 }
 
 function togglePage(doc, page) {
@@ -260,10 +315,12 @@ function renderResult() {
 }
 
 function renderSummary() {
-  refs.selectionSummary.textContent = state.documents.length
-    ? `${state.documents.length}개 문서에서 ${state.order.length}쪽 선택`
-    : "PDF를 추가해 시작하세요";
-  refs.save.disabled = state.order.length === 0;
+  refs.selectionSummary.textContent = !state.bridgeReady
+    ? (state.bridgeFailed ? "바로가기로 다시 실행해 주세요" : "앱 연결 중…")
+    : (state.documents.length
+      ? `${state.documents.length}개 문서에서 ${state.order.length}쪽 선택`
+      : "PDF를 추가해 시작하세요");
+  refs.save.disabled = !state.bridgeReady || state.order.length === 0;
 }
 
 function render() { renderDocuments(); renderResult(); renderSummary(); }
@@ -271,7 +328,7 @@ function render() { renderDocuments(); renderResult(); renderSummary(); }
 async function addPdfs() {
   setBusy(true, "PDF를 확인하는 중…");
   try {
-    const response = await api().choose_pdfs();
+    const response = await callApi("choose_pdfs");
     if (!response.ok) throw new Error(response.error);
     if (!response.added.length) return;
     response.added.forEach((doc) => doc.pages.forEach((page) => state.selected.add(pageKey(doc.id, page.index))));
@@ -285,17 +342,22 @@ async function addPdfs() {
 }
 
 async function removeDocument(id) {
-  const response = await api().remove_document(id);
-  if (!response.ok) { toast(response.error, "error"); return; }
-  state.documents = state.documents.filter((doc) => doc.id !== id);
-  [...state.selected].filter((key) => key.startsWith(`${id}:`)).forEach((key) => state.selected.delete(key));
-  state.order = state.order.filter((ref) => ref.document_id !== id);
-  state.thumbnailCache.forEach((_, key) => { if (key.startsWith(`${id}:`)) state.thumbnailCache.delete(key); });
-  if (state.active?.document_id === id) {
-    state.active = null; refs.previewImage.hidden = true; refs.previewEmpty.hidden = false;
-    refs.previewHeading.textContent = "미리보기"; refs.previewMeta.textContent = "";
+  try {
+    const response = await callApi("remove_document", id);
+    if (!response.ok) { toast(response.error, "error"); return; }
+    state.documents = state.documents.filter((doc) => doc.id !== id);
+    [...state.selected].filter((key) => key.startsWith(`${id}:`)).forEach((key) => state.selected.delete(key));
+    state.order = state.order.filter((ref) => ref.document_id !== id);
+    state.thumbnailCache.forEach((_, key) => { if (key.startsWith(`${id}:`)) state.thumbnailCache.delete(key); });
+    if (state.active?.document_id === id) {
+      state.active = null; refs.previewImage.hidden = true; refs.previewEmpty.hidden = false;
+      refs.previewHeading.textContent = "미리보기"; refs.previewMeta.textContent = "";
+    }
+    syncOrder(); render();
+  } catch (error) {
+    toast(error.message, "error");
+    reportClientError(error);
   }
-  syncOrder(); render();
 }
 
 async function saveResult() {
@@ -306,7 +368,7 @@ async function saveResult() {
     : "조합된 문서.pdf";
   setBusy(true, "원본 품질로 PDF를 저장하는 중…");
   try {
-    const response = await api().save_result(state.order, suggestion);
+    const response = await callApi("save_result", state.order, suggestion);
     if (!response.ok) throw new Error(response.error);
     if (response.cancelled) return;
     const warnings = response.result.warnings || [];
@@ -321,4 +383,12 @@ refs.emptyAdd.addEventListener("click", addPdfs);
 refs.save.addEventListener("click", saveResult);
 refs.resetOrder.addEventListener("click", () => { state.orderDirty = false; state.order = defaultOrder(); renderResult(); });
 
-window.addEventListener("pywebviewready", () => render());
+window.addEventListener("error", (event) => reportClientError(event.error || event.message));
+window.addEventListener("unhandledrejection", (event) => reportClientError(event.reason));
+window.addEventListener("pywebviewready", initializeBridge);
+
+setBridgeState(false, false);
+if (window.pywebview?.api) initializeBridge();
+setTimeout(() => {
+  if (!state.bridgeReady) setBridgeState(false, true);
+}, 6000);

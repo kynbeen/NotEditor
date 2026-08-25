@@ -17,7 +17,7 @@
       </div>
       <div class="top-actions">
         <div id="selectionSummary" class="selection-summary">PDF를 추가해 시작하세요</div>
-        <button id="addPdfButton" class="button secondary" type="button">PDF 추가</button>
+        <button id="addPdfButton" class="button secondary" type="button" disabled>PDF 추가</button>
         <button id="saveButton" class="button primary" type="button" disabled>PDF로 저장</button>
       </div>
     </header>
@@ -34,8 +34,12 @@
         <div id="sourceEmpty" class="empty-state drop-zone">
           <div class="empty-icon">＋</div>
           <h3>PDF를 추가하세요</h3>
-          <p>여러 파일을 한 번에 선택할 수 있습니다.</p>
-          <button id="emptyAddButton" class="button primary" type="button">파일 선택</button>
+          <p id="sourceHelp">앱 내부 연결을 준비하는 중입니다.</p>
+          <button id="emptyAddButton" class="button primary" type="button" disabled>준비 중…</button>
+          <div id="connectionError" class="connection-error" hidden>
+            <strong>앱 연결을 찾을 수 없습니다</strong>
+            <span>서버를 실행할 필요는 없습니다. 이 창을 닫고 바탕화면 또는 시작 메뉴의<br><b>PDF 페이지 조합기</b> 바로가기로 다시 실행하세요.</span>
+          </div>
         </div>
         <div id="documentList" class="document-list" hidden></div>
       </section>

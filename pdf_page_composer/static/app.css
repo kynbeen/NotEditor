@@ -119,6 +119,9 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent-2); 
 .empty-state.compact { padding: 28px 15px; }
 .empty-icon { width: 51px; height: 51px; display: grid; place-items: center; margin: auto; border: 1px dashed rgba(169,156,255,.42); border-radius: 15px; color: var(--accent-2); background: var(--accent-soft); font-size: 24px; }
 .empty-icon.small { width: 42px; height: 42px; font-size: 18px; }
+.connection-error { max-width: 285px; margin: 17px auto 0; padding: 12px 13px; border: 1px solid rgba(255,113,139,.34); border-radius: 10px; color: #f2b7c2; background: rgba(255,113,139,.08); font-size: 10px; line-height: 1.55; }
+.connection-error strong, .connection-error span { display: block; }
+.connection-error strong { margin-bottom: 4px; color: #ffd7df; font-size: 11px; }
 
 .preview-panel { display: grid; grid-template-rows: 73px minmax(0, 1fr) 43px; }
 .preview-meta { max-width: 52%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 10px; }

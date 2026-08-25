@@ -58,6 +58,11 @@ class ComposerApiTests(unittest.TestCase):
             result = self.api.save_result([], "nothing.pdf")
         self.assertEqual(result, {"ok": True, "cancelled": True})
 
+    def test_health_contract_is_available_before_file_selection(self):
+        result = self.api.health()
+        self.assertTrue(result["ok"])
+        self.assertRegex(result["version"], r"^\d+\.\d+\.\d+$")
+
 
 if __name__ == "__main__":
     unittest.main()

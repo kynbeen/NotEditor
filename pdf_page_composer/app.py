@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import re
+import logging
 from pathlib import Path
 from typing import Any
 
+from . import __version__
 from .engine import ComposerSession, PdfComposerError
 from .ranges import PageRangeError, parse_page_ranges
 
@@ -25,7 +27,17 @@ class ComposerApi:
 
     @staticmethod
     def _error(exc: Exception) -> dict:
+        logging.getLogger("pdf_page_composer").error(
+            "Desktop API request failed: %s", exc, exc_info=exc
+        )
         return {"ok": False, "error": str(exc)}
+
+    def health(self) -> dict:
+        return self._ok(version=__version__)
+
+    def log_client_error(self, message: str) -> dict:
+        logging.getLogger("pdf_page_composer").error("UI error: %s", message)
+        return self._ok()
 
     def choose_pdfs(self) -> dict:
         try:
@@ -126,3 +138,21 @@ def run(debug: bool = False) -> None:
         gui="edgechromium",
         icon=str(icon) if icon.exists() else None,
     )
+
+
+def configure_logging() -> Path:
+    import os
+
+    local_data = Path(os.environ.get("LOCALAPPDATA", Path.home()))
+    log_dir = local_data / "PDFPageComposer"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / "app.log"
+    logging.basicConfig(
+        filename=log_path,
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(message)s",
+        encoding="utf-8",
+        force=True,
+    )
+    logging.getLogger("pdf_page_composer").info("Application starting (version %s)", __version__)
+    return log_path

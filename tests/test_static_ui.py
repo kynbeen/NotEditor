@@ -25,6 +25,12 @@ class StaticUiContractTests(unittest.TestCase):
         self.assertIn("resetOrderButton", self.html)
         self.assertIn("state.order = defaultOrder()", self.js)
 
+    def test_file_buttons_wait_for_desktop_bridge(self):
+        self.assertIn('id="addPdfButton" class="button secondary" type="button" disabled', self.html)
+        self.assertIn('id="emptyAddButton" class="button primary" type="button" disabled', self.html)
+        self.assertIn('callApi("health")', self.js)
+        self.assertIn("서버를 실행할 필요는 없습니다", self.html)
+
 
 if __name__ == "__main__":
     unittest.main()
