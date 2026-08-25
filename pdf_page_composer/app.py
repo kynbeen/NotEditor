@@ -14,12 +14,15 @@ class ComposerApi:
     """Small JSON-friendly bridge exposed to the embedded web UI."""
 
     def __init__(self, session: ComposerSession | None = None) -> None:
-        self.session = session or ComposerSession()
-        self.window: Any | None = None
+        # pywebview exposes every public attribute on js_api. Keep native and
+        # stateful Python objects private or its serializer walks the complete
+        # WinForms/WebView2 object graph and eventually recurses forever.
+        self._session = session or ComposerSession()
+        self._window: Any | None = None
         self._closed = False
 
-    def bind_window(self, window: Any) -> None:
-        self.window = window
+    def _bind_window(self, window: Any) -> None:
+        self._window = window
 
     @staticmethod
     def _ok(**payload: Any) -> dict:
@@ -41,11 +44,11 @@ class ComposerApi:
 
     def choose_pdfs(self) -> dict:
         try:
-            if self.window is None:
+            if self._window is None:
                 raise PdfComposerError("앱 창이 아직 준비되지 않았습니다.")
             import webview
 
-            paths = self.window.create_file_dialog(
+            paths = self._window.create_file_dialog(
                 webview.FileDialog.OPEN,
                 allow_multiple=True,
                 file_types=("PDF 문서 (*.pdf)",),
@@ -56,24 +59,24 @@ class ComposerApi:
 
     def add_paths(self, paths: list[str]) -> dict:
         try:
-            added = self.session.add_files(paths)
+            added = self._session.add_files(paths)
             return self._ok(
                 added=added,
-                sources=[source.as_dict() for source in self.session.sources],
+                sources=[source.as_dict() for source in self._session.sources],
             )
         except Exception as exc:
             return self._error(exc)
 
     def remove_document(self, document_id: str) -> dict:
         try:
-            self.session.remove_source(document_id)
+            self._session.remove_source(document_id)
             return self._ok()
         except Exception as exc:
             return self._error(exc)
 
     def page_image(self, document_id: str, page_index: int, kind: str) -> dict:
         try:
-            image = self.session.page_image(document_id, int(page_index), kind)
+            image = self._session.page_image(document_id, int(page_index), kind)
             return self._ok(image=image)
         except Exception as exc:
             return self._error(exc)
@@ -87,14 +90,14 @@ class ComposerApi:
 
     def save_result(self, order: list[dict], suggested_name: str = "조합된 문서.pdf") -> dict:
         try:
-            if self.window is None:
+            if self._window is None:
                 raise PdfComposerError("앱 창이 아직 준비되지 않았습니다.")
             import webview
 
             safe_name = re.sub(r'[<>:"/\\|?*]+', "_", suggested_name).strip(" .")
             if not safe_name.lower().endswith(".pdf"):
                 safe_name += ".pdf"
-            paths = self.window.create_file_dialog(
+            paths = self._window.create_file_dialog(
                 webview.FileDialog.SAVE,
                 save_filename=safe_name or "조합된 문서.pdf",
                 file_types=("PDF 문서 (*.pdf)",),
@@ -102,16 +105,16 @@ class ComposerApi:
             if not paths:
                 return self._ok(cancelled=True)
             output_path = paths if isinstance(paths, str) else paths[0]
-            result = self.session.build_pdf(order, output_path)
+            result = self._session.build_pdf(order, output_path)
             return self._ok(cancelled=False, result=result)
         except Exception as exc:
             return self._error(exc)
 
-    def close(self) -> None:
+    def _close(self) -> None:
         if self._closed:
             return
         self._closed = True
-        self.session.close()
+        self._session.close()
 
 
 def run(debug: bool = False) -> None:
@@ -129,8 +132,8 @@ def run(debug: bool = False) -> None:
         background_color="#0b1020",
         text_select=True,
     )
-    api.bind_window(window)
-    window.events.closed += api.close
+    api._bind_window(window)
+    window.events.closed += api._close
     icon = Path(__file__).parents[1] / "assets" / "icon.ico"
     webview.start(
         debug=debug,

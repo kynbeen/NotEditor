@@ -3,28 +3,29 @@
 from __future__ import annotations
 
 import json
+import sys
 import time
 from pathlib import Path
 
 import webview
 
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 
-class ProbeApi:
-    def ping(self) -> str:
-        return "pong"
-
-    def health(self) -> dict:
-        return {"ok": True, "version": "smoke"}
+from pdf_page_composer.app import ComposerApi
 
 
 def main() -> None:
-    page = Path(__file__).parents[1] / "pdf_page_composer" / "static" / "index.html"
+    page = ROOT / "pdf_page_composer" / "static" / "index.html"
+    api = ComposerApi()
     window = webview.create_window(
         "PDF Page Composer bridge smoke test",
         page.resolve().as_uri(),
-        js_api=ProbeApi(),
+        js_api=api,
         hidden=True,
     )
+    api._bind_window(window)
+    window.events.closed += api._close
 
     def probe() -> None:
         time.sleep(1)
@@ -32,7 +33,7 @@ def main() -> None:
             "JSON.stringify({"
             "bridge: typeof window.pywebview,"
             "api: typeof window.pywebview?.api,"
-            "ping: typeof window.pywebview?.api?.ping,"
+            "health: typeof window.pywebview?.api?.health,"
             "addEnabled: !document.querySelector('#addPdfButton').disabled"
             "})"
         )
@@ -41,7 +42,7 @@ def main() -> None:
         if result != {
             "bridge": "object",
             "api": "object",
-            "ping": "function",
+            "health": "function",
             "addEnabled": True,
         }:
             raise SystemExit(1)

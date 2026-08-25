@@ -34,12 +34,12 @@ class ComposerApiTests(unittest.TestCase):
         self.webview = types.SimpleNamespace(FileDialog=types.SimpleNamespace(OPEN="open", SAVE="save"))
 
     def tearDown(self):
-        self.api.close()
+        self.api._close()
         self.folder.cleanup()
 
     def test_choose_parse_and_save_contract(self):
         output = self.root / "saved.pdf"
-        self.api.bind_window(FakeWindow([(str(self.source),), str(output)]))
+        self.api._bind_window(FakeWindow([(str(self.source),), str(output)]))
         with patch.dict(sys.modules, {"webview": self.webview}):
             chosen = self.api.choose_pdfs()
             self.assertTrue(chosen["ok"])
@@ -53,7 +53,7 @@ class ComposerApiTests(unittest.TestCase):
         self.assertTrue(output.exists())
 
     def test_cancelled_save_does_not_write(self):
-        self.api.bind_window(FakeWindow([None]))
+        self.api._bind_window(FakeWindow([None]))
         with patch.dict(sys.modules, {"webview": self.webview}):
             result = self.api.save_result([], "nothing.pdf")
         self.assertEqual(result, {"ok": True, "cancelled": True})
@@ -62,6 +62,14 @@ class ComposerApiTests(unittest.TestCase):
         result = self.api.health()
         self.assertTrue(result["ok"])
         self.assertRegex(result["version"], r"^\d+\.\d+\.\d+$")
+
+    def test_native_objects_are_not_exposed_as_public_api_attributes(self):
+        self.assertFalse(hasattr(self.api, "window"))
+        self.assertFalse(hasattr(self.api, "session"))
+        for name in dir(self.api):
+            if name.startswith("_"):
+                continue
+            self.assertTrue(callable(getattr(self.api, name)), name)
 
 
 if __name__ == "__main__":
