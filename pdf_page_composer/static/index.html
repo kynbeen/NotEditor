@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>PDF 페이지 조합기</title>
+    <link rel="stylesheet" href="app.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></div>
+        <div>
+          <h1>PDF 페이지 조합기</h1>
+          <p>필요한 쪽만 고르고, 원하는 순서로 한 번에</p>
+        </div>
+      </div>
+      <div class="top-actions">
+        <div id="selectionSummary" class="selection-summary">PDF를 추가해 시작하세요</div>
+        <button id="addPdfButton" class="button secondary" type="button">PDF 추가</button>
+        <button id="saveButton" class="button primary" type="button" disabled>PDF로 저장</button>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <section class="panel source-panel" aria-labelledby="sourceHeading">
+        <div class="panel-header">
+          <div>
+            <span class="eyebrow">SOURCE</span>
+            <h2 id="sourceHeading">원본 문서</h2>
+          </div>
+          <span id="documentCount" class="count-badge">0</span>
+        </div>
+        <div id="sourceEmpty" class="empty-state drop-zone">
+          <div class="empty-icon">＋</div>
+          <h3>PDF를 추가하세요</h3>
+          <p>여러 파일을 한 번에 선택할 수 있습니다.</p>
+          <button id="emptyAddButton" class="button primary" type="button">파일 선택</button>
+        </div>
+        <div id="documentList" class="document-list" hidden></div>
+      </section>
+
+      <section class="panel preview-panel" aria-labelledby="previewHeading">
+        <div class="panel-header preview-header">
+          <div>
+            <span id="previewEyebrow" class="eyebrow">PREVIEW</span>
+            <h2 id="previewHeading">미리보기</h2>
+          </div>
+          <div id="previewMeta" class="preview-meta"></div>
+        </div>
+        <div id="previewStage" class="preview-stage">
+          <div id="previewEmpty" class="preview-empty">
+            <div class="preview-empty-sheets"><i></i><i></i><i></i></div>
+            <h3>쪽을 선택하면 크게 볼 수 있어요</h3>
+            <p>왼쪽은 원본 선택, 오른쪽은 최종 결과 순서입니다.</p>
+          </div>
+          <div id="previewLoader" class="loader" hidden></div>
+          <img id="previewImage" alt="선택한 PDF 쪽 미리보기" hidden />
+        </div>
+        <div class="preview-footer">
+          <span class="quality-dot"></span>
+          <span>미리보기만 이미지화하며, 저장본은 원본 PDF 객체를 유지합니다.</span>
+        </div>
+      </section>
+
+      <section class="panel result-panel" aria-labelledby="resultHeading">
+        <div class="panel-header">
+          <div>
+            <span class="eyebrow">RESULT</span>
+            <h2 id="resultHeading">결과 순서</h2>
+          </div>
+          <span id="pageCount" class="count-badge accent">0쪽</span>
+        </div>
+        <div class="result-toolbar">
+          <p>쪽을 끌어서 자유롭게 재정렬하세요.</p>
+          <button id="resetOrderButton" class="text-button" type="button" disabled>기본 순서 복원</button>
+        </div>
+        <div id="resultEmpty" class="empty-state compact">
+          <div class="empty-icon small">↗</div>
+          <h3>선택된 쪽이 없습니다</h3>
+          <p>왼쪽에서 포함할 쪽을 밝게 켜세요.</p>
+        </div>
+        <ol id="resultList" class="result-list" hidden></ol>
+      </section>
+    </main>
+
+    <div id="busyOverlay" class="busy-overlay" hidden>
+      <div class="busy-card"><div class="loader"></div><strong id="busyText">처리 중…</strong></div>
+    </div>
+    <div id="toastRegion" class="toast-region" aria-live="polite"></div>
+
+    <script src="app.js"></script>
+  </body>
+</html>
