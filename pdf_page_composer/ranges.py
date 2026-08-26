@@ -21,9 +21,12 @@ def parse_page_ranges(text: str, page_count: int) -> list[int]:
             raise PageRangeError("쉼표 사이에 빈 페이지 범위가 있습니다.")
         if "-" in part:
             pieces = [piece.strip() for piece in part.split("-")]
-            if len(pieces) != 2 or not all(piece.isdigit() for piece in pieces):
+            if len(pieces) != 2 or not any(pieces):
                 raise PageRangeError(f"올바르지 않은 범위입니다: {part}")
-            start, end = map(int, pieces)
+            if any(piece and not piece.isdigit() for piece in pieces):
+                raise PageRangeError(f"올바르지 않은 범위입니다: {part}")
+            start = int(pieces[0]) if pieces[0] else 1
+            end = int(pieces[1]) if pieces[1] else page_count
             if start > end:
                 raise PageRangeError(f"시작 쪽이 끝 쪽보다 큽니다: {part}")
             pages = range(start, end + 1)

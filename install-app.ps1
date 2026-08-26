@@ -6,9 +6,8 @@ $Icon = Join-Path $Root "assets\icon.ico"
 if (-not (Test-Path -LiteralPath $Pyw)) {
     throw "먼저 setup.ps1을 실행하세요: $Pyw 없음"
 }
-if (-not (Test-Path -LiteralPath $Icon)) {
-    & (Join-Path $Root "venv\Scripts\python.exe") -m pdf_page_composer.make_icon
-}
+# 코드와 함께 아이콘이 바뀔 수 있으므로 기존 파일이 있어도 매번 다시 만든다.
+& (Join-Path $Root "venv\Scripts\python.exe") -m pdf_page_composer.make_icon
 
 $shell = New-Object -ComObject WScript.Shell
 $targets = @(

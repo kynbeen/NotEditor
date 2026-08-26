@@ -18,7 +18,21 @@ class StaticUiContractTests(unittest.TestCase):
 
     def test_selected_pages_are_bright_and_unselected_pages_dimmed(self):
         self.assertIn(".page-tile:not(.selected)", self.css)
+        self.assertIn(".preview-page:not(.selected)", self.css)
         self.assertIn("filter: grayscale(1)", self.css)
+
+    def test_preview_contains_every_uploaded_page_and_scrolls_between_them(self):
+        self.assertIn('id="previewPages"', self.html)
+        self.assertIn("state.documents.forEach((doc) =>", self.js)
+        self.assertIn('className = `preview-page', self.js)
+        self.assertIn("new IntersectionObserver", self.js)
+        self.assertIn('refs.previewStage.addEventListener("scroll"', self.js)
+        self.assertIn('scrollIntoView({ behavior: "smooth"', self.js)
+
+    def test_page_toggle_does_not_rebuild_left_document_list(self):
+        toggle_body = self.js.split("function togglePage", 1)[1].split("function previewNode", 1)[0]
+        self.assertNotIn("renderDocuments()", toggle_body)
+        self.assertIn("updateDocumentSelectionUi(doc)", toggle_body)
 
     def test_result_pages_are_draggable_and_resettable(self):
         self.assertIn("item.draggable = true", self.js)

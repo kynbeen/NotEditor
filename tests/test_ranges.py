@@ -10,8 +10,13 @@ class PageRangeTests(unittest.TestCase):
     def test_blank_means_no_pages(self):
         self.assertEqual(parse_page_ranges("  ", 8), [])
 
+    def test_open_range_uses_first_or_last_page(self):
+        self.assertEqual(parse_page_ranges("-3", 8), [0, 1, 2])
+        self.assertEqual(parse_page_ranges("6-", 8), [5, 6, 7])
+        self.assertEqual(parse_page_ranges("-3, 6-", 8), [0, 1, 2, 5, 6, 7])
+
     def test_rejects_invalid_or_out_of_bounds_ranges(self):
-        for value in ("0", "4-2", "1,,2", "nine", "6"):
+        for value in ("0", "4-2", "1,,2", "nine", "6", "-", "1-2-3"):
             with self.subTest(value=value), self.assertRaises(PageRangeError):
                 parse_page_ranges(value, 5)
 

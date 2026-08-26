@@ -7,7 +7,8 @@ const state = {
   orderDirty: false,
   active: null,
   thumbnailCache: new Map(),
-  previewToken: 0,
+  previewObserver: null,
+  previewScrollFrame: 0,
   bridgeReady: false,
   bridgeFailed: false,
 };
@@ -19,7 +20,7 @@ const refs = {
   documentList: $("#documentList"), documentCount: $("#documentCount"),
   resultEmpty: $("#resultEmpty"), resultList: $("#resultList"), pageCount: $("#pageCount"),
   selectionSummary: $("#selectionSummary"), previewEmpty: $("#previewEmpty"),
-  previewImage: $("#previewImage"), previewLoader: $("#previewLoader"),
+  previewStage: $("#previewStage"), previewPages: $("#previewPages"),
   previewEyebrow: $("#previewEyebrow"), previewHeading: $("#previewHeading"),
   previewMeta: $("#previewMeta"), busy: $("#busyOverlay"), busyText: $("#busyText"),
   toastRegion: $("#toastRegion"),
@@ -160,13 +161,14 @@ function renderDocuments() {
   state.documents.forEach((doc) => {
     const card = document.createElement("article");
     card.className = "document-card";
+    card.dataset.documentId = doc.id;
     const selectedIndices = doc.pages.filter((page) => state.selected.has(pageKey(doc.id, page.index))).map((page) => page.index);
     card.innerHTML = `
       <div class="document-card-header">
-        <div class="document-title"><strong title="${escapeHtml(doc.name)}">${escapeHtml(doc.name)}</strong><span>${doc.page_count}쪽 · ${selectedIndices.length}쪽 선택</span></div>
+        <div class="document-title"><strong title="${escapeHtml(doc.name)}">${escapeHtml(doc.name)}</strong><span class="document-stats">${doc.page_count}쪽 · ${selectedIndices.length}쪽 선택</span></div>
         <button class="icon-button remove-document" type="button" title="문서 제거">×</button>
         <div class="range-row">
-          <input class="range-input" value="${formatRanges(selectedIndices)}" aria-label="쪽 범위" placeholder="예: 1-3, 7, 10-12" />
+          <input class="range-input" value="${formatRanges(selectedIndices)}" aria-label="쪽 범위" placeholder="예: -3, 7, 10-" />
           <button class="mini-button all-pages" type="button">전체</button>
           <button class="mini-button no-pages" type="button">해제</button>
         </div>
@@ -182,7 +184,7 @@ function renderDocuments() {
     const grid = card.querySelector(".thumbnail-grid");
     doc.pages.forEach((page) => {
       const tile = makeThumbnail(doc, page, state.selected.has(pageKey(doc.id, page.index)) ? "selected" : "");
-      tile.addEventListener("click", () => togglePage(doc, page));
+      tile.addEventListener("click", () => togglePage(doc, page, tile));
       grid.append(tile);
     });
     refs.documentList.append(card);
@@ -199,7 +201,24 @@ function setDocumentSelection(doc, indices) {
   doc.pages.forEach((page) => state.selected.delete(pageKey(doc.id, page.index)));
   indices.forEach((index) => state.selected.add(pageKey(doc.id, index)));
   syncOrder();
-  render();
+  updateDocumentSelectionUi(doc);
+  updatePreviewSelection();
+  renderResult();
+  renderSummary();
+}
+
+function updateDocumentSelectionUi(doc) {
+  const card = [...refs.documentList.querySelectorAll(".document-card")]
+    .find((node) => node.dataset.documentId === doc.id);
+  if (!card) return;
+  const selectedIndices = doc.pages
+    .filter((page) => state.selected.has(pageKey(doc.id, page.index)))
+    .map((page) => page.index);
+  card.querySelector(".document-stats").textContent = `${doc.page_count}쪽 · ${selectedIndices.length}쪽 선택`;
+  card.querySelector(".range-input").value = formatRanges(selectedIndices);
+  card.querySelectorAll(".page-tile").forEach((tile) => {
+    tile.classList.toggle("selected", state.selected.has(tile.dataset.key));
+  });
 }
 
 async function applyRange(doc, input, errorNode) {
@@ -218,40 +237,154 @@ async function applyRange(doc, input, errorNode) {
   }
 }
 
-function togglePage(doc, page) {
+function togglePage(doc, page, tile) {
   const key = pageKey(doc.id, page.index);
   if (state.selected.has(key)) state.selected.delete(key); else state.selected.add(key);
   syncOrder();
+  tile.classList.toggle("selected", state.selected.has(key));
+  updateDocumentSelectionUi(doc);
+  updatePreviewSelection(key);
   showPreview(doc.id, page.index, "원본 미리보기");
-  renderDocuments();
   renderResult();
   renderSummary();
 }
 
-async function showPreview(docId, pageIndex, origin = "원본 미리보기") {
+function previewNode(docId, pageIndex) {
+  const key = pageKey(docId, pageIndex);
+  return [...refs.previewPages.querySelectorAll(".preview-page")]
+    .find((node) => node.dataset.key === key);
+}
+
+function setActivePreview(docId, pageIndex, origin = "전체 페이지 미리보기") {
   const doc = documentById(docId);
   if (!doc) return;
-  const token = ++state.previewToken;
   state.active = { document_id: docId, page_index: pageIndex };
-  refs.previewEmpty.hidden = true;
-  refs.previewImage.hidden = true;
-  refs.previewLoader.hidden = false;
-  refs.previewEyebrow.textContent = origin === "결과 미리보기" ? "RESULT PREVIEW" : "SOURCE PREVIEW";
-  refs.previewHeading.textContent = origin;
+  refs.previewEyebrow.textContent = origin === "결과 미리보기" ? "RESULT PREVIEW" : "ALL PAGES";
+  refs.previewHeading.textContent = "전체 페이지 미리보기";
   refs.previewMeta.textContent = `${doc.name} · ${pageIndex + 1}쪽`;
-  document.querySelectorAll(".result-item.active").forEach((node) => node.classList.remove("active"));
+  refs.previewPages.querySelectorAll(".preview-page.active").forEach((node) => node.classList.remove("active"));
+  previewNode(docId, pageIndex)?.classList.add("active");
+  document.querySelectorAll(".result-item").forEach((node) => {
+    node.classList.toggle("active", node.dataset.key === pageKey(docId, pageIndex));
+  });
+}
+
+async function loadPreviewPage(node) {
+  if (!node || node.dataset.loaded === "true" || node.dataset.loading === "true") return;
+  node.dataset.loading = "true";
+  const docId = node.dataset.documentId;
+  const pageIndex = Number(node.dataset.pageIndex);
   try {
     const src = await loadImage(docId, pageIndex, "preview");
-    if (token !== state.previewToken) return;
-    refs.previewImage.src = src;
-    refs.previewLoader.hidden = true;
-    refs.previewImage.hidden = false;
+    if (!node.isConnected || node.dataset.previewNear !== "true") {
+      state.thumbnailCache.delete(`${docId}:${pageIndex}:preview`);
+      return;
+    }
+    const image = new Image();
+    image.alt = `${pageIndex + 1}쪽 미리보기`;
+    image.src = src;
+    node.querySelector(".preview-page-placeholder").replaceWith(image);
+    node.dataset.loaded = "true";
   } catch (error) {
-    if (token !== state.previewToken) return;
-    refs.previewLoader.hidden = true;
-    refs.previewEmpty.hidden = false;
+    const placeholder = node.querySelector(".preview-page-placeholder");
+    if (placeholder) {
+      placeholder.classList.add("error");
+      placeholder.textContent = "미리보기를 불러오지 못했습니다";
+    }
     toast(error.message, "error");
+  } finally {
+    delete node.dataset.loading;
   }
+}
+
+function unloadPreviewPage(node) {
+  if (node.dataset.loaded !== "true") return;
+  const image = node.querySelector("img");
+  if (image) {
+    const placeholder = document.createElement("span");
+    placeholder.className = "preview-page-placeholder";
+    placeholder.textContent = "미리보기 준비 중…";
+    image.replaceWith(placeholder);
+  }
+  state.thumbnailCache.delete(`${node.dataset.documentId}:${node.dataset.pageIndex}:preview`);
+  delete node.dataset.loaded;
+}
+
+function updatePreviewSelection(onlyKey = null) {
+  refs.previewPages.querySelectorAll(".preview-page").forEach((node) => {
+    if (onlyKey && node.dataset.key !== onlyKey) return;
+    const selected = state.selected.has(node.dataset.key);
+    node.classList.toggle("selected", selected);
+    node.querySelector(".preview-page-state").textContent = selected ? "출력 포함" : "출력 제외";
+  });
+}
+
+function updatePreviewFromScroll() {
+  state.previewScrollFrame = 0;
+  const stageRect = refs.previewStage.getBoundingClientRect();
+  const pages = [...refs.previewPages.querySelectorAll(".preview-page")];
+  let nearest = null;
+  let nearestDistance = Number.POSITIVE_INFINITY;
+  pages.forEach((node) => {
+    const rect = node.getBoundingClientRect();
+    if (rect.bottom < stageRect.top || rect.top > stageRect.bottom) return;
+    const distance = Math.abs(rect.top - stageRect.top - 34);
+    if (distance < nearestDistance) { nearest = node; nearestDistance = distance; }
+  });
+  if (nearest) setActivePreview(nearest.dataset.documentId, Number(nearest.dataset.pageIndex));
+}
+
+function renderPreviewPages() {
+  state.previewObserver?.disconnect();
+  refs.previewPages.replaceChildren();
+  const hasPages = state.documents.some((doc) => doc.pages.length);
+  refs.previewEmpty.hidden = hasPages;
+  refs.previewPages.hidden = !hasPages;
+  if (!hasPages) {
+    refs.previewHeading.textContent = "미리보기";
+    refs.previewMeta.textContent = "";
+    return;
+  }
+
+  state.documents.forEach((doc) => {
+    const label = document.createElement("div");
+    label.className = "preview-document-label";
+    label.textContent = `${doc.name} · ${doc.page_count}쪽`;
+    refs.previewPages.append(label);
+    doc.pages.forEach((page) => {
+      const node = document.createElement("article");
+      const key = pageKey(doc.id, page.index);
+      node.className = `preview-page${state.selected.has(key) ? " selected" : ""}`;
+      node.dataset.key = key;
+      node.dataset.documentId = doc.id;
+      node.dataset.pageIndex = page.index;
+      node.innerHTML = `
+        <div class="preview-page-header">
+          <strong>${escapeHtml(doc.name)} · ${page.number}쪽</strong>
+          <span class="preview-page-state">${state.selected.has(key) ? "출력 포함" : "출력 제외"}</span>
+        </div>
+        <div class="preview-sheet"><span class="preview-page-placeholder">미리보기 준비 중…</span></div>`;
+      node.querySelector(".preview-sheet").style.aspectRatio = `${page.width} / ${page.height}`;
+      refs.previewPages.append(node);
+    });
+  });
+
+  state.previewObserver = new IntersectionObserver((entries) => {
+    entries.forEach((entry) => {
+      entry.target.dataset.previewNear = entry.isIntersecting ? "true" : "false";
+      if (entry.isIntersecting) loadPreviewPage(entry.target);
+      else unloadPreviewPage(entry.target);
+    });
+  }, { root: refs.previewStage, rootMargin: "900px 0px" });
+  refs.previewPages.querySelectorAll(".preview-page").forEach((node) => state.previewObserver.observe(node));
+  requestAnimationFrame(updatePreviewFromScroll);
+}
+
+function showPreview(docId, pageIndex, origin = "원본 미리보기") {
+  const node = previewNode(docId, pageIndex);
+  if (!node) return;
+  setActivePreview(docId, pageIndex, origin);
+  node.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 function renderResult() {
@@ -265,9 +398,10 @@ function renderResult() {
     const doc = documentById(ref.document_id);
     if (!doc) return;
     const item = document.createElement("li");
-    item.className = "result-item";
+    item.className = `result-item${state.active?.document_id === ref.document_id && state.active?.page_index === ref.page_index ? " active" : ""}`;
     item.draggable = true;
     item.dataset.index = index;
+    item.dataset.key = refKey(ref);
     item.innerHTML = `<span class="result-image-placeholder"></span><div class="result-label"><strong>${escapeHtml(doc.name)}</strong><span>원본 ${ref.page_index + 1}쪽</span></div><span class="drag-handle" aria-hidden="true">⠿</span>`;
     requestAnimationFrame(async () => {
       try {
@@ -323,7 +457,7 @@ function renderSummary() {
   refs.save.disabled = !state.bridgeReady || state.order.length === 0;
 }
 
-function render() { renderDocuments(); renderResult(); renderSummary(); }
+function render() { renderDocuments(); renderPreviewPages(); renderResult(); renderSummary(); }
 
 async function addPdfs() {
   setBusy(true, "PDF를 확인하는 중…");
@@ -350,8 +484,7 @@ async function removeDocument(id) {
     state.order = state.order.filter((ref) => ref.document_id !== id);
     state.thumbnailCache.forEach((_, key) => { if (key.startsWith(`${id}:`)) state.thumbnailCache.delete(key); });
     if (state.active?.document_id === id) {
-      state.active = null; refs.previewImage.hidden = true; refs.previewEmpty.hidden = false;
-      refs.previewHeading.textContent = "미리보기"; refs.previewMeta.textContent = "";
+      state.active = null;
     }
     syncOrder(); render();
   } catch (error) {
@@ -382,6 +515,10 @@ refs.add.addEventListener("click", addPdfs);
 refs.emptyAdd.addEventListener("click", addPdfs);
 refs.save.addEventListener("click", saveResult);
 refs.resetOrder.addEventListener("click", () => { state.orderDirty = false; state.order = defaultOrder(); renderResult(); });
+refs.previewStage.addEventListener("scroll", () => {
+  if (state.previewScrollFrame) return;
+  state.previewScrollFrame = requestAnimationFrame(updatePreviewFromScroll);
+}, { passive: true });
 
 window.addEventListener("error", (event) => reportClientError(event.error || event.message));
 window.addEventListener("unhandledrejection", (event) => reportClientError(event.reason));

@@ -9,6 +9,31 @@ from . import __version__
 from .engine import ComposerSession, PdfComposerError
 from .ranges import PageRangeError, parse_page_ranges
 
+APP_USER_MODEL_ID = "PDFPageComposer.Desktop"
+
+
+def configure_windows_app_identity() -> None:
+    """Python 프로세스가 아니라 독립 앱으로 작업표시줄에 그룹화되게 한다."""
+    import os
+
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+
+        set_app_id = ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID
+        set_app_id.argtypes = [ctypes.c_wchar_p]
+        set_app_id.restype = ctypes.c_long
+        result = set_app_id(APP_USER_MODEL_ID)
+        if result != 0:
+            logging.getLogger("pdf_page_composer").warning(
+                "Failed to set AppUserModelID: HRESULT=%s", result
+            )
+    except Exception:
+        logging.getLogger("pdf_page_composer").exception(
+            "Failed to configure Windows app identity"
+        )
+
 
 class ComposerApi:
     """Small JSON-friendly bridge exposed to the embedded web UI."""
@@ -118,6 +143,7 @@ class ComposerApi:
 
 
 def run(debug: bool = False) -> None:
+    configure_windows_app_identity()
     import webview
 
     api = ComposerApi()
