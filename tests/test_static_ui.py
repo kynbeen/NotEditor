@@ -45,6 +45,29 @@ class StaticUiContractTests(unittest.TestCase):
         self.assertIn('callApi("health")', self.js)
         self.assertIn("서버를 실행할 필요는 없습니다", self.html)
 
+    def test_handwriting_transfer_has_guided_desktop_flow(self):
+        self.assertIn('id="handwritingButton"', self.html)
+        self.assertIn('id="handwritingDialog"', self.html)
+        self.assertIn("필기와 형광펜 옮기기", self.html)
+        self.assertIn('callApi("save_handwriting_transfer"', self.js)
+        self.assertIn("크기나 여백이 달라지면 본문을 기준으로 자동 정렬", self.js)
+        self.assertIn(".compatibility-card.ready", self.css)
+
+    def test_alignment_preview_overlays_old_and_new_background(self):
+        self.assertIn('id="handwritingPreview"', self.html)
+        self.assertIn('id="alignBefore"', self.html)
+        self.assertIn('id="alignAfter"', self.html)
+        self.assertIn('id="alignBlend"', self.html)
+        self.assertIn('callApi("handwriting_preview"', self.js)
+        self.assertIn("refs.alignAfter.style.opacity", self.js)
+        self.assertIn(".align-stage img { position: absolute", self.css)
+
+    def test_alignment_card_reports_scale_and_warnings(self):
+        self.assertIn("본문 기준으로", self.js)
+        self.assertIn("본문 오차 최대", self.js)
+        self.assertIn("폭 기준으로 맞췄습니다", self.js)
+        self.assertIn("잘립니다", self.js)
+
 
 if __name__ == "__main__":
     unittest.main()

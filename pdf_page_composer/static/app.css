@@ -71,6 +71,8 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent-2); 
 .button.primary:hover:not(:disabled) { box-shadow: 0 11px 30px rgba(108, 87, 232, .38); }
 .button.secondary { background: rgba(255,255,255,.055); border-color: var(--line-strong); }
 .button.secondary:hover:not(:disabled) { background: rgba(255,255,255,.085); }
+.handwriting-launch { border-color: rgba(86,211,165,.3) !important; color: #c9f7e7; }
+.handwriting-launch:hover:not(:disabled) { background: rgba(86,211,165,.1) !important; }
 
 .workspace {
   height: calc(100vh - 92px); min-height: 588px;
@@ -176,6 +178,59 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent-2); 
 .toast { max-width: 390px; padding: 12px 15px; border: 1px solid var(--line-strong); border-radius: 11px; color: var(--text); background: #1b233b; box-shadow: var(--shadow); font-size: 11px; line-height: 1.45; animation: toast-in .2s ease-out; }
 .toast.error { border-color: rgba(255,113,139,.38); }
 .toast.success { border-color: rgba(86,211,165,.38); }
+
+.handwriting-dialog {
+  width: min(860px, calc(100vw - 48px)); max-height: calc(100vh - 48px); padding: 0;
+  overflow: hidden; border: 1px solid rgba(169,156,255,.27); border-radius: 21px;
+  color: var(--text); background: #10172a; box-shadow: 0 34px 110px rgba(0,0,0,.62);
+}
+.handwriting-dialog::backdrop { background: rgba(3,5,12,.74); backdrop-filter: blur(12px); }
+.handwriting-shell { padding: 26px; }
+.handwriting-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; }
+.handwriting-header h2 { margin: 5px 0 7px; font-size: 22px; letter-spacing: -.45px; }
+.handwriting-header p { max-width: 630px; margin: 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
+.dialog-close { width: 34px; height: 34px; flex: 0 0 auto; border: 1px solid var(--line); border-radius: 10px; color: var(--muted); background: rgba(255,255,255,.035); cursor: pointer; font-size: 20px; }
+.dialog-close:hover { color: var(--text); background: rgba(255,255,255,.07); }
+.handwriting-flow { display: grid; grid-template-columns: minmax(0,1fr) 30px minmax(0,1fr); align-items: center; gap: 10px; margin-top: 25px; }
+.transfer-file-card { min-width: 0; min-height: 92px; display: grid; grid-template-columns: 34px minmax(0,1fr) auto; align-items: center; gap: 12px; padding: 15px; border: 1px solid var(--line-strong); border-radius: 15px; color: var(--text); text-align: left; background: rgba(255,255,255,.027); cursor: pointer; transition: .16s ease; }
+.transfer-file-card:hover { transform: translateY(-1px); border-color: rgba(169,156,255,.54); background: rgba(128,108,255,.075); }
+.transfer-step { width: 31px; height: 31px; display: grid; place-items: center; border-radius: 10px; color: #e4e0ff; background: var(--accent-soft); font-size: 11px; font-weight: 800; }
+.transfer-file-copy { min-width: 0; }
+.transfer-file-copy strong, .transfer-file-copy small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.transfer-file-copy strong { font-size: 12px; }
+.transfer-file-copy small { margin-top: 7px; color: var(--muted); font-size: 10px; }
+.transfer-action { color: var(--accent-2); font-size: 10px; font-weight: 750; }
+.transfer-arrow { color: var(--muted-2); text-align: center; font-size: 18px; }
+.compatibility-card { min-height: 79px; display: grid; grid-template-columns: 38px minmax(0,1fr); align-items: center; gap: 13px; margin-top: 16px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 14px; background: rgba(255,255,255,.023); }
+.compatibility-icon { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 50%; color: var(--muted); background: rgba(255,255,255,.055); font-size: 12px; font-weight: 850; }
+.compatibility-card strong { display: block; font-size: 12px; }
+.compatibility-card p { margin: 5px 0 0; color: var(--muted); font-size: 10px; line-height: 1.5; white-space: pre-line; }
+.compatibility-card.ready { border-color: rgba(86,211,165,.32); background: rgba(86,211,165,.065); }
+.compatibility-card.ready .compatibility-icon { color: #08261c; background: var(--success); }
+.compatibility-card.error { border-color: rgba(255,113,139,.38); background: rgba(255,113,139,.07); }
+.compatibility-card.error .compatibility-icon { color: white; background: var(--danger); }
+.align-preview { margin-top: 14px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 14px; background: rgba(255,255,255,.023); }
+.align-preview[hidden] { display: none; }
+.align-preview-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.align-preview-copy strong { display: block; font-size: 12px; }
+.align-preview-copy small { display: block; margin-top: 5px; color: var(--muted); font-size: 10px; line-height: 1.5; }
+.align-pager { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 10px; white-space: nowrap; }
+.align-pager .text-button { padding: 2px 8px; font-size: 14px; line-height: 1; }
+.align-stage { position: relative; height: 300px; margin-top: 12px; border-radius: 11px; background: #0d1526; overflow: hidden; }
+.align-stage img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+.align-stage img#alignAfter { opacity: .5; }
+.align-slider { display: grid; grid-template-columns: auto minmax(0,1fr) auto; align-items: center; gap: 10px; margin-top: 11px; color: var(--muted); font-size: 10px; }
+.align-slider input { width: 100%; accent-color: var(--accent-2); }
+.handwriting-notice { display: grid; gap: 5px; margin-top: 14px; padding: 13px 15px; border-left: 3px solid rgba(169,156,255,.65); border-radius: 3px 11px 11px 3px; background: rgba(128,108,255,.06); }
+.handwriting-notice strong { font-size: 10px; }
+.handwriting-notice span { color: var(--muted); font-size: 10px; line-height: 1.55; }
+.handwriting-footer { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--line); }
+
+@media (max-width: 760px) {
+  .handwriting-shell { padding: 20px; }
+  .handwriting-flow { grid-template-columns: 1fr; }
+  .transfer-arrow { transform: rotate(90deg); }
+}
 
 @keyframes spin { to { transform: rotate(360deg); } }
 @keyframes shimmer { to { background-position-x: -220%; } }

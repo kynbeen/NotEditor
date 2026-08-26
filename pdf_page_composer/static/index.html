@@ -17,6 +17,7 @@
       </div>
       <div class="top-actions">
         <div id="selectionSummary" class="selection-summary">PDF를 추가해 시작하세요</div>
+        <button id="handwritingButton" class="button secondary handwriting-launch" type="button" disabled>필기 옮기기</button>
         <button id="addPdfButton" class="button secondary" type="button" disabled>PDF 추가</button>
         <button id="saveButton" class="button primary" type="button" disabled>PDF로 저장</button>
       </div>
@@ -86,6 +87,80 @@
         <ol id="resultList" class="result-list" hidden></ol>
       </section>
     </main>
+
+    <dialog id="handwritingDialog" class="handwriting-dialog">
+      <div class="handwriting-shell">
+        <div class="handwriting-header">
+          <div>
+            <span class="eyebrow">SAMSUNG NOTES</span>
+            <h2>필기와 형광펜 옮기기</h2>
+            <p>필기된 SDOCX의 편집 가능한 펜 데이터를 새 PDF의 같은 쪽·같은 자리로 옮깁니다. 배율이나 여백이 달라졌으면 본문을 기준으로 자동 정렬합니다.</p>
+          </div>
+          <button id="closeHandwritingButton" class="dialog-close" type="button" aria-label="닫기">×</button>
+        </div>
+
+        <div class="handwriting-flow">
+          <button id="chooseHandwritingSource" class="transfer-file-card" type="button">
+            <span class="transfer-step">1</span>
+            <span class="transfer-file-copy">
+              <strong>필기 원본 Samsung Notes</strong>
+              <small id="handwritingSourceName">.sdocx 파일 선택</small>
+            </span>
+            <span class="transfer-action">선택</span>
+          </button>
+          <div class="transfer-arrow" aria-hidden="true">→</div>
+          <button id="chooseHandwritingTarget" class="transfer-file-card" type="button">
+            <span class="transfer-step">2</span>
+            <span class="transfer-file-copy">
+              <strong>새 배경 문서</strong>
+              <small id="handwritingTargetName">.pdf 파일 선택</small>
+            </span>
+            <span class="transfer-action">선택</span>
+          </button>
+        </div>
+
+        <div id="handwritingCompatibility" class="compatibility-card waiting">
+          <span class="compatibility-icon">···</span>
+          <div>
+            <strong>두 파일을 선택하면 자동으로 맞춤 여부를 확인합니다.</strong>
+            <p>페이지 수·크기·회전이 모두 같아야 필기 좌표가 정확히 유지됩니다.</p>
+          </div>
+        </div>
+
+        <div id="handwritingPreview" class="align-preview" hidden>
+          <div class="align-preview-head">
+            <div class="align-preview-copy">
+              <strong>정렬 확인</strong>
+              <small>필기가 얹혀 있던 옛 배경과 새 배경을 겹쳐 봅니다. 본문 글자가 서로 겹쳐 보이면 필기도 제자리에 놓입니다.</small>
+            </div>
+            <div class="align-pager">
+              <button id="alignPrevPage" class="text-button" type="button" aria-label="이전 쪽">‹</button>
+              <span id="alignPageLabel">1 / 1</span>
+              <button id="alignNextPage" class="text-button" type="button" aria-label="다음 쪽">›</button>
+            </div>
+          </div>
+          <div id="alignStage" class="align-stage">
+            <img id="alignBefore" alt="필기가 얹혀 있던 원본 배경" />
+            <img id="alignAfter" alt="옮긴 뒤의 새 배경" />
+          </div>
+          <label class="align-slider">
+            <span>옛 배경</span>
+            <input id="alignBlend" type="range" min="0" max="100" value="50" />
+            <span>새 배경</span>
+          </label>
+        </div>
+
+        <div class="handwriting-notice">
+          <strong>원본은 수정하지 않습니다.</strong>
+          <span>필기·형광펜·펜 속성과 Samsung Notes 캐시는 그대로 보존하고 내장 PDF만 교체합니다. 페이지 크기나 여백이 달라졌으면 필기는 그대로 두고 새 배경을 본문 위치에 맞춰 다시 앉힙니다. 암호화 파일과 페이지 수가 다른 문서는 거부합니다.</span>
+        </div>
+
+        <div class="handwriting-footer">
+          <button id="resetHandwritingButton" class="text-button" type="button">선택 초기화</button>
+          <button id="saveHandwritingButton" class="button primary" type="button" disabled>새 Samsung Notes로 저장</button>
+        </div>
+      </div>
+    </dialog>
 
     <div id="busyOverlay" class="busy-overlay" hidden>
       <div class="busy-card"><div class="loader"></div><strong id="busyText">처리 중…</strong></div>

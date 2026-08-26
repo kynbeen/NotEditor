@@ -5,6 +5,7 @@ import tempfile
 import types
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pymupdf
@@ -70,6 +71,61 @@ class ComposerApiTests(unittest.TestCase):
             if name.startswith("_"):
                 continue
             self.assertTrue(callable(getattr(self.api, name)), name)
+
+    def test_handwriting_transfer_file_dialog_flow(self):
+        source = self.root / "annotated.sdocx"
+        target = self.root / "target.pdf"
+        output = self.root / "target-필기.sdocx"
+        source.write_bytes(b"zip")
+        target.write_bytes(b"%PDF")
+        inspection = SimpleNamespace(as_dict=lambda: {
+            "source_name": source.name,
+            "target_name": target.name,
+            "page_count": 2,
+            "annotated_page_count": 1,
+            "stroke_cache_count": 1,
+        })
+        self.api._bind_window(FakeWindow([(str(source),), (str(target),), str(output)]))
+        with patch.dict(sys.modules, {"webview": self.webview}), \
+                patch("pdf_page_composer.app.inspect_transfer", return_value=inspection), \
+                patch("pdf_page_composer.app.transfer_handwriting", return_value={
+                    "path": str(output), "page_count": 2,
+                }) as transfer:
+            selected_source = self.api.choose_handwriting_source()
+            selected_target = self.api.choose_handwriting_target()
+            saved = self.api.save_handwriting_transfer("target-필기.sdocx")
+
+        self.assertTrue(selected_source["ok"])
+        self.assertFalse(selected_source["ready"])
+        self.assertTrue(selected_target["ready"])
+        self.assertTrue(saved["ok"])
+        self.assertFalse(saved["cancelled"])
+        transfer.assert_called_once_with(source.resolve(), target.resolve(), output.resolve())
+
+    def test_handwriting_preview_returns_two_png_data_uris(self):
+        source = self.root / "annotated.sdocx"
+        target = self.root / "target.pdf"
+        source.write_bytes(b"zip")
+        target.write_bytes(b"%PDF")
+        inspection = SimpleNamespace(page_count=3, alignment=None, as_dict=lambda: {"page_count": 3})
+        self.api._handwriting_source = source
+        self.api._handwriting_target = target
+        with patch("pdf_page_composer.app.inspect_transfer", return_value=inspection) as inspect, \
+                patch("pdf_page_composer.app.preview_transfer",
+                      return_value=(b"\x89PNG-before", b"\x89PNG-after")) as preview:
+            first = self.api.handwriting_preview(1)
+            second = self.api.handwriting_preview(99)
+
+        self.assertTrue(first["ok"])
+        self.assertEqual(first["index"], 1)
+        self.assertEqual(first["page_count"], 3)
+        self.assertTrue(first["before"].startswith("data:image/png;base64,"))
+        self.assertTrue(first["after"].startswith("data:image/png;base64,"))
+        # 범위를 벗어난 쪽 번호는 마지막 쪽으로 좁힌다.
+        self.assertEqual(second["index"], 2)
+        # 파일이 그대로면 검사 결과를 다시 계산하지 않는다.
+        inspect.assert_called_once()
+        self.assertEqual(preview.call_count, 2)
 
 
 if __name__ == "__main__":

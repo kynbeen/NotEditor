@@ -11,6 +11,8 @@ const state = {
   previewScrollFrame: 0,
   bridgeReady: false,
   bridgeFailed: false,
+  handwriting: { source_name: null, target_name: null, ready: false, inspection: null },
+  alignPreview: { index: 0, pageCount: 0, loading: false },
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -25,6 +27,14 @@ const refs = {
   previewMeta: $("#previewMeta"), busy: $("#busyOverlay"), busyText: $("#busyText"),
   toastRegion: $("#toastRegion"),
   sourceHelp: $("#sourceHelp"), connectionError: $("#connectionError"),
+  handwriting: $("#handwritingButton"), handwritingDialog: $("#handwritingDialog"),
+  closeHandwriting: $("#closeHandwritingButton"), chooseHandwritingSource: $("#chooseHandwritingSource"),
+  chooseHandwritingTarget: $("#chooseHandwritingTarget"), handwritingSourceName: $("#handwritingSourceName"),
+  handwritingTargetName: $("#handwritingTargetName"), handwritingCompatibility: $("#handwritingCompatibility"),
+  resetHandwriting: $("#resetHandwritingButton"), saveHandwriting: $("#saveHandwritingButton"),
+  handwritingPreview: $("#handwritingPreview"), alignBefore: $("#alignBefore"),
+  alignAfter: $("#alignAfter"), alignBlend: $("#alignBlend"), alignPageLabel: $("#alignPageLabel"),
+  alignPrevPage: $("#alignPrevPage"), alignNextPage: $("#alignNextPage"),
 };
 
 const pageKey = (docId, index) => `${docId}:${index}`;
@@ -63,6 +73,7 @@ function setBridgeState(ready, failed = false) {
   state.bridgeFailed = failed;
   refs.add.disabled = !ready;
   refs.emptyAdd.disabled = !ready;
+  refs.handwriting.disabled = !ready;
   refs.emptyAdd.textContent = ready ? "파일 선택" : (failed ? "앱으로 다시 실행하세요" : "준비 중…");
   refs.sourceHelp.textContent = ready
     ? "여러 파일을 한 번에 선택할 수 있습니다."
@@ -89,6 +100,146 @@ async function reportClientError(value) {
       await window.pywebview.api.log_client_error(message);
     }
   } catch (_) { /* Logging must never hide the original UI error. */ }
+}
+
+function renderHandwritingStatus(error = "") {
+  const status = state.handwriting;
+  refs.handwritingSourceName.textContent = status.source_name || ".sdocx 파일 선택";
+  refs.handwritingTargetName.textContent = status.target_name || ".pdf 파일 선택";
+  refs.saveHandwriting.disabled = !state.bridgeReady || !status.ready;
+  const card = refs.handwritingCompatibility;
+  card.classList.remove("waiting", "ready", "error");
+  const icon = card.querySelector(".compatibility-icon");
+  const heading = card.querySelector("strong");
+  const detail = card.querySelector("p");
+  if (error) {
+    card.classList.add("error");
+    icon.textContent = "!";
+    heading.textContent = "두 문서의 필기 좌표를 맞출 수 없습니다.";
+    detail.textContent = error;
+    return;
+  }
+  if (status.ready && status.inspection) {
+    const info = status.inspection;
+    card.classList.add("ready");
+    icon.textContent = "✓";
+    const common = `필기 데이터가 있는 페이지 ${info.annotated_page_count}쪽 · Samsung 펜 캐시 ${info.stroke_cache_count}개`;
+    if (info.mode === "aligned" && info.alignment) {
+      const fit = info.alignment;
+      heading.textContent = `본문 기준으로 ${fit.scale.toFixed(3)}배 맞춰서 ${info.page_count}쪽을 옮깁니다.`;
+      detail.textContent = [
+        `이동 ${fit.offset_x_mm}, ${fit.offset_y_mm}mm · 본문 오차 최대 ${fit.residual_mm}mm (${fit.sampled_pages}쪽 표본)`,
+        ...alignmentWarnings(fit),
+        common,
+      ].join("\n");
+    } else {
+      heading.textContent = `${info.page_count}쪽의 페이지 좌표가 모두 일치합니다.`;
+      detail.textContent = `${common} · 대상 PDF를 그대로 넣습니다.`;
+    }
+    return;
+  }
+  card.classList.add("waiting");
+  icon.textContent = "···";
+  heading.textContent = "두 파일을 선택하면 자동으로 맞춤 여부를 확인합니다.";
+  detail.textContent = "페이지 수가 같아야 하고, 크기나 여백이 달라지면 본문을 기준으로 자동 정렬합니다.";
+}
+
+function alignmentWarnings(fit) {
+  const warnings = [];
+  if (!fit.axes_agree) {
+    warnings.push(`가로세로 비율이 달라 폭 기준으로 맞췄습니다. 세로로 최대 ${fit.aspect_drift_mm}mm 어긋날 수 있습니다.`);
+  }
+  if (fit.clipped_mm > 0.5) {
+    warnings.push(`새 배경의 본문이 원본 쪽 밖으로 최대 ${fit.clipped_mm}mm 잘립니다.`);
+  }
+  if (fit.residual_mm > 2) {
+    warnings.push("쪽마다 본문 위치가 달라 자동 정렬이 정확하지 않을 수 있습니다. 미리보기를 꼭 확인하세요.");
+  }
+  return warnings;
+}
+
+function applyHandwritingResponse(response) {
+  if (!response.ok) {
+    renderHandwritingStatus(response.error || "파일을 확인할 수 없습니다.");
+    return false;
+  }
+  state.handwriting = {
+    source_name: response.source_name || null,
+    target_name: response.target_name || null,
+    ready: Boolean(response.ready),
+    inspection: response.inspection || null,
+  };
+  renderHandwritingStatus();
+  state.alignPreview = { index: 0, pageCount: state.handwriting.inspection?.page_count || 0, loading: false };
+  if (state.handwriting.ready) loadAlignPreview(0);
+  else refs.handwritingPreview.hidden = true;
+  return true;
+}
+
+function renderAlignPreviewState() {
+  const preview = state.alignPreview;
+  refs.handwritingPreview.hidden = !state.handwriting.ready;
+  refs.alignPageLabel.textContent = `${preview.index + 1} / ${preview.pageCount || 1}`;
+  refs.alignPrevPage.disabled = preview.loading || preview.index <= 0;
+  refs.alignNextPage.disabled = preview.loading || preview.index >= preview.pageCount - 1;
+}
+
+async function loadAlignPreview(index) {
+  if (!state.handwriting.ready) { refs.handwritingPreview.hidden = true; return; }
+  state.alignPreview.loading = true;
+  renderAlignPreviewState();
+  try {
+    const response = await callApi("handwriting_preview", index);
+    if (!response.ok) throw new Error(response.error);
+    refs.alignBefore.src = response.before;
+    refs.alignAfter.src = response.after;
+    state.alignPreview.index = response.index;
+    state.alignPreview.pageCount = response.page_count;
+  } catch (error) {
+    toast(error.message, "error");
+    reportClientError(error);
+  } finally {
+    state.alignPreview.loading = false;
+    renderAlignPreviewState();
+  }
+}
+
+async function chooseHandwriting(kind) {
+  setBusy(true, kind === "source" ? "Samsung Notes를 확인하는 중…" : "대상 PDF를 확인하는 중…");
+  try {
+    const method = kind === "source" ? "choose_handwriting_source" : "choose_handwriting_target";
+    const response = await callApi(method);
+    applyHandwritingResponse(response);
+  } catch (error) {
+    renderHandwritingStatus(error.message);
+    reportClientError(error);
+  } finally { setBusy(false); }
+}
+
+async function resetHandwritingTransfer() {
+  try {
+    const response = await callApi("reset_handwriting_transfer");
+    if (!applyHandwritingResponse(response)) toast(response.error, "error");
+  } catch (error) {
+    toast(error.message, "error");
+    reportClientError(error);
+  }
+}
+
+async function saveHandwritingTransfer() {
+  if (!state.handwriting.ready) return;
+  const base = (state.handwriting.target_name || "새-문서.pdf").replace(/\.pdf$/i, "");
+  setBusy(true, "필기와 형광펜을 새 PDF로 옮기는 중…");
+  try {
+    const response = await callApi("save_handwriting_transfer", `${base}-필기.sdocx`);
+    if (!response.ok) throw new Error(response.error);
+    if (response.cancelled) return;
+    toast(`Samsung Notes 파일을 저장했습니다.\n${response.result.path}`, "success");
+    refs.handwritingDialog.close();
+  } catch (error) {
+    renderHandwritingStatus(error.message);
+    reportClientError(error);
+  } finally { setBusy(false); }
 }
 
 function documentById(id) { return state.documents.find((doc) => doc.id === id); }
@@ -514,6 +665,25 @@ async function saveResult() {
 refs.add.addEventListener("click", addPdfs);
 refs.emptyAdd.addEventListener("click", addPdfs);
 refs.save.addEventListener("click", saveResult);
+refs.alignBlend.addEventListener("input", () => {
+  refs.alignAfter.style.opacity = String(Number(refs.alignBlend.value) / 100);
+});
+refs.alignPrevPage.addEventListener("click", () => loadAlignPreview(state.alignPreview.index - 1));
+refs.alignNextPage.addEventListener("click", () => loadAlignPreview(state.alignPreview.index + 1));
+refs.handwriting.addEventListener("click", () => {
+  renderHandwritingStatus();
+  if (state.handwriting.ready) loadAlignPreview(state.alignPreview.index);
+  else refs.handwritingPreview.hidden = true;
+  refs.handwritingDialog.showModal();
+});
+refs.closeHandwriting.addEventListener("click", () => refs.handwritingDialog.close());
+refs.chooseHandwritingSource.addEventListener("click", () => chooseHandwriting("source"));
+refs.chooseHandwritingTarget.addEventListener("click", () => chooseHandwriting("target"));
+refs.resetHandwriting.addEventListener("click", resetHandwritingTransfer);
+refs.saveHandwriting.addEventListener("click", saveHandwritingTransfer);
+refs.handwritingDialog.addEventListener("click", (event) => {
+  if (event.target === refs.handwritingDialog) refs.handwritingDialog.close();
+});
 refs.resetOrder.addEventListener("click", () => { state.orderDirty = false; state.order = defaultOrder(); renderResult(); });
 refs.previewStage.addEventListener("scroll", () => {
   if (state.previewScrollFrame) return;
@@ -525,6 +695,7 @@ window.addEventListener("unhandledrejection", (event) => reportClientError(event
 window.addEventListener("pywebviewready", initializeBridge);
 
 setBridgeState(false, false);
+renderHandwritingStatus();
 if (window.pywebview?.api) initializeBridge();
 setTimeout(() => {
   if (!state.bridgeReady) setBridgeState(false, true);

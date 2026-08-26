@@ -8,8 +8,15 @@ from typing import Any
 from . import __version__
 from .engine import ComposerSession, PdfComposerError
 from .ranges import PageRangeError, parse_page_ranges
+from .sdocx_transfer import inspect_transfer, preview_transfer, transfer_handwriting
 
 APP_USER_MODEL_ID = "PDFPageComposer.Desktop"
+
+
+def _png_data_uri(payload: bytes) -> str:
+    import base64
+
+    return "data:image/png;base64," + base64.b64encode(payload).decode("ascii")
 
 
 def configure_windows_app_identity() -> None:
@@ -45,6 +52,9 @@ class ComposerApi:
         self._session = session or ComposerSession()
         self._window: Any | None = None
         self._closed = False
+        self._handwriting_source: Path | None = None
+        self._handwriting_target: Path | None = None
+        self._handwriting_cache: tuple | None = None
 
     def _bind_window(self, window: Any) -> None:
         self._window = window
@@ -79,6 +89,127 @@ class ComposerApi:
                 file_types=("PDF 문서 (*.pdf)",),
             )
             return self.add_paths(list(paths or []))
+        except Exception as exc:
+            return self._error(exc)
+
+    @staticmethod
+    def _dialog_path(value: Any) -> Path | None:
+        if not value:
+            return None
+        if isinstance(value, str):
+            return Path(value).expanduser().resolve()
+        return Path(value[0]).expanduser().resolve() if value else None
+
+    def _inspection(self):
+        """본문 정렬 추정은 문서 전체를 훑으므로 파일이 그대로면 결과를 다시 쓴다."""
+        if not self._handwriting_source or not self._handwriting_target:
+            raise PdfComposerError("필기 원본 SDOCX와 대상 PDF를 모두 선택하세요.")
+        key = (
+            str(self._handwriting_source),
+            str(self._handwriting_target),
+            self._handwriting_source.stat().st_mtime_ns,
+            self._handwriting_target.stat().st_mtime_ns,
+        )
+        cached = self._handwriting_cache
+        if cached and cached[0] == key:
+            return cached[1]
+        inspection = inspect_transfer(self._handwriting_source, self._handwriting_target)
+        self._handwriting_cache = (key, inspection)
+        return inspection
+
+    def _handwriting_status(self) -> dict:
+        payload = {
+            "source_name": self._handwriting_source.name if self._handwriting_source else None,
+            "target_name": self._handwriting_target.name if self._handwriting_target else None,
+            "ready": False,
+            "inspection": None,
+        }
+        if self._handwriting_source and self._handwriting_target:
+            payload.update(ready=True, inspection=self._inspection().as_dict())
+        return payload
+
+    def handwriting_preview(self, page_index: int = 0) -> dict:
+        try:
+            inspection = self._inspection()
+            index = max(0, min(int(page_index), inspection.page_count - 1))
+            before, after = preview_transfer(
+                self._handwriting_source, self._handwriting_target, index, inspection
+            )
+            return self._ok(
+                index=index,
+                page_count=inspection.page_count,
+                before=_png_data_uri(before),
+                after=_png_data_uri(after),
+            )
+        except Exception as exc:
+            return self._error(exc)
+
+    def choose_handwriting_source(self) -> dict:
+        try:
+            if self._window is None:
+                raise PdfComposerError("앱 창이 아직 준비되지 않았습니다.")
+            import webview
+
+            selected = self._window.create_file_dialog(
+                webview.FileDialog.OPEN,
+                allow_multiple=False,
+                file_types=("Samsung Notes 문서 (*.sdocx)",),
+            )
+            path = self._dialog_path(selected)
+            if path is None:
+                return self._ok(cancelled=True, **self._handwriting_status())
+            self._handwriting_source = path
+            return self._ok(cancelled=False, **self._handwriting_status())
+        except Exception as exc:
+            return self._error(exc)
+
+    def choose_handwriting_target(self) -> dict:
+        try:
+            if self._window is None:
+                raise PdfComposerError("앱 창이 아직 준비되지 않았습니다.")
+            import webview
+
+            selected = self._window.create_file_dialog(
+                webview.FileDialog.OPEN,
+                allow_multiple=False,
+                file_types=("PDF 문서 (*.pdf)",),
+            )
+            path = self._dialog_path(selected)
+            if path is None:
+                return self._ok(cancelled=True, **self._handwriting_status())
+            self._handwriting_target = path
+            return self._ok(cancelled=False, **self._handwriting_status())
+        except Exception as exc:
+            return self._error(exc)
+
+    def reset_handwriting_transfer(self) -> dict:
+        self._handwriting_source = None
+        self._handwriting_target = None
+        self._handwriting_cache = None
+        return self._ok(**self._handwriting_status())
+
+    def save_handwriting_transfer(self, suggested_name: str = "필기-이전.sdocx") -> dict:
+        try:
+            if self._window is None:
+                raise PdfComposerError("앱 창이 아직 준비되지 않았습니다.")
+            inspection = self._inspection()
+            import webview
+
+            safe_name = re.sub(r'[<>:"/\\|?*]+', "_", suggested_name).strip(" .")
+            if not safe_name.lower().endswith(".sdocx"):
+                safe_name += ".sdocx"
+            selected = self._window.create_file_dialog(
+                webview.FileDialog.SAVE,
+                save_filename=safe_name or "필기-이전.sdocx",
+                file_types=("Samsung Notes 문서 (*.sdocx)",),
+            )
+            output = self._dialog_path(selected)
+            if output is None:
+                return self._ok(cancelled=True, inspection=inspection.as_dict())
+            result = transfer_handwriting(
+                self._handwriting_source, self._handwriting_target, output
+            )
+            return self._ok(cancelled=False, result=result)
         except Exception as exc:
             return self._error(exc)
 
