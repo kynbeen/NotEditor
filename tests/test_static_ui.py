@@ -5,7 +5,7 @@ from pathlib import Path
 class StaticUiContractTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        static = Path(__file__).parents[1] / "pdf_page_composer" / "static"
+        static = Path(__file__).parents[1] / "noteditor" / "static"
         cls.html = (static / "index.html").read_text(encoding="utf-8")
         cls.css = (static / "app.css").read_text(encoding="utf-8")
         cls.js = (static / "app.js").read_text(encoding="utf-8")
@@ -39,34 +39,70 @@ class StaticUiContractTests(unittest.TestCase):
         self.assertIn("resetOrderButton", self.html)
         self.assertIn("state.order = defaultOrder()", self.js)
 
-    def test_file_buttons_wait_for_desktop_bridge(self):
+    def test_file_buttons_wait_for_runtime_connection(self):
         self.assertIn('id="addPdfButton" class="button secondary" type="button" disabled', self.html)
         self.assertIn('id="emptyAddButton" class="button primary" type="button" disabled', self.html)
         self.assertIn('callApi("health")', self.js)
-        self.assertIn("서버를 실행할 필요는 없습니다", self.html)
+        self.assertIn("NotEditor 연결을 확인할 수 없습니다", self.js)
+        self.assertIn('runtime: window.location.protocol.startsWith("http")', self.js)
 
-    def test_handwriting_transfer_has_guided_desktop_flow(self):
+    def test_merge_and_handwriting_are_peer_tabs(self):
         self.assertIn('id="handwritingButton"', self.html)
-        self.assertIn('id="handwritingDialog"', self.html)
+        self.assertIn('id="mergeTabButton"', self.html)
+        self.assertIn('id="mergeWorkspace"', self.html)
+        self.assertIn('id="handwritingWorkspace"', self.html)
+        self.assertNotIn('<dialog id="handwritingDialog"', self.html)
+        self.assertIn('role="tablist"', self.html)
+        self.assertIn('showTool("handwriting")', self.js)
+
+    def test_handwriting_transfer_has_guided_dual_runtime_flow(self):
         self.assertIn("필기와 형광펜 옮기기", self.html)
         self.assertIn('callApi("save_handwriting_transfer"', self.js)
         self.assertIn("크기나 여백이 달라지면 본문을 기준으로 자동 정렬", self.js)
         self.assertIn(".compatibility-card.ready", self.css)
+        self.assertIn('choose_handwriting_target: () => uploadWebFiles', self.js)
+        self.assertIn('setBusy(true, kind === "source"', self.js)
 
-    def test_alignment_preview_overlays_old_and_new_background(self):
+    def test_result_content_starts_at_same_header_boundary(self):
+        self.assertNotIn('class="result-toolbar"', self.html)
+        self.assertIn('class="panel-header-actions"', self.html)
+        self.assertIn(".panel-header { height: 73px", self.css)
+
+    def test_alignment_preview_overlays_backgrounds_and_actual_ink(self):
         self.assertIn('id="handwritingPreview"', self.html)
         self.assertIn('id="alignBefore"', self.html)
         self.assertIn('id="alignAfter"', self.html)
+        self.assertIn('id="alignInk"', self.html)
         self.assertIn('id="alignBlend"', self.html)
         self.assertIn('callApi("handwriting_preview"', self.js)
+        self.assertIn("refs.alignInk.src = response.ink", self.js)
         self.assertIn("refs.alignAfter.style.opacity", self.js)
         self.assertIn(".align-stage img { position: absolute", self.css)
+        self.assertIn('refs.alignStage.addEventListener("wheel"', self.js)
+        self.assertIn("event.deltaY > 0 ? 1 : -1", self.js)
+        self.assertIn("{ passive: false }", self.js)
+        self.assertIn("휠, 쪽 번호, 오른쪽 스크롤바로 이동할 수 있습니다", self.html)
+
+    def test_alignment_preview_has_loading_jump_and_drag_scroll_controls(self):
+        self.assertIn('id="alignLoading"', self.html)
+        self.assertIn('id="alignPageInput"', self.html)
+        self.assertIn('id="alignPageScrubber"', self.html)
+        self.assertIn("function jumpToAlignPage", self.js)
+        self.assertIn('refs.alignPageScrubber.addEventListener("input"', self.js)
+        self.assertIn("writing-mode: vertical-lr", self.css)
 
     def test_alignment_card_reports_scale_and_warnings(self):
         self.assertIn("본문 기준으로", self.js)
         self.assertIn("본문 오차 최대", self.js)
         self.assertIn("폭 기준으로 맞췄습니다", self.js)
         self.assertIn("잘립니다", self.js)
+
+    def test_rebuild_match_table_supports_manual_source_selection(self):
+        self.assertIn('id="handwritingMatchEditor"', self.html)
+        self.assertIn('id="handwritingMatchRows"', self.html)
+        self.assertIn("function validateMatchMapping", self.js)
+        self.assertIn("state.handwriting.matchMapping", self.js)
+        self.assertIn("같은 구판 쪽을 두 번 선택할 수 없습니다", self.js)
 
 
 if __name__ == "__main__":

@@ -1,58 +1,145 @@
-# PDF 페이지 조합기
+# NotEditor
 
-여러 PDF에서 필요한 페이지만 선택하고 자유롭게 재정렬해 하나의 PDF로 저장하는 Windows 데스크톱 앱입니다.
-미리보기만 PNG로 렌더하며 최종 PDF는 원본 페이지 객체를 직접 복사합니다.
+NotEditor는 PDF 문서 합치기와 Samsung Notes 필기 옮기기를 한 화면에서 제공하는 도구입니다.
+Windows 데스크톱 앱과 Docker 기반 웹앱이 같은 PDF·SDOCX 처리 엔진을 사용합니다.
 
-Samsung Notes의 `필기 옮기기` 기능도 포함합니다. 필기·형광펜이 들어 있는 `.sdocx`와 새 배경 PDF를
-선택하면 편집 가능한 펜 데이터를 보존한 새 `.sdocx`로 저장합니다. 새 PDF의 배율이나 여백이
-달라졌으면 필기는 그대로 두고 **본문 위치를 기준으로 배경을 다시 앉혀** 필기와 본문의 상대 위치를
-맞춥니다. 저장 전에 옛 배경과 새 배경을 겹쳐 보며 확인할 수 있습니다.
+## 기능
 
-- 여러 PDF를 한 번에 추가하고 썸네일 클릭 또는 `1-3, 5, 8-10` 범위로 쪽 선택
-- `-3`은 첫 쪽부터 3쪽까지, `8-`은 8쪽부터 마지막 쪽까지 자동 선택
-- 선택 쪽은 밝게, 제외 쪽은 어둡게 표시
-- 선택한 개별 쪽을 드래그해 최종 순서 변경
-- 모든 원본 쪽을 가운데에서 연속 스크롤하고 선택/제외 상태를 밝기로 비교
-- 원본과 결과 쪽을 크게 미리 본 뒤 네이티브 저장 창으로 출력
+### 문서 합치기
+
+- 여러 PDF에서 필요한 쪽을 선택하고 드래그해 순서 변경
+- `1-3, 5, 8-` 형식의 빠른 쪽 범위 선택
+- 모든 원본 쪽을 연속 스크롤로 미리보기
 - 텍스트·벡터·이미지·링크·주석·양식 위젯을 가능한 범위에서 보존
-- Samsung Notes SDOCX의 필기·형광펜을 새 PDF로 이전 (확대/축소·여백 변화는 본문 기준 자동 정렬)
+- 미리보기만 PNG로 렌더하고 결과 PDF는 원본 페이지 객체를 복사
 
-## 설치
+### 필기 옮기기
 
-PowerShell에서 한 번 실행합니다.
+- 필기·형광펜이 들어 있는 Samsung Notes `.sdocx`를 새 PDF 배경으로 이전
+- 쪽 추가·삭제 시 본문 지문과 순서를 이용해 공통 쪽 자동 매칭
+- 페이지 크기나 여백 변경 시 본문 위치 기준 자동 정렬
+- 실제 필기를 원본·새 배경 위에 겹쳐 저장 전에 확인
+- 원본 SDOCX와 PDF를 수정하지 않고 새 `.sdocx`로 저장
+
+## 가장 쉬운 Windows 설치
+
+GitHub Releases에서 최신 `NotEditor-Setup-<버전>.exe`를 내려받아 실행합니다. 설치 프로그램은
+시작 메뉴와 선택적으로 바탕화면에 바로가기를 만듭니다. 현재 저장소가 비공개라서 Release 접근
+권한이 없는 사용자에게는 설치 파일을 별도로 전달해야 합니다.
+
+소스 압축 파일을 받은 사용자는 PowerShell에서 아래 한 줄로 설치할 수도 있습니다.
 
 ```powershell
-.\setup.ps1
-.\install-app.ps1
+powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
-설치가 끝나면 시작 메뉴와 바탕화면의 **PDF 페이지 조합기** 바로가기로 실행합니다. 터미널 창은 뜨지 않습니다.
-별도 서버를 시작하거나 브라우저에서 HTML 파일을 열 필요가 없습니다. 일반 브라우저로 `index.html`을
-직접 열면 데스크톱 파일 선택 기능을 사용할 수 없습니다.
+Python 3.12 이상이 필요하며, 전용 `venv` 생성·의존성 설치·아이콘 생성·바로가기 등록을 한 번에
+처리합니다. 기존 `setup.ps1`과 `install-app.ps1`은 개발 및 이전 설치 흐름과의 호환을 위해 남아
+있습니다.
 
-## 개발 실행
+## 데스크톱 개발 실행
 
 ```powershell
-.\venv\Scripts\python.exe -m pdf_page_composer --debug
+.\install.ps1
+.\venv\Scripts\python.exe -m noteditor --debug
 ```
+
+앱 로그는 `%LOCALAPPDATA%\NotEditor\app.log`에 기록됩니다.
+
+## 웹앱 실행
+
+Docker가 있으면 다음 명령만 실행합니다.
+
+```powershell
+docker compose up --build
+```
+
+브라우저에서 `http://localhost:8000`을 엽니다. Docker 없이 개발 서버를 실행하려면:
+
+```powershell
+.\venv\Scripts\python.exe -m pip install -r requirements-web.txt
+.\venv\Scripts\python.exe -m noteditor.web
+```
+
+웹 업로드는 브라우저 세션별 임시 디렉터리에 격리됩니다. 기본 만료 시간은 2시간이며 서버 종료,
+세션 만료 또는 필기 선택 초기화 시 정리됩니다. 결과 파일은 생성 직후 다운로드로 반환되고 서버의
+임시 출력은 응답 완료 후 삭제됩니다.
+
+환경 변수:
+
+| 변수 | 기본값 | 설명 |
+|---|---:|---|
+| `PORT` | `8000` | 웹 서버 포트 |
+| `NOTEDITOR_HOST` | `0.0.0.0` | 바인드 주소 |
+| `NOTEDITOR_MAX_UPLOAD_MB` | `512` | 파일 하나의 최대 업로드 크기 |
+| `NOTEDITOR_SESSION_TTL` | `7200` | 비활성 세션 만료 시간(초) |
+
+실서비스에서는 Docker 이미지를 HTTPS 역방향 프록시 뒤에 두고, 프록시의 요청 본문 제한도
+`NOTEDITOR_MAX_UPLOAD_MB` 이상으로 맞추세요. NotEditor는 로그인 기능을 제공하지 않으므로 공개
+인터넷에 배포할 때는 호스팅 플랫폼이나 프록시에서 접근 제어를 추가하는 것을 권장합니다.
+
+## Docker 배포
+
+업체 종속 설정은 없습니다. 저장소 루트의 `Dockerfile`을 빌드할 수 있는 Render, Fly.io,
+Cloud Run, Railway 또는 일반 컨테이너 서버에 배포할 수 있습니다.
+
+```bash
+docker build -t noteditor .
+docker run --rm -p 8000:8000 noteditor
+```
+
+서버는 상태를 로컬 임시 저장소에만 두므로 여러 인스턴스로 확장할 때는 같은 사용자의 요청이 같은
+인스턴스로 가도록 세션 고정(sticky session)을 사용해야 합니다.
 
 ## 테스트
 
 ```powershell
+.\venv\Scripts\python.exe -m pip install -r requirements-dev.txt
 .\venv\Scripts\python.exe -m unittest discover -s tests
+node --check noteditor\static\app.js
 ```
 
-암호화된 PDF와 DRM 우회는 지원하지 않습니다. 페이지 구성이 바뀌므로 기존 디지털 서명의 유효성도
-유지되지 않습니다.
+## Windows 설치 파일 만들기
 
-필기 이전은 Samsung의 비공개 SDOCX 형식을 이용한 상호운용 기능입니다. 내장 PDF가 하나이고 두 문서의
-페이지 수가 같아야 합니다. 페이지 크기·여백이 다르면 두 문서의 본문 영역에서 배율과 이동량을 추정해
-새 배경을 원본 페이지 좌표계에 다시 그립니다. 배율은 문서 전체에 하나만 적용하고, 가로세로 비율이
-다르면 폭을 기준으로 맞춘 뒤 세로 오차를 경고합니다. 원본 SDOCX와 PDF는 수정하지 않습니다.
+`v0.4.0` 같은 태그를 푸시하면 `.github/workflows/release.yml`이 다음 작업을 자동 수행합니다.
 
-앱이 시작되지 않거나 내부 연결 오류가 발생하면 `%LOCALAPPDATA%\PDFPageComposer\app.log`에 진단
-기록이 남습니다.
+1. 전체 테스트 실행
+2. PyInstaller로 독립 실행 폴더 생성
+3. Inno Setup으로 `NotEditor-Setup-<버전>.exe` 생성
+4. GitHub Release에 설치 파일 첨부
 
-원본 파일은 읽기 전용으로 열며, 사용자가 고른 저장 경로 이외에는 결과를 남기지 않습니다. 책갈피,
-문서 첨부 파일, 서명처럼 문서 전체에 귀속되는 구조는 여러 원본을 조합할 때 복사하지 않고 저장 후
-경고합니다.
+로컬에서는 Python 개발 의존성과 Inno Setup 6을 설치한 뒤 같은 과정을 실행할 수 있습니다.
+
+```powershell
+.\venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+.\venv\Scripts\python.exe -m noteditor.make_icon
+.\venv\Scripts\pyinstaller.exe --noconfirm NotEditor.spec
+& "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "installer\NotEditor.iss"
+```
+
+## 폴더 구조
+
+```text
+NotEditor/                 Git 저장소 루트
+├─ noteditor/              import 가능한 Python 애플리케이션 패키지
+│  └─ static/              데스크톱과 웹이 함께 쓰는 UI
+├─ tests/                  엔진·UI·웹 API 테스트
+├─ installer/              Windows 설치 프로그램 정의
+├─ .github/workflows/      테스트 및 Release 자동화
+├─ Dockerfile              웹 배포 이미지
+└─ install.ps1             소스 기반 원터치 Windows 설치
+```
+
+저장소와 `noteditor` 패키지가 한 단계 중첩된 것은 의도된 구조입니다. Python 런타임 코드와 정적
+자원을 하나의 import 패키지로 묶어 테스트·Docker·PyInstaller에서 같은 경로로 찾게 하고, 루트의
+문서·설치·배포 파일과 섞이지 않게 합니다.
+
+## 제한 및 안전
+
+- 암호화된 PDF와 DRM 우회는 지원하지 않습니다.
+- 페이지 구성이 바뀌므로 기존 디지털 서명은 유효하지 않게 됩니다.
+- 여러 원본을 합칠 때 책갈피, 문서 첨부, 문서 단위 서명은 복사하지 않고 경고합니다.
+- 필기 이전은 Samsung의 비공개 SDOCX 형식을 이용한 상호운용 기능입니다.
+- 원본 파일은 읽기 전용으로 열며 사용자가 요청한 결과 외에는 영구 파일을 만들지 않습니다.
+
+제3자 코드 고지는 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)를 확인하세요.

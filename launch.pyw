@@ -1,3 +1,3 @@
-from pdf_page_composer.__main__ import main
+from noteditor.__main__ import main
 
 main()

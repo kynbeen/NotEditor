@@ -113,6 +113,47 @@ class MatchResult:
         }
 
 
+def match_from_target_mapping(
+    source_count: int,
+    target_mapping: list[int | None] | tuple[int | None, ...],
+    original: MatchResult | None = None,
+) -> MatchResult:
+    """대상 쪽별 원본 쪽 선택을 순서 보존 ``MatchResult`` 로 바꾼다."""
+    if source_count < 0:
+        raise PageMatchError("원본 쪽 수가 올바르지 않습니다.")
+    chosen = [value for value in target_mapping if value is not None]
+    if any(not isinstance(value, int) or isinstance(value, bool) for value in chosen):
+        raise PageMatchError("수동 매칭의 원본 쪽 번호는 정수여야 합니다.")
+    if any(value < 0 or value >= source_count for value in chosen):
+        raise PageMatchError("수동 매칭의 원본 쪽 번호가 범위를 벗어납니다.")
+    if chosen != sorted(set(chosen)):
+        raise PageMatchError("수동 매칭은 원본 쪽을 중복 없이 순서대로 선택해야 합니다.")
+
+    metadata = {}
+    if original is not None:
+        metadata = {
+            (pair.source_index, pair.target_index): (pair.distance, pair.margin)
+            for pair in original.matched_pairs
+        }
+
+    pairs: list[PagePair] = []
+    next_source = 0
+    for target_index, source_index in enumerate(target_mapping):
+        if source_index is None:
+            pairs.append(PagePair(None, target_index))
+            continue
+        while next_source < source_index:
+            pairs.append(PagePair(next_source, None))
+            next_source += 1
+        distance, margin = metadata.get((source_index, target_index), (None, None))
+        pairs.append(PagePair(source_index, target_index, distance, margin))
+        next_source = source_index + 1
+    while next_source < source_count:
+        pairs.append(PagePair(next_source, None))
+        next_source += 1
+    return MatchResult(tuple(pairs))
+
+
 def fingerprint(page, grid: int = _GRID) -> PageFingerprint:
     """본문 상자를 ``grid``×``grid`` 로 정규화한 밝기 벡터. 배율·여백에 영향받지 않는다."""
     import pymupdf

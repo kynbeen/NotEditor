@@ -143,35 +143,44 @@ def ink_box(page, max_side: int = _INK_MAX_SIDE):
     )
 
 
-def estimate_alignment(source_document, target_document) -> Alignment | None:
+def estimate_alignment(
+    source_document,
+    target_document,
+    page_pairs: list[tuple[int, int]] | tuple[tuple[int, int], ...] | None = None,
+) -> Alignment | None:
     """두 문서의 본문 상자에서 문서 전체에 쓸 상사변환 하나를 추정한다."""
-    page_count = min(source_document.page_count, target_document.page_count)
-    pairs = []
+    if page_pairs is None:
+        page_count = min(source_document.page_count, target_document.page_count)
+        candidates = [(index, index) for index in range(page_count)]
+    else:
+        candidates = list(page_pairs)
+    sampled = [candidates[index] for index in _sample_indices(len(candidates), _SAMPLE_LIMIT)]
+    boxes = []
     scales_x: list[float] = []
     scales_y: list[float] = []
-    for index in _sample_indices(page_count, _SAMPLE_LIMIT):
-        old_box = ink_box(source_document[index])
-        new_box = ink_box(target_document[index])
+    for source_index, target_index in sampled:
+        old_box = ink_box(source_document[source_index])
+        new_box = ink_box(target_document[target_index])
         if old_box is None or new_box is None:
             continue
         if new_box.width < 1 or new_box.height < 1 or old_box.width < 1 or old_box.height < 1:
             continue
-        pairs.append((index, old_box, new_box))
+        boxes.append((source_index, old_box, new_box))
         scales_x.append(old_box.width / new_box.width)
         scales_y.append(old_box.height / new_box.height)
-    if len(pairs) < _MIN_SAMPLES:
+    if len(boxes) < _MIN_SAMPLES:
         return None
 
     scale = median(scales_x)
     aspect_scale = median(scales_y)
-    offset_x = median(old.x0 - scale * new.x0 for _index, old, new in pairs)
-    offset_y = median(old.y0 - scale * new.y0 for _index, old, new in pairs)
+    offset_x = median(old.x0 - scale * new.x0 for _index, old, new in boxes)
+    offset_y = median(old.y0 - scale * new.y0 for _index, old, new in boxes)
 
     residual = 0.0
     identity_residual = 0.0
     aspect_drift = 0.0
     clipped = 0.0
-    for index, old, new in pairs:
+    for index, old, new in boxes:
         left, top, right, bottom = (
             offset_x + scale * new.x0,
             offset_y + scale * new.y0,
@@ -200,7 +209,7 @@ def estimate_alignment(source_document, target_document) -> Alignment | None:
         scale=scale,
         offset_x=offset_x,
         offset_y=offset_y,
-        sampled_pages=len(pairs),
+        sampled_pages=len(boxes),
         residual=residual,
         identity_residual=identity_residual,
         aspect_scale=aspect_scale,
@@ -243,19 +252,21 @@ def render_comparison(
     alignment: Alignment | None,
     page_index: int,
     max_side: int = 900,
+    target_page_index: int | None = None,
 ) -> tuple[bytes, bytes]:
     """같은 크기로 렌더링한 (원본 배경, 정렬된 새 배경) PNG 쌍을 돌려준다."""
     import pymupdf
 
     source_page = source_document[page_index]
+    target_index = page_index if target_page_index is None else target_page_index
     rect = source_page.rect
     scale = min(max_side / max(rect.width, rect.height), 3.0)
     matrix = pymupdf.Matrix(scale, scale)
     before = source_page.get_pixmap(matrix=matrix, alpha=False).tobytes("png")
     with pymupdf.open() as staged:
         if alignment is None:
-            staged.insert_pdf(target_document, from_page=page_index, to_page=page_index)
+            staged.insert_pdf(target_document, from_page=target_index, to_page=target_index)
         else:
-            place_page(staged, source_page, target_document, page_index, alignment)
+            place_page(staged, source_page, target_document, target_index, alignment)
         after = staged[0].get_pixmap(matrix=matrix, alpha=False).tobytes("png")
     return before, after

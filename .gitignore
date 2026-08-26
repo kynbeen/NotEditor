@@ -6,6 +6,8 @@ __pycache__/
 build/
 dist/
 *.spec
+!NotEditor.spec
+release/
 tmp/
 output/
 assets/icon.ico

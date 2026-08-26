@@ -4,8 +4,8 @@ from pathlib import Path
 
 from PIL import Image
 
-from pdf_page_composer.app import APP_USER_MODEL_ID
-from pdf_page_composer.make_icon import build_icon
+from noteditor.app import APP_USER_MODEL_ID
+from noteditor.make_icon import build_icon
 
 
 class DesktopIconTests(unittest.TestCase):
@@ -19,4 +19,4 @@ class DesktopIconTests(unittest.TestCase):
         self.assertGreater(image.getpixel((image.width // 2, image.height // 2))[3], 0)
 
     def test_windows_app_identity_is_stable(self):
-        self.assertEqual(APP_USER_MODEL_ID, "PDFPageComposer.Desktop")
+        self.assertEqual(APP_USER_MODEL_ID, "NotEditor.Desktop")

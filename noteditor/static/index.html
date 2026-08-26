@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>PDF 페이지 조합기</title>
+    <title>NotEditor</title>
     <link rel="stylesheet" href="app.css" />
   </head>
   <body>
@@ -11,19 +11,22 @@
       <div class="brand">
         <div class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></div>
         <div>
-          <h1>PDF 페이지 조합기</h1>
-          <p>필요한 쪽만 고르고, 원하는 순서로 한 번에</p>
+          <h1>NotEditor</h1>
+          <p>문서를 고치지 않고, 필요한 결과만 정확하게</p>
         </div>
       </div>
-      <div class="top-actions">
+      <nav class="tool-tabs" role="tablist" aria-label="NotEditor 도구">
+        <button id="mergeTabButton" class="tool-tab active" type="button" role="tab" aria-selected="true" aria-controls="mergeWorkspace">문서 합치기</button>
+        <button id="handwritingButton" class="tool-tab" type="button" role="tab" aria-selected="false" aria-controls="handwritingWorkspace">필기 옮기기</button>
+      </nav>
+      <div id="mergeTopActions" class="top-actions">
         <div id="selectionSummary" class="selection-summary">PDF를 추가해 시작하세요</div>
-        <button id="handwritingButton" class="button secondary handwriting-launch" type="button" disabled>필기 옮기기</button>
         <button id="addPdfButton" class="button secondary" type="button" disabled>PDF 추가</button>
         <button id="saveButton" class="button primary" type="button" disabled>PDF로 저장</button>
       </div>
     </header>
 
-    <main class="workspace">
+    <main id="mergeWorkspace" class="workspace" role="tabpanel" aria-labelledby="mergeTabButton">
       <section class="panel source-panel" aria-labelledby="sourceHeading">
         <div class="panel-header">
           <div>
@@ -39,7 +42,7 @@
           <button id="emptyAddButton" class="button primary" type="button" disabled>준비 중…</button>
           <div id="connectionError" class="connection-error" hidden>
             <strong>앱 연결을 찾을 수 없습니다</strong>
-            <span>서버를 실행할 필요는 없습니다. 이 창을 닫고 바탕화면 또는 시작 메뉴의<br><b>PDF 페이지 조합기</b> 바로가기로 다시 실행하세요.</span>
+            <span>앱 연결을 찾지 못했습니다. 이 창을 닫고 바탕화면 또는 시작 메뉴의<br><b>NotEditor</b> 바로가기로 다시 실행하세요.</span>
           </div>
         </div>
         <div id="documentList" class="document-list" hidden></div>
@@ -73,11 +76,10 @@
             <span class="eyebrow">RESULT</span>
             <h2 id="resultHeading">결과 순서</h2>
           </div>
-          <span id="pageCount" class="count-badge accent">0쪽</span>
-        </div>
-        <div class="result-toolbar">
-          <p>쪽을 끌어서 자유롭게 재정렬하세요.</p>
-          <button id="resetOrderButton" class="text-button" type="button" disabled>기본 순서 복원</button>
+          <div class="panel-header-actions">
+            <button id="resetOrderButton" class="text-button" type="button" disabled>순서 복원</button>
+            <span id="pageCount" class="count-badge accent">0쪽</span>
+          </div>
         </div>
         <div id="resultEmpty" class="empty-state compact">
           <div class="empty-icon small">↗</div>
@@ -88,15 +90,14 @@
       </section>
     </main>
 
-    <dialog id="handwritingDialog" class="handwriting-dialog">
-      <div class="handwriting-shell">
+    <main id="handwritingWorkspace" class="handwriting-workspace" role="tabpanel" aria-labelledby="handwritingButton" hidden>
+      <section class="handwriting-shell">
         <div class="handwriting-header">
           <div>
             <span class="eyebrow">SAMSUNG NOTES</span>
             <h2>필기와 형광펜 옮기기</h2>
             <p>필기된 SDOCX의 편집 가능한 펜 데이터를 새 PDF의 같은 쪽·같은 자리로 옮깁니다. 배율이나 여백이 달라졌으면 본문을 기준으로 자동 정렬합니다.</p>
           </div>
-          <button id="closeHandwritingButton" class="dialog-close" type="button" aria-label="닫기">×</button>
         </div>
 
         <div class="handwriting-flow">
@@ -127,21 +128,45 @@
           </div>
         </div>
 
+        <section id="handwritingMatchEditor" class="match-editor" hidden>
+          <div class="match-editor-head">
+            <div>
+              <strong>쪽 매칭 확인</strong>
+              <small>새 PDF 각 쪽에 옮길 구판 필기를 선택하세요. 같은 구판 쪽을 두 번 쓰거나 순서를 뒤집을 수 없습니다.</small>
+            </div>
+            <span id="handwritingMatchSummary"></span>
+          </div>
+          <div id="handwritingMatchRows" class="match-rows"></div>
+          <p id="handwritingMatchError" class="match-error" hidden></p>
+        </section>
+
         <div id="handwritingPreview" class="align-preview" hidden>
           <div class="align-preview-head">
             <div class="align-preview-copy">
               <strong>정렬 확인</strong>
-              <small>필기가 얹혀 있던 옛 배경과 새 배경을 겹쳐 봅니다. 본문 글자가 서로 겹쳐 보이면 필기도 제자리에 놓입니다.</small>
+              <small>실제 필기를 옛 배경·새 배경 위에 겹쳐 봅니다. 휠, 쪽 번호, 오른쪽 스크롤바로 이동할 수 있습니다.</small>
             </div>
             <div class="align-pager">
               <button id="alignPrevPage" class="text-button" type="button" aria-label="이전 쪽">‹</button>
-              <span id="alignPageLabel">1 / 1</span>
+              <label class="align-page-jump" aria-label="미리보기 쪽 번호">
+                <input id="alignPageInput" type="number" min="1" max="1" value="1" inputmode="numeric" />
+                <span id="alignPageTotal">/ 1</span>
+              </label>
               <button id="alignNextPage" class="text-button" type="button" aria-label="다음 쪽">›</button>
             </div>
           </div>
-          <div id="alignStage" class="align-stage">
-            <img id="alignBefore" alt="필기가 얹혀 있던 원본 배경" />
-            <img id="alignAfter" alt="옮긴 뒤의 새 배경" />
+          <div class="align-stage-row">
+            <div id="alignStage" class="align-stage">
+              <img id="alignBefore" alt="필기가 얹혀 있던 원본 배경" />
+              <img id="alignAfter" alt="옮긴 뒤의 새 배경" />
+              <img id="alignInk" alt="옮길 실제 필기" />
+              <div id="alignLoading" class="align-loading" hidden>
+                <div class="loader"></div>
+                <span>미리보기를 불러오는 중…</span>
+              </div>
+              <span id="alignInkStatus" class="align-ink-status"></span>
+            </div>
+            <input id="alignPageScrubber" class="align-page-scrubber" type="range" min="1" max="1" value="1" aria-label="미리보기 쪽 빠르게 이동" />
           </div>
           <label class="align-slider">
             <span>옛 배경</span>
@@ -152,17 +177,21 @@
 
         <div class="handwriting-notice">
           <strong>원본은 수정하지 않습니다.</strong>
-          <span>필기·형광펜·펜 속성과 Samsung Notes 캐시는 그대로 보존하고 내장 PDF만 교체합니다. 페이지 크기나 여백이 달라졌으면 필기는 그대로 두고 새 배경을 본문 위치에 맞춰 다시 앉힙니다. 암호화 파일과 페이지 수가 다른 문서는 거부합니다.</span>
+          <span>필기·형광펜·펜 속성과 Samsung Notes 캐시는 그대로 보존합니다. 쪽이 추가·삭제됐으면 공통 쪽을 자동으로 짝짓고 새 PDF의 모든 쪽을 담습니다. 페이지 크기나 여백이 달라졌으면 필기는 그대로 두고 새 배경을 본문 위치에 맞춰 다시 앉힙니다.</span>
         </div>
 
         <div class="handwriting-footer">
           <button id="resetHandwritingButton" class="text-button" type="button">선택 초기화</button>
           <button id="saveHandwritingButton" class="button primary" type="button" disabled>새 Samsung Notes로 저장</button>
         </div>
-      </div>
-    </dialog>
+      </section>
+    </main>
 
-    <div id="busyOverlay" class="busy-overlay" hidden>
+    <input id="webPdfInput" type="file" accept="application/pdf,.pdf" multiple hidden />
+    <input id="webSdocxInput" type="file" accept=".sdocx,application/zip" hidden />
+    <input id="webTargetPdfInput" type="file" accept="application/pdf,.pdf" hidden />
+
+    <div id="busyOverlay" class="busy-overlay" role="status" aria-live="polite" hidden>
       <div class="busy-card"><div class="loader"></div><strong id="busyText">처리 중…</strong></div>
     </div>
     <div id="toastRegion" class="toast-region" aria-live="polite"></div>

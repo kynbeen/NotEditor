@@ -6,11 +6,12 @@ from pathlib import Path
 
 import pymupdf
 
-from pdf_page_composer.page_match import (
+from noteditor.page_match import (
     PageMatchError,
     distance,
     fingerprints,
     match_fingerprints,
+    match_from_target_mapping,
     match_pages,
 )
 
@@ -154,6 +155,20 @@ class MatchPagesTests(unittest.TestCase):
                 if isinstance(value, float):
                     self.assertEqual(value, value)  # NaN 아님
                     self.assertNotEqual(abs(value), float("inf"))
+
+
+class ManualMatchTests(unittest.TestCase):
+    def test_target_mapping_restores_source_only_pages_in_order(self):
+        result = match_from_target_mapping(5, [0, None, 2, 4])
+        self.assertEqual(
+            [(pair.source_index, pair.target_index) for pair in result.pairs],
+            [(0, 0), (None, 1), (1, None), (2, 2), (3, None), (4, 3)],
+        )
+
+    def test_target_mapping_rejects_duplicates_reordering_and_out_of_range(self):
+        for mapping in ([0, 0], [2, 1], [0, 3]):
+            with self.subTest(mapping=mapping), self.assertRaises(PageMatchError):
+                match_from_target_mapping(3, mapping)
 
 
 class FingerprintTests(unittest.TestCase):

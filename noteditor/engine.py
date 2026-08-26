@@ -69,7 +69,7 @@ class ComposerSession:
     """Owns source paths and preview caches for one process-local app session."""
 
     def __init__(self) -> None:
-        self._temporary = tempfile.TemporaryDirectory(prefix="pdf-page-composer-")
+        self._temporary = tempfile.TemporaryDirectory(prefix="noteditor-")
         self.temp_dir = Path(self._temporary.name)
         self._sources: dict[str, SourceDocument] = {}
         self._source_order: list[str] = []

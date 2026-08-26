@@ -12,11 +12,11 @@ import webview
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from pdf_page_composer.app import ComposerApi
+from noteditor.app import ComposerApi
 
 
 def main() -> None:
-    page = ROOT / "pdf_page_composer" / "static" / "index.html"
+    page = ROOT / "noteditor" / "static" / "index.html"
     api = ComposerApi()
     window = webview.create_window(
         "PDF Page Composer bridge smoke test",

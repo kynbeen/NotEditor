@@ -10,7 +10,7 @@ from .engine import ComposerSession, PdfComposerError
 from .ranges import PageRangeError, parse_page_ranges
 from .sdocx_transfer import inspect_transfer, preview_transfer, transfer_handwriting
 
-APP_USER_MODEL_ID = "PDFPageComposer.Desktop"
+APP_USER_MODEL_ID = "NotEditor.Desktop"
 
 
 def _png_data_uri(payload: bytes) -> str:
@@ -33,11 +33,11 @@ def configure_windows_app_identity() -> None:
         set_app_id.restype = ctypes.c_long
         result = set_app_id(APP_USER_MODEL_ID)
         if result != 0:
-            logging.getLogger("pdf_page_composer").warning(
+            logging.getLogger("noteditor").warning(
                 "Failed to set AppUserModelID: HRESULT=%s", result
             )
     except Exception:
-        logging.getLogger("pdf_page_composer").exception(
+        logging.getLogger("noteditor").exception(
             "Failed to configure Windows app identity"
         )
 
@@ -65,7 +65,7 @@ class ComposerApi:
 
     @staticmethod
     def _error(exc: Exception) -> dict:
-        logging.getLogger("pdf_page_composer").error(
+        logging.getLogger("noteditor").error(
             "Desktop API request failed: %s", exc, exc_info=exc
         )
         return {"ok": False, "error": str(exc)}
@@ -74,7 +74,7 @@ class ComposerApi:
         return self._ok(version=__version__)
 
     def log_client_error(self, message: str) -> dict:
-        logging.getLogger("pdf_page_composer").error("UI error: %s", message)
+        logging.getLogger("noteditor").error("UI error: %s", message)
         return self._ok()
 
     def choose_pdfs(self) -> dict:
@@ -128,18 +128,24 @@ class ComposerApi:
             payload.update(ready=True, inspection=self._inspection().as_dict())
         return payload
 
-    def handwriting_preview(self, page_index: int = 0) -> dict:
+    def handwriting_preview(self, page_index: int = 0, source_index: int = -2) -> dict:
         try:
             inspection = self._inspection()
             index = max(0, min(int(page_index), inspection.page_count - 1))
-            before, after = preview_transfer(
-                self._handwriting_source, self._handwriting_target, index, inspection
+            before, after, ink, stroke_count = preview_transfer(
+                self._handwriting_source,
+                self._handwriting_target,
+                index,
+                inspection,
+                source_index_override=int(source_index),
             )
             return self._ok(
                 index=index,
                 page_count=inspection.page_count,
                 before=_png_data_uri(before),
                 after=_png_data_uri(after),
+                ink=_png_data_uri(ink),
+                stroke_count=stroke_count,
             )
         except Exception as exc:
             return self._error(exc)
@@ -188,7 +194,11 @@ class ComposerApi:
         self._handwriting_cache = None
         return self._ok(**self._handwriting_status())
 
-    def save_handwriting_transfer(self, suggested_name: str = "필기-이전.sdocx") -> dict:
+    def save_handwriting_transfer(
+        self,
+        suggested_name: str = "필기-이전.sdocx",
+        target_mapping: list[int | None] | None = None,
+    ) -> dict:
         try:
             if self._window is None:
                 raise PdfComposerError("앱 창이 아직 준비되지 않았습니다.")
@@ -206,9 +216,24 @@ class ComposerApi:
             output = self._dialog_path(selected)
             if output is None:
                 return self._ok(cancelled=True, inspection=inspection.as_dict())
-            result = transfer_handwriting(
-                self._handwriting_source, self._handwriting_target, output
-            )
+            if target_mapping is not None and getattr(inspection, "mode", None) == "rebuild":
+                from .page_match import match_from_target_mapping
+
+                match = match_from_target_mapping(
+                    inspection.source_page_count,
+                    target_mapping,
+                    inspection.match,
+                )
+                result = transfer_handwriting(
+                    self._handwriting_source,
+                    self._handwriting_target,
+                    output,
+                    match_override=match,
+                )
+            else:
+                result = transfer_handwriting(
+                    self._handwriting_source, self._handwriting_target, output
+                )
             return self._ok(cancelled=False, result=result)
         except Exception as exc:
             return self._error(exc)
@@ -280,7 +305,7 @@ def run(debug: bool = False) -> None:
     api = ComposerApi()
     static_file = Path(__file__).with_name("static") / "index.html"
     window = webview.create_window(
-        "PDF 페이지 조합기",
+        "NotEditor",
         static_file.resolve().as_uri(),
         js_api=api,
         width=1440,
@@ -304,7 +329,7 @@ def configure_logging() -> Path:
     import os
 
     local_data = Path(os.environ.get("LOCALAPPDATA", Path.home()))
-    log_dir = local_data / "PDFPageComposer"
+    log_dir = local_data / "NotEditor"
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / "app.log"
     logging.basicConfig(
@@ -314,5 +339,5 @@ def configure_logging() -> Path:
         encoding="utf-8",
         force=True,
     )
-    logging.getLogger("pdf_page_composer").info("Application starting (version %s)", __version__)
+    logging.getLogger("noteditor").info("Application starting (version %s)", __version__)
     return log_path

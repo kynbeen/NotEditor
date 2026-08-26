@@ -7,7 +7,7 @@ from .app import configure_logging, run
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="필요한 PDF 쪽을 골라 하나로 조합합니다.")
+    parser = argparse.ArgumentParser(description="NotEditor 데스크톱 앱을 실행합니다.")
     parser.add_argument("--debug", action="store_true", help="개발자 도구와 디버그 로그를 켭니다.")
     args = parser.parse_args()
     log_path = configure_logging()
@@ -20,7 +20,7 @@ def main() -> None:
             from tkinter import messagebox
 
             messagebox.showerror(
-                "PDF 페이지 조합기",
+                "NotEditor",
                 "앱을 시작하지 못했습니다. 서버를 따로 실행할 필요는 없습니다.\n\n"
                 f"오류: {exc}\n\n진단 기록: {log_path}",
             )

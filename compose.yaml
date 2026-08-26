@@ -1,0 +1,9 @@
+services:
+  noteditor:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      NOTEDITOR_MAX_UPLOAD_MB: "512"
+      NOTEDITOR_SESSION_TTL: "7200"
+    restart: unless-stopped

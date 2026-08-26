@@ -9,7 +9,7 @@ import pikepdf
 import pymupdf
 from PIL import Image
 
-from pdf_page_composer.engine import ComposerSession, EncryptedPdfError, PdfComposerError
+from noteditor.engine import ComposerSession, EncryptedPdfError, PdfComposerError
 
 
 def make_source(path: Path, labels: list[str], *, form: bool = False) -> None:

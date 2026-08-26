@@ -17,11 +17,18 @@ import struct
 import tempfile
 import zlib
 from dataclasses import dataclass
+from io import BytesIO
 from pathlib import Path, PurePosixPath
 from typing import BinaryIO
 from zipfile import BadZipFile, ZipFile, ZipInfo
 
+from PIL import Image
+
 from .alignment import Alignment, build_aligned_pdf, estimate_alignment, render_comparison
+from .page_match import MatchResult, match_pages
+from .sdocx_ink import render_ink_png
+from .sdocx_note import read_page_order
+from .sdocx_page import read_page
 
 _LOCAL_HEADER = b"PK\x03\x04"
 _CENTRAL_HEADER = b"PK\x01\x02"
@@ -51,8 +58,10 @@ class TransferInspection:
     stroke_cache_count: int
     embedded_pdf_name: str
     target_size: int
+    source_page_count: int | None = None
     mode: str = "exact"
     alignment: Alignment | None = None
+    match: MatchResult | None = None
 
     def as_dict(self) -> dict:
         return {
@@ -63,8 +72,10 @@ class TransferInspection:
             "stroke_cache_count": self.stroke_cache_count,
             "embedded_pdf_name": self.embedded_pdf_name,
             "target_size": self.target_size,
+            "source_page_count": self.source_page_count,
             "mode": self.mode,
             "alignment": self.alignment.as_dict() if self.alignment else None,
+            "match": self.match.as_dict() if self.match else None,
         }
 
 
@@ -188,7 +199,9 @@ def _validate_geometry(source: list[tuple[float, float, int]], target: list[tupl
         )
 
 
-def _plan_transfer(embedded_pdf: bytes, target: Path) -> tuple[str, Alignment | None, int]:
+def _plan_transfer(
+    embedded_pdf: bytes, target: Path
+) -> tuple[str, Alignment | None, int, MatchResult]:
     """그대로 넣을지(``exact``), 본문 기준으로 다시 앉힐지(``aligned``) 정한다."""
     source_document = _open_pdf(embedded_pdf, "SDOCX 내장 PDF")
     try:
@@ -199,13 +212,17 @@ def _plan_transfer(embedded_pdf: bytes, target: Path) -> tuple[str, Alignment | 
     try:
         source_geometry = _geometry(source_document)
         target_geometry = _geometry(target_document)
-        if len(source_geometry) != len(target_geometry):
-            raise SdocxTransferError(
-                f"페이지 수가 다릅니다: 필기 원본 {len(source_geometry)}쪽, "
-                f"대상 PDF {len(target_geometry)}쪽"
-            )
-        same_geometry = not _geometry_mismatches(source_geometry, target_geometry)
-        alignment = estimate_alignment(source_document, target_document)
+        match = match_pages(source_document, target_document)
+        matched_indices = [
+            (pair.source_index, pair.target_index) for pair in match.matched_pairs
+        ]
+        same_geometry = all(
+            abs(source_geometry[source][0] - target_geometry[target_index][0]) <= 0.5
+            and abs(source_geometry[source][1] - target_geometry[target_index][1]) <= 0.5
+            and source_geometry[source][2] == target_geometry[target_index][2]
+            for source, target_index in matched_indices
+        )
+        alignment = estimate_alignment(source_document, target_document, matched_indices)
     finally:
         source_document.close()
         target_document.close()
@@ -216,11 +233,14 @@ def _plan_transfer(embedded_pdf: bytes, target: Path) -> tuple[str, Alignment | 
                 "페이지 크기가 다른데 두 문서의 본문 영역을 찾지 못해 정렬 배율을 정할 수 없습니다. "
                 "내용이 비어 있거나 스캔 품질이 낮은 문서일 수 있습니다."
             )
-        return "exact", None, len(target_geometry)
+        mode = "rebuild" if match.source_only or match.target_only else "exact"
+        return mode, None, len(target_geometry), match
     if same_geometry and not (alignment.improves and alignment.axes_agree):
         # 페이지 크기가 같고 본문 배치도 그대로면 사용자의 PDF를 바이트 그대로 넣는다.
-        return "exact", None, len(target_geometry)
-    return "aligned", alignment, len(target_geometry)
+        mode = "rebuild" if match.source_only or match.target_only else "exact"
+        return mode, None, len(target_geometry), match
+    mode = "rebuild" if match.source_only or match.target_only else "aligned"
+    return mode, alignment, len(target_geometry), match
 
 
 @dataclass(frozen=True)
@@ -232,6 +252,14 @@ class _ZipEntry:
     compress_type: int
     compress_size: int
     local_offset: int
+
+
+@dataclass(frozen=True)
+class ArchiveAddition:
+    """기존 ZIP 엔트리의 헤더 규칙을 본떠 새 엔트리를 만든다."""
+
+    template_name: str
+    data: bytes
 
 
 def _read_zip_layout(handle: BinaryIO) -> tuple[list[_ZipEntry], bytes, bytes]:
@@ -308,17 +336,92 @@ def _copy_bytes(reader: BinaryIO, writer: BinaryIO, length: int) -> None:
         remaining -= len(chunk)
 
 
-def _rewrite_archive(source: Path, destination: Path, replacements: dict[str, bytes]) -> bytes:
-    """바뀌는 엔트리만 갈아 끼우고 나머지는 압축 상태 그대로 복사한다.
+def _encoded_name(name: str, flag_bits: int) -> bytes:
+    try:
+        return name.encode("utf-8" if flag_bits & 0x800 else "cp437")
+    except UnicodeEncodeError as exc:
+        raise SdocxTransferError(f"SDOCX 엔트리 이름을 인코딩할 수 없습니다: {name}") from exc
+
+
+def _validate_archive_name(name: str) -> None:
+    path = PurePosixPath(name)
+    if not name or path.is_absolute() or ".." in path.parts or "\\" in name:
+        raise SdocxTransferError(f"안전하지 않은 SDOCX 엔트리 경로입니다: {name}")
+
+
+def _cloned_local_header(header: bytes, name: str, fields: tuple[int, int, int]) -> bytes:
+    name_length, extra_length = struct.unpack_from("<HH", header, 26)
+    flag_bits = struct.unpack_from("<H", header, 6)[0]
+    encoded = _encoded_name(name, flag_bits)
+    extra = header[30 + name_length:30 + name_length + extra_length]
+    cloned = bytearray(header[:30])
+    struct.pack_into("<III", cloned, 14, *fields)
+    struct.pack_into("<H", cloned, 26, len(encoded))
+    return bytes(cloned) + encoded + extra
+
+
+def _cloned_central_record(
+    entry: _ZipEntry,
+    name: str,
+    fields: tuple[int, int, int],
+    local_offset: int,
+) -> bytes:
+    name_length, extra_length, comment_length = struct.unpack_from("<HHH", entry.record, 28)
+    flag_bits = struct.unpack_from("<H", entry.record, 8)[0]
+    encoded = _encoded_name(name, flag_bits)
+    suffix = entry.record[
+        46 + name_length:46 + name_length + extra_length + comment_length
+    ]
+    cloned = bytearray(entry.record[:46])
+    struct.pack_into("<III", cloned, 16, *fields)
+    struct.pack_into("<H", cloned, 28, len(encoded))
+    struct.pack_into("<I", cloned, 42, local_offset)
+    return bytes(cloned) + encoded + suffix
+
+
+def _rewrite_archive(
+    source: Path,
+    destination: Path,
+    replacements: dict[str, bytes],
+    *,
+    additions: dict[str, ArchiveAddition] | None = None,
+    deletions: set[str] | None = None,
+) -> bytes:
+    """엔트리를 교체·추가·삭제하고 나머지는 압축 상태 그대로 복사한다.
 
     ZIP 헤더의 플래그 비트·타임스탬프·엔트리 순서와 EOCD 뒤의 Samsung 꼬리표를 그대로 두어야
-    Samsung Notes가 결과 파일을 연다. 반환값은 보존한 꼬리표 바이트다.
+    Samsung Notes가 결과 파일을 연다. 추가 엔트리는 지정한 기존 엔트리의 로컬/중앙 헤더를
+    복제하고 이름·CRC·크기·오프셋만 바꾼다. 반환값은 보존한 꼬리표 바이트다.
     """
+    additions = dict(additions or {})
+    deletions = set(deletions or ())
+    for name in additions:
+        _validate_archive_name(name)
+
     pending = dict(replacements)
     with source.open("rb") as reader, destination.open("wb") as writer:
         entries, end_of_central, trailer = _read_zip_layout(reader)
+        by_name = {entry.name: entry for entry in entries}
+        existing = set(by_name)
+        unknown_deletions = deletions - existing
+        if unknown_deletions:
+            missing = ", ".join(sorted(unknown_deletions))
+            raise SdocxTransferError(f"SDOCX에서 삭제할 엔트리를 찾지 못했습니다: {missing}")
+        conflicts = (set(pending) & deletions) | (set(additions) & (existing | set(pending)))
+        if conflicts:
+            names = ", ".join(sorted(conflicts))
+            raise SdocxTransferError(f"SDOCX 엔트리 변경 요청이 서로 충돌합니다: {names}")
+        missing_templates = {
+            addition.template_name for addition in additions.values()
+            if addition.template_name not in existing
+        }
+        if missing_templates:
+            missing = ", ".join(sorted(missing_templates))
+            raise SdocxTransferError(f"SDOCX에서 복제할 템플릿 엔트리를 찾지 못했습니다: {missing}")
+
         moved: dict[int, int] = {}
         patched: dict[str, tuple[int, int, int]] = {}
+        local_headers: dict[str, bytes] = {}
         for entry in sorted(entries, key=lambda item: item.local_offset):
             reader.seek(entry.local_offset)
             header = reader.read(30)
@@ -326,6 +429,9 @@ def _rewrite_archive(source: Path, destination: Path, replacements: dict[str, by
                 raise SdocxTransferError(f"SDOCX 엔트리 헤더가 올바르지 않습니다: {entry.name}")
             name_length, extra_length = struct.unpack_from("<HH", header, 26)
             header += reader.read(name_length + extra_length)
+            local_headers[entry.name] = header
+            if entry.name in deletions:
+                continue
             moved[entry.local_offset] = writer.tell()
             payload = pending.pop(entry.name, None)
             if payload is None:
@@ -343,18 +449,42 @@ def _rewrite_archive(source: Path, destination: Path, replacements: dict[str, by
             missing = ", ".join(sorted(pending))
             raise SdocxTransferError(f"SDOCX에서 교체할 엔트리를 찾지 못했습니다: {missing}")
 
+        added_records: list[bytes] = []
+        for name, addition in additions.items():
+            template = by_name[addition.template_name]
+            stored = _compress_like(addition.data, template.compress_type)
+            fields = (
+                zlib.crc32(addition.data) & _ZIP32_LIMIT,
+                len(stored),
+                len(addition.data),
+            )
+            local_offset = writer.tell()
+            writer.write(_cloned_local_header(local_headers[template.name], name, fields))
+            writer.write(stored)
+            added_records.append(
+                _cloned_central_record(template, name, fields, local_offset)
+            )
+
         central_offset = writer.tell()
         for entry in entries:
+            if entry.name in deletions:
+                continue
             record = bytearray(entry.record)
             struct.pack_into("<I", record, 42, moved[entry.local_offset])
             if entry.name in patched:
                 struct.pack_into("<III", record, 16, *patched[entry.name])
             writer.write(bytes(record))
+        for record in added_records:
+            writer.write(record)
         central_size = writer.tell() - central_offset
         if central_offset > _ZIP32_LIMIT or writer.tell() > _ZIP32_LIMIT:
             raise SdocxTransferError("결과 SDOCX가 4GB를 넘어 저장할 수 없습니다.")
 
+        entry_count = len(entries) - len(deletions) + len(additions)
+        if entry_count >= 0xFFFF:
+            raise SdocxTransferError("결과 SDOCX의 엔트리가 너무 많아 Zip64 없이 저장할 수 없습니다.")
         record = bytearray(end_of_central)
+        struct.pack_into("<HH", record, 8, entry_count, entry_count)
         struct.pack_into("<II", record, 12, central_size, central_offset)
         writer.write(bytes(record))
         writer.write(trailer)
@@ -431,7 +561,7 @@ def inspect_transfer(source_sdocx: str | Path, target_pdf: str | Path) -> Transf
     finally:
         archive.close()
 
-    mode, alignment, page_count = _plan_transfer(embedded_pdf, target)
+    mode, alignment, page_count, match = _plan_transfer(embedded_pdf, target)
 
     return TransferInspection(
         source_name=source.name,
@@ -441,8 +571,10 @@ def inspect_transfer(source_sdocx: str | Path, target_pdf: str | Path) -> Transf
         stroke_cache_count=spi_count,
         embedded_pdf_name=PurePosixPath(embedded_name).name,
         target_size=target.stat().st_size,
+        source_page_count=len(match.source_to_target()) + len(match.source_only),
         mode=mode,
         alignment=alignment,
+        match=match,
     )
 
 
@@ -452,25 +584,60 @@ def preview_transfer(
     page_index: int,
     inspection: TransferInspection | None = None,
     max_side: int = 900,
-) -> tuple[bytes, bytes]:
-    """한 쪽의 (원본 배경, 옮긴 뒤 배경) PNG 쌍을 같은 크기로 렌더링한다.
+    source_index_override: int = -2,
+) -> tuple[bytes, bytes, bytes, int]:
+    """한 쪽의 원본·새 배경과 필기 PNG를 같은 크기로 렌더링한다.
 
-    필기는 원본 배경 위에 그려져 있으므로, 두 배경의 본문이 겹치면 필기도 겹친다.
-    저장하기 전에 사람이 눈으로 확인할 수 있는 유일한 지점이다.
+    필기는 원본 ``.page``에서 읽기만 하고 투명 PNG로 그린다. 저장할 때는 여전히
+    원본 바이너리를 그대로 보존하므로 미리보기 디코더가 필기 데이터에 영향을 주지 않는다.
     """
     source = Path(source_sdocx).expanduser().resolve()
     target = Path(target_pdf).expanduser().resolve()
     if inspection is None:
         inspection = inspect_transfer(source, target)
 
-    archive, _members, _media_info_name, _media_info, _pdf_entry, embedded_name = _archive_context(source)
-    try:
-        embedded_pdf = archive.read(embedded_name)
-    finally:
-        archive.close()
-
     if not 0 <= page_index < inspection.page_count:
         raise SdocxTransferError(f"{inspection.page_count}쪽 문서에 없는 쪽 번호입니다: {page_index + 1}")
+
+    source_index: int | None = page_index
+    if inspection.mode == "rebuild" and inspection.match is not None:
+        if source_index_override == -2:
+            pair = next(
+                (pair for pair in inspection.match.pairs if pair.target_index == page_index),
+                None,
+            )
+            if pair is None:
+                raise SdocxTransferError(f"대상 {page_index + 1}쪽의 원본 매칭을 찾을 수 없습니다.")
+            source_index = pair.source_index
+        else:
+            source_index = None if source_index_override == -1 else source_index_override
+
+    archive, members, _media_info_name, _media_info, _pdf_entry, embedded_name = _archive_context(source)
+    try:
+        embedded_pdf = archive.read(embedded_name)
+        page_blob: bytes | None = None
+        if source_index is not None:
+            try:
+                order_name = _find_suffix(members, "pageIdInfo.dat")
+                order = read_page_order(archive.read(order_name))
+                page_root = PurePosixPath(order_name).parent
+                for entry in order.entries:
+                    page_name = str(page_root / f"{entry.uuid}.page")
+                    if str(page_root) == ".":
+                        page_name = f"{entry.uuid}.page"
+                    if page_name not in members:
+                        continue
+                    candidate = archive.read(page_name)
+                    page_info = read_page(candidate)
+                    if page_info.pdf is not None and page_info.pdf.page_index == source_index:
+                        page_blob = candidate
+                        break
+            except Exception:
+                # Older or partially exported notes can still preview their PDF
+                # backgrounds; absence of a decodable ink layer is non-fatal.
+                page_blob = None
+    finally:
+        archive.close()
 
     source_document = _open_pdf(embedded_pdf, "SDOCX 내장 PDF")
     try:
@@ -480,9 +647,42 @@ def preview_transfer(
         raise
     try:
         with source_document, target_document:
-            return render_comparison(
-                source_document, target_document, inspection.alignment, page_index, max_side
-            )
+            if inspection.mode == "rebuild" and inspection.match is not None:
+                if source_index is None:
+                    page = target_document[page_index]
+                    rect = page.rect
+                    scale = min(max_side / max(rect.width, rect.height), 3.0)
+                    import pymupdf
+
+                    png = page.get_pixmap(
+                        matrix=pymupdf.Matrix(scale, scale), alpha=False
+                    ).tobytes("png")
+                    before, after = png, png
+                else:
+                    if not 0 <= source_index < source_document.page_count:
+                        raise SdocxTransferError(
+                            f"원본 문서에 없는 쪽 번호입니다: {source_index + 1}"
+                        )
+                    before, after = render_comparison(
+                        source_document,
+                        target_document,
+                        inspection.alignment,
+                        source_index,
+                        max_side,
+                        target_page_index=page_index,
+                    )
+            else:
+                if not 0 <= source_index < source_document.page_count:
+                    raise SdocxTransferError(
+                        f"원본 문서에 없는 쪽 번호입니다: {source_index + 1}"
+                    )
+                before, after = render_comparison(
+                    source_document, target_document, inspection.alignment, page_index, max_side
+                )
+            with Image.open(BytesIO(after)) as preview_image:
+                width, height = preview_image.size
+            ink, stroke_count = render_ink_png(page_blob, width, height)
+            return before, after, ink, stroke_count
     except SdocxTransferError:
         raise
     except Exception as exc:
@@ -493,6 +693,8 @@ def transfer_handwriting(
     source_sdocx: str | Path,
     target_pdf: str | Path,
     output_sdocx: str | Path,
+    *,
+    match_override: MatchResult | None = None,
 ) -> dict:
     source = Path(source_sdocx).expanduser().resolve()
     target = Path(target_pdf).expanduser().resolve()
@@ -503,6 +705,14 @@ def transfer_handwriting(
     if output in {source, target}:
         raise SdocxTransferError("원본 파일을 덮어쓸 수 없습니다. 새 파일명으로 저장하세요.")
     output.parent.mkdir(parents=True, exist_ok=True)
+
+    if inspection.mode == "rebuild" or match_override is not None:
+        selected_match = match_override or inspection.match
+        if selected_match is None:
+            raise SdocxTransferError("쪽 재조립에 필요한 매칭 결과가 없습니다.")
+        from .sdocx_rebuild import rebuild_handwriting
+
+        return rebuild_handwriting(source, target, output, selected_match)
 
     archive, members, media_info_name, media_info, pdf_entry, embedded_name = _archive_context(source)
     try:

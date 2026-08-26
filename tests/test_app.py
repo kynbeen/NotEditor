@@ -10,8 +10,8 @@ from unittest.mock import patch
 
 import pymupdf
 
-from pdf_page_composer.app import ComposerApi
-from pdf_page_composer.engine import ComposerSession
+from noteditor.app import ComposerApi
+from noteditor.engine import ComposerSession
 
 
 class FakeWindow:
@@ -87,8 +87,8 @@ class ComposerApiTests(unittest.TestCase):
         })
         self.api._bind_window(FakeWindow([(str(source),), (str(target),), str(output)]))
         with patch.dict(sys.modules, {"webview": self.webview}), \
-                patch("pdf_page_composer.app.inspect_transfer", return_value=inspection), \
-                patch("pdf_page_composer.app.transfer_handwriting", return_value={
+                patch("noteditor.app.inspect_transfer", return_value=inspection), \
+                patch("noteditor.app.transfer_handwriting", return_value={
                     "path": str(output), "page_count": 2,
                 }) as transfer:
             selected_source = self.api.choose_handwriting_source()
@@ -102,7 +102,7 @@ class ComposerApiTests(unittest.TestCase):
         self.assertFalse(saved["cancelled"])
         transfer.assert_called_once_with(source.resolve(), target.resolve(), output.resolve())
 
-    def test_handwriting_preview_returns_two_png_data_uris(self):
+    def test_handwriting_preview_returns_background_and_ink_data_uris(self):
         source = self.root / "annotated.sdocx"
         target = self.root / "target.pdf"
         source.write_bytes(b"zip")
@@ -110,9 +110,9 @@ class ComposerApiTests(unittest.TestCase):
         inspection = SimpleNamespace(page_count=3, alignment=None, as_dict=lambda: {"page_count": 3})
         self.api._handwriting_source = source
         self.api._handwriting_target = target
-        with patch("pdf_page_composer.app.inspect_transfer", return_value=inspection) as inspect, \
-                patch("pdf_page_composer.app.preview_transfer",
-                      return_value=(b"\x89PNG-before", b"\x89PNG-after")) as preview:
+        with patch("noteditor.app.inspect_transfer", return_value=inspection) as inspect, \
+                patch("noteditor.app.preview_transfer",
+                      return_value=(b"\x89PNG-before", b"\x89PNG-after", b"\x89PNG-ink", 17)) as preview:
             first = self.api.handwriting_preview(1)
             second = self.api.handwriting_preview(99)
 
@@ -121,11 +121,44 @@ class ComposerApiTests(unittest.TestCase):
         self.assertEqual(first["page_count"], 3)
         self.assertTrue(first["before"].startswith("data:image/png;base64,"))
         self.assertTrue(first["after"].startswith("data:image/png;base64,"))
+        self.assertTrue(first["ink"].startswith("data:image/png;base64,"))
+        self.assertEqual(first["stroke_count"], 17)
         # 범위를 벗어난 쪽 번호는 마지막 쪽으로 좁힌다.
         self.assertEqual(second["index"], 2)
         # 파일이 그대로면 검사 결과를 다시 계산하지 않는다.
         inspect.assert_called_once()
         self.assertEqual(preview.call_count, 2)
+
+    def test_manual_handwriting_mapping_is_validated_and_forwarded(self):
+        source = self.root / "annotated.sdocx"
+        target = self.root / "target.pdf"
+        output = self.root / "target-필기.sdocx"
+        source.write_bytes(b"zip")
+        target.write_bytes(b"%PDF")
+        automatic = SimpleNamespace()
+        inspection = SimpleNamespace(
+            mode="rebuild",
+            source_page_count=3,
+            match=automatic,
+            as_dict=lambda: {"mode": "rebuild"},
+        )
+        manual = SimpleNamespace()
+        self.api._handwriting_source = source
+        self.api._handwriting_target = target
+        self.api._bind_window(FakeWindow([str(output)]))
+        with patch.dict(sys.modules, {"webview": self.webview}), \
+                patch("noteditor.app.inspect_transfer", return_value=inspection), \
+                patch("noteditor.page_match.match_from_target_mapping",
+                      return_value=manual) as convert, \
+                patch("noteditor.app.transfer_handwriting",
+                      return_value={"path": str(output)}) as transfer:
+            saved = self.api.save_handwriting_transfer("target-필기.sdocx", [0, None, 2])
+
+        self.assertTrue(saved["ok"])
+        convert.assert_called_once_with(3, [0, None, 2], automatic)
+        transfer.assert_called_once_with(
+            source.resolve(), target.resolve(), output.resolve(), match_override=manual
+        )
 
 
 if __name__ == "__main__":

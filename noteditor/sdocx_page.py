@@ -173,6 +173,28 @@ def page_hash(blob: bytes) -> bytes:
     return blob[-(_HASH_SIZE + len(PAGE_FOOTER)):-len(PAGE_FOOTER)]
 
 
+def is_blank_page(blob: bytes) -> bool:
+    """모든 레이어의 객체 수가 0이면 필기나 다른 객체가 없는 쪽이다."""
+    info = read_page(blob)
+    position = info.layer_offset
+    content_end = len(blob) - _HASH_SIZE - len(PAGE_FOOTER)
+    _require(position + 4 <= content_end, "페이지 레이어 구간이 잘렸습니다.")
+    layer_count = struct.unpack_from("<H", blob, position)[0]
+    position += 4  # layer_count, current_layer_index
+    for _ in range(layer_count):
+        _require(position + 16 <= content_end, "페이지 레이어 헤더가 잘렸습니다.")
+        header_size = struct.unpack_from("<I", blob, position)[0]
+        _require(header_size >= 16, "페이지 레이어 헤더 크기가 올바르지 않습니다.")
+        object_count_offset = position + header_size
+        _require(object_count_offset + 4 <= content_end, "페이지 객체 수 필드가 잘렸습니다.")
+        object_count = struct.unpack_from("<I", blob, object_count_offset)[0]
+        if object_count:
+            return False
+        position = object_count_offset + 4 + _HASH_SIZE  # 빈 레이어의 해시
+    _require(position == content_end, "빈 페이지 레이어 구간에 해석하지 못한 바이트가 남았습니다.")
+    return True
+
+
 def patch_page(
     blob: bytes,
     *,

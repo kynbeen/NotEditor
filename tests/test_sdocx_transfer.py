@@ -9,8 +9,10 @@ from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile
 
 import pymupdf
 
-from pdf_page_composer.sdocx_transfer import (
+from noteditor.sdocx_transfer import (
+    ArchiveAddition,
     SdocxTransferError,
+    _rewrite_archive,
     inspect_transfer,
     parse_media_info,
     preview_transfer,
@@ -101,22 +103,24 @@ class SdocxTransferTests(unittest.TestCase):
         self.target_pdf = self.root / "target.pdf"
         self.source_sdocx = self.root / "annotated.sdocx"
         make_pdf(self.original_pdf, ["SOURCE ONE", "SOURCE TWO"])
-        make_pdf(self.target_pdf, ["TARGET ONE", "TARGET TWO"])
+        make_pdf(self.target_pdf, ["SOURCE ONE", "SOURCE TWO"])
         self.original_payloads = make_sdocx(self.source_sdocx, self.original_pdf)
 
     def tearDown(self):
         self.folder.cleanup()
 
-    def test_inspection_requires_matching_page_geometry(self):
+    def test_inspection_switches_to_rebuild_when_page_counts_differ(self):
         inspection = inspect_transfer(self.source_sdocx, self.target_pdf)
         self.assertEqual(inspection.page_count, 2)
         self.assertEqual(inspection.annotated_page_count, 1)
         self.assertEqual(inspection.stroke_cache_count, 1)
 
         mismatch = self.root / "mismatch.pdf"
-        make_pdf(mismatch, ["ONLY ONE"])
-        with self.assertRaisesRegex(SdocxTransferError, "페이지 수가 다릅니다"):
-            inspect_transfer(self.source_sdocx, mismatch)
+        make_pdf(mismatch, ["SOURCE ONE"])
+        changed = inspect_transfer(self.source_sdocx, mismatch)
+        self.assertEqual(changed.mode, "rebuild")
+        self.assertEqual(changed.match.source_only, (1,))
+        self.assertEqual(changed.match.target_only, ())
 
     def test_transfer_replaces_only_pdf_and_its_hash(self):
         output = self.root / "result.sdocx"
@@ -170,13 +174,18 @@ class SdocxTransferTests(unittest.TestCase):
                 self.assertAlmostEqual(aligned[index].rect.height, origin[index].rect.height, delta=0.5)
 
     def test_preview_renders_both_backgrounds_at_the_same_size(self):
-        before, after = preview_transfer(self.source_sdocx, self.target_pdf, 0)
+        before, after, ink, stroke_count = preview_transfer(self.source_sdocx, self.target_pdf, 0)
         self.assertTrue(before.startswith(b"\x89PNG"))
         self.assertTrue(after.startswith(b"\x89PNG"))
+        self.assertTrue(ink.startswith(b"\x89PNG"))
+        self.assertEqual(stroke_count, 0)
         with pymupdf.open(stream=before, filetype="png") as left, \
-                pymupdf.open(stream=after, filetype="png") as right:
+                pymupdf.open(stream=after, filetype="png") as right, \
+                pymupdf.open(stream=ink, filetype="png") as ink_layer:
             self.assertEqual(left[0].rect.width, right[0].rect.width)
             self.assertEqual(left[0].rect.height, right[0].rect.height)
+            self.assertEqual(left[0].rect.width, ink_layer[0].rect.width)
+            self.assertEqual(left[0].rect.height, ink_layer[0].rect.height)
         with self.assertRaises(SdocxTransferError):
             preview_transfer(self.source_sdocx, self.target_pdf, 99)
 
@@ -198,6 +207,57 @@ class SdocxTransferTests(unittest.TestCase):
         self.assertEqual(after["media/0@source.pdf"][4], self.target_pdf.read_bytes())
         self.assertEqual(after["media/mediaInfo.dat"][1], before["media/mediaInfo.dat"][1])
 
+    def test_archive_rewrite_can_add_and_delete_entries_from_a_template(self):
+        output = self.root / "rebuilt.sdocx"
+        removed = "11111111-1111-1111-1111-111111111111.page"
+        template = "22222222-2222-2222-2222-222222222222.page"
+        added = "33333333-3333-3333-3333-333333333333.page"
+        added_payload = b"NEW-PAGE" * 53
+
+        trailer = _rewrite_archive(
+            self.source_sdocx,
+            output,
+            {"note.note": b"updated-note"},
+            additions={added: ArchiveAddition(template, added_payload)},
+            deletions={removed},
+        )
+
+        self.assertEqual(trailer, SPEN_FOOTER)
+        self.assertEqual(read_footer(output), SPEN_FOOTER)
+        with ZipFile(output) as archive:
+            names = archive.namelist()
+            self.assertNotIn(removed, names)
+            self.assertIn(added, names)
+            self.assertEqual(archive.read(added), added_payload)
+            self.assertEqual(archive.read("note.note"), b"updated-note")
+            self.assertEqual(archive.testzip(), None)
+
+        before = raw_entries(self.source_sdocx)
+        after = raw_entries(output)
+        self.assertEqual(after[added][:3], before[template][:3])
+        for name in before:
+            if name in {removed, "note.note"}:
+                continue
+            self.assertEqual(after[name], before[name], name)
+
+    def test_archive_rewrite_rejects_conflicting_or_missing_changes(self):
+        output = self.root / "invalid.sdocx"
+        existing = "22222222-2222-2222-2222-222222222222.page"
+        with self.assertRaisesRegex(SdocxTransferError, "서로 충돌"):
+            _rewrite_archive(
+                self.source_sdocx,
+                output,
+                {},
+                additions={existing: ArchiveAddition(existing, b"page")},
+            )
+        with self.assertRaisesRegex(SdocxTransferError, "복제할 템플릿"):
+            _rewrite_archive(
+                self.source_sdocx,
+                output,
+                {},
+                additions={"new.page": ArchiveAddition("missing.page", b"page")},
+            )
+
     def test_transfer_rejects_encrypted_archive(self):
         broken = self.root / "encrypted.sdocx"
         data = bytearray(self.source_sdocx.read_bytes())
@@ -214,4 +274,3 @@ class SdocxTransferTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

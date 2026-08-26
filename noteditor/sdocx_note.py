@@ -9,7 +9,7 @@
 u32 하나만 고치면 된다.
 
 각 쪽의 32바이트 블록은 계산하지 않는다. 그 값은 해당 ``.page`` 파일 안에 들어 있으므로
-:func:`pdf_page_composer.sdocx_page.page_hash` 로 읽어 그대로 옮긴다.
+:func:`noteditor.sdocx_page.page_hash` 로 읽어 그대로 옮긴다.
 """
 from __future__ import annotations
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 import struct
 import unittest
 
-from pdf_page_composer.sdocx_note import (
+from noteditor.sdocx_note import (
     PageOrder,
     PageOrderEntry,
     SdocxNoteError,

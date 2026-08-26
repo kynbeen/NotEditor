@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pymupdf
 
-from pdf_page_composer.alignment import (
+from noteditor.alignment import (
     build_aligned_pdf,
     estimate_alignment,
     ink_box,

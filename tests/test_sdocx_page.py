@@ -3,9 +3,10 @@ from __future__ import annotations
 import struct
 import unittest
 
-from pdf_page_composer.sdocx_page import (
+from noteditor.sdocx_page import (
     PAGE_FOOTER,
     SdocxPageError,
+    is_blank_page,
     page_hash,
     patch_page,
     read_page,
@@ -92,6 +93,14 @@ class ReadPageTests(unittest.TestCase):
         # 속성 블록의 끝이 레이어 시작과 안 맞으면 해석이 틀린 것이므로 거부해야 한다.
         with self.assertRaises(SdocxPageError):
             read_page(make_page(layer_offset=0x99))
+
+    def test_blank_page_is_decided_by_layer_object_counts(self):
+        layer_header = bytearray(98)
+        struct.pack_into("<I", layer_header, 0, len(layer_header))
+        empty_layers = struct.pack("<HH", 1, 0) + layer_header + struct.pack("<I", 0) + bytes(32)
+        used_layers = struct.pack("<HH", 1, 0) + layer_header + struct.pack("<I", 1)
+        self.assertTrue(is_blank_page(make_page(strokes=empty_layers)))
+        self.assertFalse(is_blank_page(make_page(strokes=used_layers)))
 
 
 class PatchPageTests(unittest.TestCase):

@@ -1,6 +1,6 @@
 import unittest
 
-from pdf_page_composer.ranges import PageRangeError, format_page_ranges, parse_page_ranges
+from noteditor.ranges import PageRangeError, format_page_ranges, parse_page_ranges
 
 
 class PageRangeTests(unittest.TestCase):
