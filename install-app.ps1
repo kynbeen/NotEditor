@@ -1,4 +1,4 @@
-$ErrorActionPreference = "Stop"
+﻿$ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Pyw = Join-Path $Root "venv\Scripts\pythonw.exe"
 $Icon = Join-Path $Root "assets\icon.ico"

@@ -1,4 +1,4 @@
-$ErrorActionPreference = "Stop"
+﻿$ErrorActionPreference = "Stop"
 
 $InstallRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $VenvPath = Join-Path $InstallRoot "venv"
