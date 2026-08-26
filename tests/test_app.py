@@ -156,9 +156,13 @@ class ComposerApiTests(unittest.TestCase):
 
         self.assertTrue(saved["ok"])
         convert.assert_called_once_with(3, [0, None, 2], automatic)
-        transfer.assert_called_once_with(
-            source.resolve(), target.resolve(), output.resolve(), match_override=manual
-        )
+        transfer.assert_called_once()
+        args, kwargs = transfer.call_args
+        # Windows CI의 임시 경로는 같은 파일을 8.3 짧은 경로로 돌려줄 수 있다.
+        self.assertTrue(args[0].samefile(source))
+        self.assertTrue(args[1].samefile(target))
+        self.assertEqual(args[2], output.resolve())
+        self.assertEqual(kwargs, {"match_override": manual})
 
 
 if __name__ == "__main__":
