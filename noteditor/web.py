@@ -26,6 +26,9 @@ from .page_match import match_from_target_mapping
 from .sdocx_transfer import transfer_handwriting
 
 SESSION_COOKIE = "noteditor_session"
+# Uptime pings arrive without a cookie, so giving them a session would mint a new
+# ComposerApi and temp dir every few minutes for nobody to use.
+SESSIONLESS_PATHS = frozenset({"/api/health"})
 SESSION_TTL_SECONDS = int(os.environ.get("NOTEDITOR_SESSION_TTL", "7200"))
 MAX_UPLOAD_BYTES = int(os.environ.get("NOTEDITOR_MAX_UPLOAD_MB", "512")) * 1024 * 1024
 
@@ -56,6 +59,10 @@ class SessionStore:
             session = WebSession(ComposerApi(), now)
             self._sessions[token] = session
             return token, session, True
+
+    def expire_idle(self) -> None:
+        with self._lock:
+            self._expire(time.monotonic())
 
     def _expire(self, now: float) -> None:
         expired = [
@@ -98,6 +105,10 @@ app = FastAPI(title="NotEditor", version=__version__, docs_url=None, redoc_url=N
 
 @app.middleware("http")
 async def attach_session(request: Request, call_next):
+    if request.url.path in SESSIONLESS_PATHS:
+        # Still let the ping drive cleanup, just without creating anything.
+        store.expire_idle()
+        return await call_next(request)
     token, session, created = store.acquire(request.cookies.get(SESSION_COOKIE))
     request.state.noteditor = session
     response = await call_next(request)

@@ -6,7 +6,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from noteditor.web import app
+from noteditor.web import SESSION_COOKIE, app, store
 from tests.test_sdocx_transfer import make_pdf, make_sdocx
 
 
@@ -22,6 +22,18 @@ class WebAppTests(unittest.TestCase):
     def tearDown(self):
         self.client.__exit__(None, None, None)
         self.folder.cleanup()
+
+    def test_health_ping_creates_no_session(self):
+        client = TestClient(app)
+        with client:
+            before = len(store._sessions)
+            for _ in range(5):
+                response = client.get("/api/health")
+                self.assertEqual(response.status_code, 200)
+                self.assertNotIn(SESSION_COOKIE, response.cookies)
+            self.assertEqual(len(store._sessions), before)
+            self.assertEqual(client.get("/").status_code, 200)
+            self.assertEqual(len(store._sessions), before + 1)
 
     def test_serves_noteditor_ui_and_health(self):
         health = self.client.get("/api/health")
