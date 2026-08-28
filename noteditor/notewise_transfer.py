@@ -22,11 +22,16 @@ from zipfile import BadZipFile, ZIP_DEFLATED, ZipFile, ZipInfo
 
 from PIL import Image
 
-from .alignment import render_comparison
+from .alignment import Alignment, render_comparison
 from .notewise_ink import render_notewise_ink
 from .notewise_proto import NotewiseTransferError, encode_field, iter_fields
 from .page_match import MatchResult
-from .transfer_plan import TransferInspection, plan_transfer
+from .transfer_plan import (
+    TransferInspection,
+    build_background_pdf,
+    open_pdf,
+    plan_transfer,
+)
 
 
 def _page_ids(note_payload: bytes) -> list[str]:
@@ -241,6 +246,42 @@ def inspect_notewise_transfer(
     )
 
 
+def _background_bytes(
+    embedded_pdf: bytes,
+    target: Path,
+    mapping: list[int | None],
+    alignment: Alignment | None,
+) -> bytes:
+    """Notewise에 넣을 배경 PDF 바이트를 만든다.
+
+    페이지 크기와 여백이 그대로면 사용자의 PDF를 **바이트 하나 안 바꾸고** 넣는다. 다시
+    그리면 필요도 없는 차이가 생기고, 원본 PDF를 그대로 보존한다는 약속도 깨진다.
+    달라졌을 때만 원본 캔버스에 다시 앉힌 PDF를 만들어 넣는다.
+    """
+    if alignment is None:
+        return target.read_bytes()
+    source_document = open_pdf(embedded_pdf, "Notewise 내장 PDF", error=NotewiseTransferError)
+    try:
+        target_document = open_pdf(target, "대상 PDF", error=NotewiseTransferError)
+    except Exception:
+        source_document.close()
+        raise
+    with source_document, target_document:
+        return build_background_pdf(
+            source_document,
+            target_document,
+            mapping,
+            alignment,
+            reference_index=_reference_index(mapping),
+            error=NotewiseTransferError,
+        )
+
+
+def _reference_index(mapping: list[int | None]) -> int:
+    """새로 끼어든 쪽이 크기를 빌려 쓸 원본 쪽. 짝이 있는 첫 쪽을 기준으로 삼는다."""
+    return next((index for index in mapping if index is not None), 0)
+
+
 def _copy_info(info: ZipInfo) -> ZipInfo:
     copied = ZipInfo(info.filename, info.date_time)
     copied.compress_type = info.compress_type
@@ -357,10 +398,7 @@ def transfer_notewise_handwriting(
         if pair.target_index is not None:
             mapping[pair.target_index] = pair.source_index
     _validate_mapping(mapping, inspection.source_page_count)
-    if inspection.alignment is not None:
-        raise NotewiseTransferError("Notewise의 페이지 크기 자동 정렬은 아직 지원하지 않습니다.")
 
-    target_payload = target.read_bytes()
     output.parent.mkdir(parents=True, exist_ok=True)
     fd, temp_name = tempfile.mkstemp(
         dir=output.parent, prefix=f".{output.stem}-", suffix=".tmp.notewise"
@@ -370,6 +408,9 @@ def transfer_notewise_handwriting(
     try:
         with _archive_context(source) as (archive, _members, pdf_name, source_page_names):
             source_pages = [archive.read(name) for name in source_page_names]
+            target_payload = _background_bytes(
+                archive.read(pdf_name), target, mapping, inspection.alignment
+            )
             blank_template = next(
                 (payload for payload in source_pages if _page_stroke_count(payload) == 0),
                 source_pages[0],

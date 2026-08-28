@@ -33,6 +33,7 @@ from .transfer_plan import (
     HandwritingTransferError,
     TransferInspection,
     geometry as _geometry,
+    geometry_mismatches,
     open_pdf,
     plan_transfer,
 )
@@ -126,23 +127,12 @@ def _pdf_geometry(pdf: bytes | Path, label: str) -> list[tuple[float, float, int
         return _geometry(document)
 
 
-def _geometry_mismatches(
-    source: list[tuple[float, float, int]], target: list[tuple[float, float, int]]
-) -> list[int]:
-    mismatches = []
-    for index, (left, right) in enumerate(zip(source, target), start=1):
-        same_size = abs(left[0] - right[0]) <= 0.5 and abs(left[1] - right[1]) <= 0.5
-        if not same_size or left[2] != right[2]:
-            mismatches.append(index)
-    return mismatches
-
-
 def _validate_geometry(source: list[tuple[float, float, int]], target: list[tuple[float, float, int]]) -> None:
     if len(source) != len(target):
         raise SdocxTransferError(
             f"페이지 수가 다릅니다: 필기 원본 {len(source)}쪽, 대상 PDF {len(target)}쪽"
         )
-    mismatches = _geometry_mismatches(source, target)
+    mismatches = geometry_mismatches(source, target)
     if mismatches:
         shown = ", ".join(map(str, mismatches[:8]))
         suffix = "…" if len(mismatches) > 8 else ""
