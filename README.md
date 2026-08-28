@@ -116,20 +116,37 @@ node --check noteditor\static\app.js
 
 ## Windows 설치 파일 만들기
 
-`v0.4.0` 같은 태그를 푸시하면 `.github/workflows/release.yml`이 다음 작업을 자동 수행합니다.
+`v0.5.0` 같은 태그를 푸시하면 `.github/workflows/release.yml`이 다음 작업을 자동 수행합니다.
 
 1. 전체 테스트 실행
-2. PyInstaller로 독립 실행 폴더 생성
-3. Inno Setup으로 `NotEditor-Setup-<버전>.exe` 생성
-4. GitHub Release에 설치 파일 첨부
+2. 태그에서 버전을 확정해 앱과 설치 파일에 함께 새김
+3. PyInstaller로 독립 실행 폴더 생성
+4. Inno Setup으로 `NotEditor-Setup-<버전>.exe` 생성
+5. GitHub Release에 설치 파일 첨부
+
+### 버전은 어디서 오나
+
+**깃 태그가 유일한 출처입니다.** 소스에 버전 번호를 적어 두지 않으므로 앱이 말하는 버전과
+설치 파일 버전이 어긋날 일이 없습니다.
+
+| 상황 | `/api/health` 와 앱 로그가 말하는 버전 |
+| --- | --- |
+| `v0.5.0` 태그로 만든 릴리스 | `0.5.0` |
+| 태그 이후 3커밋 진행한 개발 체크아웃 | `0.5.0+3.gbf90fcf` |
+| 커밋하지 않은 수정이 있는 상태 | 뒤에 `.dirty` 가 붙음 |
+| 태그가 아직 없는 저장소 | `0.0.0+<커밋해시>` |
+| 알 방법이 전혀 없을 때 | `0.0.0+unknown` |
+
+`NOTEDITOR_VERSION` 환경변수를 주면 그 값이 무엇보다 우선합니다.
 
 로컬에서는 Python 개발 의존성과 Inno Setup 6을 설치한 뒤 같은 과정을 실행할 수 있습니다.
 
 ```powershell
 .\venv\Scripts\python.exe -m pip install -r requirements-dev.txt
 .\venv\Scripts\python.exe -m noteditor.make_icon
+$version = .\venv\Scripts\python.exe -m noteditor.stamp_version
 .\venv\Scripts\pyinstaller.exe --noconfirm NotEditor.spec
-& "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "installer\NotEditor.iss"
+& "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DAppVersion=$version" "installer\NotEditor.iss"
 ```
 
 ## 폴더 구조

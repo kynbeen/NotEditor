@@ -1,5 +1,7 @@
+; 버전은 릴리스 워크플로가 깃 태그에서 정해 /DAppVersion 으로 넘긴다.
+; 아래 값은 그것 없이 수동 실행했을 때만 쓰이며, 진짜 버전이 아님이 드러나야 한다.
 #ifndef AppVersion
-  #define AppVersion "0.4.0"
+  #define AppVersion "0.0.0-manual"
 #endif
 
 [Setup]

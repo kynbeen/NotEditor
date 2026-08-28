@@ -21,14 +21,18 @@ jobs:
       - run: python -m pip install -r requirements-dev.txt
       - run: python -m noteditor.make_icon
       - run: python -m unittest discover -s tests
+      # 태그에서 버전을 한 번만 정하고, 앱과 설치 파일이 그 값을 같이 쓴다.
+      - name: Stamp version
+        shell: pwsh
+        run: |
+          $version = python -m noteditor.stamp_version "${{ github.ref_name }}"
+          "APP_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
       - run: pyinstaller --noconfirm NotEditor.spec
       - run: choco install innosetup --yes --no-progress
       - name: Build installer
         shell: pwsh
         run: |
-          $version = "${{ github.ref_name }}".TrimStart("v")
-          if (-not $version) { $version = "0.4.0" }
-          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DAppVersion=$version" "installer\NotEditor.iss"
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DAppVersion=$env:APP_VERSION" "installer\NotEditor.iss"
       - uses: actions/upload-artifact@v4
         with:
           name: NotEditor-Windows

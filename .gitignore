@@ -11,3 +11,4 @@ release/
 tmp/
 output/
 assets/icon.ico
+noteditor/_version.py

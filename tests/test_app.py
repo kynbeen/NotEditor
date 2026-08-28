@@ -76,7 +76,8 @@ class ComposerApiTests(unittest.TestCase):
     def test_health_contract_is_available_before_file_selection(self):
         result = self.api.health()
         self.assertTrue(result["ok"])
-        self.assertRegex(result["version"], r"^\d+\.\d+\.\d+$")
+        # 릴리스 빌드는 `0.5.0`, 개발 체크아웃은 `0.5.0+3.gbf90fcf` 처럼 뒤에 빌드 정보가 붙는다.
+        self.assertRegex(result["version"], r"^\d+(\.\d+)*(\+[0-9a-z.]+)?$")
 
     def test_fullscreen_toggle_uses_the_native_window(self):
         window = FakeWindow([])
