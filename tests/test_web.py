@@ -27,6 +27,7 @@ class WebAppTests(unittest.TestCase):
         health = self.client.get("/api/health")
         self.assertEqual(health.status_code, 200)
         self.assertEqual(health.json()["runtime"], "web")
+        self.assertEqual(self.client.head("/api/health").status_code, 200)
         page = self.client.get("/")
         self.assertEqual(page.status_code, 200)
         self.assertIn("<title>NotEditor</title>", page.text)

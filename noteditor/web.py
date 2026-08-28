@@ -14,7 +14,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.background import BackgroundTask
@@ -177,6 +177,11 @@ def _remove_upload(api: ComposerApi, path: Path | None) -> None:
 @app.get("/api/health")
 def health() -> dict:
     return {"ok": True, "version": __version__, "runtime": "web"}
+
+
+@app.head("/api/health")
+def health_head() -> Response:
+    return Response(status_code=200)
 
 
 @app.post("/api/client-error")
