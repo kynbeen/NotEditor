@@ -1,3 +1,4 @@
+import json
 import unittest
 from pathlib import Path
 
@@ -9,6 +10,8 @@ class StaticUiContractTests(unittest.TestCase):
         cls.html = (static / "index.html").read_text(encoding="utf-8")
         cls.css = (static / "app.css").read_text(encoding="utf-8")
         cls.js = (static / "app.js").read_text(encoding="utf-8")
+        cls.manifest = json.loads((static / "manifest.webmanifest").read_text(encoding="utf-8"))
+        cls.service_worker = (static / "sw.js").read_text(encoding="utf-8")
 
     def test_has_three_column_source_preview_result_layout(self):
         self.assertIn("source-panel", self.html)
@@ -103,6 +106,22 @@ class StaticUiContractTests(unittest.TestCase):
         self.assertIn("function validateMatchMapping", self.js)
         self.assertIn("state.handwriting.matchMapping", self.js)
         self.assertIn("같은 구판 쪽을 두 번 선택할 수 없습니다", self.js)
+
+    def test_web_ui_is_installable_as_a_pwa(self):
+        self.assertIn('rel="manifest" href="manifest.webmanifest"', self.html)
+        self.assertIn('rel="apple-touch-icon"', self.html)
+        self.assertEqual(self.manifest["display"], "standalone")
+        self.assertEqual(self.manifest["start_url"], "/")
+        self.assertEqual(
+            {icon["sizes"] for icon in self.manifest["icons"]},
+            {"192x192", "512x512"},
+        )
+        self.assertIn('navigator.serviceWorker.register("/sw.js")', self.js)
+
+    def test_service_worker_never_caches_api_or_upload_responses(self):
+        self.assertIn('url.pathname.startsWith("/api/")', self.service_worker)
+        self.assertIn('event.request.method !== "GET"', self.service_worker)
+        self.assertIn('caches.match("/")', self.service_worker)
 
 
 if __name__ == "__main__":

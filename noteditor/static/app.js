@@ -971,3 +971,11 @@ if (window.pywebview?.api || state.runtime === "web") initializeBridge();
 setTimeout(() => {
   if (!state.bridgeReady) setBridgeState(false, true);
 }, 6000);
+
+if (state.runtime === "web" && "serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/sw.js").catch((error) => {
+      console.warn("NotEditor PWA service worker registration failed", error);
+    });
+  });
+}

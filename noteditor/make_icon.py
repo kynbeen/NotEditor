@@ -5,9 +5,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw
 
 
-def build_icon(output_path: Path) -> None:
-    output_path = Path(output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+def _render_icon() -> Image.Image:
     # 큰 투명 캔버스에서 그린 뒤 축소해 작업표시줄의 작은 크기에서도 가장자리가 매끈하게 보인다.
     render_size = 1024
     image = Image.new("RGBA", (render_size, render_size), (0, 0, 0, 0))
@@ -37,7 +35,13 @@ def build_icon(output_path: Path) -> None:
     draw.rounded_rectangle(
         box((82, 158, 138, 170)), radius=round(6 * scale), fill="#A5B4FC"
     )
-    image = image.resize((256, 256), Image.Resampling.LANCZOS)
+    return image
+
+
+def build_icon(output_path: Path) -> None:
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    image = _render_icon().resize((256, 256), Image.Resampling.LANCZOS)
     image.save(
         output_path,
         format="ICO",
@@ -45,9 +49,19 @@ def build_icon(output_path: Path) -> None:
     )
 
 
+def build_pwa_icons(output_dir: Path) -> None:
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    image = _render_icon()
+    for size in (180, 192, 512):
+        resized = image.resize((size, size), Image.Resampling.LANCZOS)
+        resized.save(output_dir / f"icon-{size}.png", format="PNG", optimize=True)
+
+
 def main() -> None:
     root = Path(__file__).resolve().parents[1]
     build_icon(root / "assets" / "icon.ico")
+    build_pwa_icons(root / "noteditor" / "static" / "icons")
 
 
 if __name__ == "__main__":

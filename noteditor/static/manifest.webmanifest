@@ -1,0 +1,27 @@
+{
+  "name": "NotEditor",
+  "short_name": "NotEditor",
+  "description": "PDF 문서 합치기와 Samsung Notes 필기 옮기기를 브라우저에서 처리합니다.",
+  "lang": "ko-KR",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#080c18",
+  "theme_color": "#080c18",
+  "icons": [
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}

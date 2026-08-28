@@ -31,6 +31,13 @@ class WebAppTests(unittest.TestCase):
         self.assertEqual(page.status_code, 200)
         self.assertIn("<title>NotEditor</title>", page.text)
 
+        manifest = self.client.get("/manifest.webmanifest")
+        self.assertEqual(manifest.status_code, 200)
+        self.assertEqual(manifest.json()["display"], "standalone")
+        self.assertEqual(self.client.get("/sw.js").status_code, 200)
+        self.assertEqual(self.client.get("/icons/icon-192.png").status_code, 200)
+        self.assertEqual(self.client.get("/icons/icon-512.png").status_code, 200)
+
     def test_upload_preview_and_export_pdf(self):
         response = self.client.post(
             "/api/documents",
