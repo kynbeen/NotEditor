@@ -23,7 +23,7 @@ from starlette.concurrency import run_in_threadpool
 from . import __version__
 from .app import ComposerApi
 from .page_match import match_from_target_mapping
-from .sdocx_transfer import transfer_handwriting
+from .handwriting_transfer import transfer_handwriting
 
 SESSION_COOKIE = "noteditor_session"
 # Uptime pings arrive without a cookie, so giving them a session would mint a new
@@ -252,7 +252,15 @@ async def export_documents(request: Request, payload: ExportRequest):
 
 async def _set_handwriting_upload(request: Request, upload: UploadFile, kind: str):
     api = _api(request)
-    suffix = ".sdocx" if kind == "source" else ".pdf"
+    if kind == "source":
+        suffix = Path(upload.filename or "").suffix.lower()
+        if suffix not in {".sdocx", ".notewise"}:
+            return JSONResponse(
+                {"ok": False, "error": ".sdocx 또는 .notewise 파일을 선택하세요."},
+                status_code=400,
+            )
+    else:
+        suffix = ".pdf"
     path = await _save_upload(api, upload, suffix)
     attribute = "_handwriting_source" if kind == "source" else "_handwriting_target"
     previous = getattr(api, attribute)
@@ -310,8 +318,10 @@ def _export_handwriting(api: ComposerApi, payload: HandwritingExportRequest, out
 @app.post("/api/handwriting/export")
 async def export_handwriting(request: Request, payload: HandwritingExportRequest):
     api = _api(request)
-    filename = _safe_name(payload.suggested_name, "필기-이전.sdocx", ".sdocx")
-    output = api._session.temp_dir / f"export-{uuid.uuid4().hex}.sdocx"
+    source_suffix = api._handwriting_source.suffix.lower()
+    output_suffix = ".notewise" if source_suffix == ".notewise" else ".sdocx"
+    filename = _safe_name(payload.suggested_name, f"필기-이전{output_suffix}", output_suffix)
+    output = api._session.temp_dir / f"export-{uuid.uuid4().hex}{output_suffix}"
     try:
         result = await run_in_threadpool(_export_handwriting, api, payload, output)
     except Exception as exc:

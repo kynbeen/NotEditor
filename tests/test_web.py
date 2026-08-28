@@ -7,6 +7,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from noteditor.web import SESSION_COOKIE, app, store
+from tests.test_notewise_transfer import _make_notewise, _make_pdf as make_notewise_pdf
 from tests.test_sdocx_transfer import make_pdf, make_sdocx
 
 
@@ -99,6 +100,38 @@ class WebAppTests(unittest.TestCase):
             json={"suggested_name": "moved.sdocx", "target_mapping": None},
         )
         self.assertEqual(exported.status_code, 200, exported.text)
+        self.assertTrue(exported.content.startswith(b"PK"))
+
+    def test_upload_preview_and_export_notewise(self):
+        notewise_pdf = self.root / "notewise.pdf"
+        make_notewise_pdf(notewise_pdf, "same text")
+        source_notewise = self.root / "annotated.notewise"
+        _make_notewise(source_notewise, notewise_pdf)
+
+        source = self.client.post(
+            "/api/handwriting/source",
+            files={"file": ("annotated.notewise", source_notewise.read_bytes(), "application/zip")},
+        )
+        self.assertEqual(source.status_code, 200, source.text)
+        self.assertFalse(source.json()["ready"])
+
+        target = self.client.post(
+            "/api/handwriting/target",
+            files={"file": ("target.pdf", notewise_pdf.read_bytes(), "application/pdf")},
+        )
+        self.assertEqual(target.status_code, 200, target.text)
+        self.assertTrue(target.json()["ready"])
+
+        preview = self.client.get("/api/handwriting/preview?page_index=0&source_index=-2")
+        self.assertEqual(preview.status_code, 200, preview.text)
+        self.assertTrue(preview.json()["ink"].startswith("data:image/png;base64,"))
+
+        exported = self.client.post(
+            "/api/handwriting/export",
+            json={"suggested_name": "moved.notewise", "target_mapping": None},
+        )
+        self.assertEqual(exported.status_code, 200, exported.text)
+        self.assertIn("moved.notewise", exported.headers["content-disposition"])
         self.assertTrue(exported.content.startswith(b"PK"))
 
 

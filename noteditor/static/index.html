@@ -101,9 +101,9 @@
       <section class="handwriting-shell">
         <div class="handwriting-header">
           <div>
-            <span class="eyebrow">SAMSUNG NOTES</span>
+            <span class="eyebrow">SAMSUNG NOTES · NOTEWISE</span>
             <h2>필기와 형광펜 옮기기</h2>
-            <p>필기된 SDOCX의 편집 가능한 펜 데이터를 새 PDF의 같은 쪽·같은 자리로 옮깁니다. 배율이나 여백이 달라졌으면 본문을 기준으로 자동 정렬합니다.</p>
+            <p>Samsung Notes 또는 Notewise의 필기 데이터를 새 PDF의 같은 쪽·같은 자리로 옮깁니다. 추가·삭제된 쪽은 본문을 기준으로 자동 매칭합니다.</p>
           </div>
         </div>
 
@@ -111,8 +111,8 @@
           <button id="chooseHandwritingSource" class="transfer-file-card" type="button">
             <span class="transfer-step">1</span>
             <span class="transfer-file-copy">
-              <strong>필기 원본 Samsung Notes</strong>
-              <small id="handwritingSourceName">.sdocx 파일 선택</small>
+              <strong>필기 원본 문서</strong>
+              <small id="handwritingSourceName">.sdocx 또는 .notewise 파일 선택</small>
             </span>
             <span class="transfer-action">선택</span>
           </button>
@@ -184,18 +184,18 @@
 
         <div class="handwriting-notice">
           <strong>원본은 수정하지 않습니다.</strong>
-          <span>필기·형광펜·펜 속성과 Samsung Notes 캐시는 그대로 보존합니다. 쪽이 추가·삭제됐으면 공통 쪽을 자동으로 짝짓고 새 PDF의 모든 쪽을 담습니다. 페이지 크기나 여백이 달라졌으면 필기는 그대로 두고 새 배경을 본문 위치에 맞춰 다시 앉힙니다.</span>
+          <span>필기·형광펜·펜 속성을 그대로 보존합니다. Samsung Notes와 Notewise 모두 쪽 추가·삭제를 지원하며, 페이지 크기와 여백 자동 정렬은 현재 Samsung Notes에서 지원합니다.</span>
         </div>
 
         <div class="handwriting-footer">
           <button id="resetHandwritingButton" class="text-button" type="button">선택 초기화</button>
-          <button id="saveHandwritingButton" class="button primary" type="button" disabled>새 Samsung Notes로 저장</button>
+          <button id="saveHandwritingButton" class="button primary" type="button" disabled>새 필기 문서로 저장</button>
         </div>
       </section>
     </main>
 
     <input id="webPdfInput" type="file" accept="application/pdf,.pdf" multiple hidden />
-    <input id="webSdocxInput" type="file" accept=".sdocx,application/zip" hidden />
+    <input id="webSdocxInput" type="file" accept=".sdocx,.notewise,application/zip" hidden />
     <input id="webTargetPdfInput" type="file" accept="application/pdf,.pdf" hidden />
 
     <div id="busyOverlay" class="busy-overlay" role="status" aria-live="polite" hidden>

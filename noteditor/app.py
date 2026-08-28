@@ -8,7 +8,7 @@ from typing import Any
 from . import __version__
 from .engine import ComposerSession, PdfComposerError
 from .ranges import PageRangeError, parse_page_ranges
-from .sdocx_transfer import inspect_transfer, preview_transfer, transfer_handwriting
+from .handwriting_transfer import inspect_transfer, preview_transfer, transfer_handwriting
 
 APP_USER_MODEL_ID = "NotEditor.Desktop"
 
@@ -129,6 +129,8 @@ class ComposerApi:
     def _handwriting_status(self) -> dict:
         payload = {
             "source_name": self._handwriting_source.name if self._handwriting_source else None,
+            "source_format": self._handwriting_source.suffix.lower().lstrip(".")
+            if self._handwriting_source else None,
             "target_name": self._handwriting_target.name if self._handwriting_target else None,
             "ready": False,
             "inspection": None,
@@ -168,7 +170,7 @@ class ComposerApi:
             selected = self._window.create_file_dialog(
                 webview.FileDialog.OPEN,
                 allow_multiple=False,
-                file_types=("Samsung Notes 문서 (*.sdocx)",),
+                file_types=("필기 문서 (*.sdocx;*.notewise)",),
             )
             path = self._dialog_path(selected)
             if path is None:
@@ -215,12 +217,15 @@ class ComposerApi:
             import webview
 
             safe_name = re.sub(r'[<>:"/\\|?*]+', "_", suggested_name).strip(" .")
-            if not safe_name.lower().endswith(".sdocx"):
-                safe_name += ".sdocx"
+            source_suffix = self._handwriting_source.suffix.lower()
+            output_suffix = ".notewise" if source_suffix == ".notewise" else ".sdocx"
+            if not safe_name.lower().endswith(output_suffix):
+                safe_name = str(Path(safe_name).with_suffix(output_suffix))
             selected = self._window.create_file_dialog(
                 webview.FileDialog.SAVE,
-                save_filename=safe_name or "필기-이전.sdocx",
-                file_types=("Samsung Notes 문서 (*.sdocx)",),
+                save_filename=safe_name or f"필기-이전{output_suffix}",
+                file_types=(("Notewise 문서 (*.notewise)",) if output_suffix == ".notewise"
+                            else ("Samsung Notes 문서 (*.sdocx)",)),
             )
             output = self._dialog_path(selected)
             if output is None:
