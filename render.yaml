@@ -5,7 +5,6 @@ services:
     plan: free
     region: singapore
     healthCheckPath: /api/health
-    maxShutdownDelaySeconds: 300
     envVars:
       - key: NOTEDITOR_MAX_UPLOAD_MB
         value: "100"
