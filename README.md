@@ -83,6 +83,11 @@ docker compose up --build
 업체 종속 설정은 없습니다. 저장소 루트의 `Dockerfile`을 빌드할 수 있는 Render, Fly.io,
 Cloud Run, Railway 또는 일반 컨테이너 서버에 배포할 수 있습니다.
 
+저장소의 `render.yaml`은 서울과 가까운 싱가포르 리전의 Render 웹 서비스를 정의합니다.
+무료 인스턴스의 메모리 한계를 고려해 파일 하나당 업로드 한도는 100MB, 비활성 세션 만료는
+1시간으로 설정합니다. 업로드와 변환은 모두 Render 컨테이너 안에서 실행되며 사용자 PC에서
+별도 서버를 실행할 필요가 없습니다.
+
 ```bash
 docker build -t noteditor .
 docker run --rm -p 8000:8000 noteditor
