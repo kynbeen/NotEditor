@@ -1,4 +1,9 @@
-"""Read and render pen/highlighter objects from Notewise page messages."""
+"""Notewise 페이지 메시지에서 펜·형광펜 객체를 읽어 미리보기 레이어로 그린다.
+
+저장에는 쓰지 않는다. 여기서 해석한 값으로 페이지를 다시 쓰지 않고, 사용자가 저장 전에
+"필기가 새 배경 위 제자리에 오는지" 눈으로 확인할 투명 PNG만 만든다. 그래서 아직 뜻을 모르는
+객체는 오류를 내지 않고 그냥 건너뛴다 — 미리보기에 안 보일 뿐 저장 결과에는 그대로 남는다.
+"""
 from __future__ import annotations
 
 import base64
@@ -8,6 +13,8 @@ from io import BytesIO
 
 from PIL import Image, ImageColor, ImageDraw
 
+from .notewise_proto import field_values as _message_values
+
 
 @dataclass(frozen=True)
 class NotewiseStroke:
@@ -16,47 +23,6 @@ class NotewiseStroke:
     widths: tuple[float, ...]
     color: str
     opacity: float
-
-
-def _read_varint(data: bytes, offset: int) -> tuple[int, int]:
-    value = 0
-    shift = 0
-    while offset < len(data) and shift < 70:
-        byte = data[offset]
-        offset += 1
-        value |= (byte & 0x7F) << shift
-        if not byte & 0x80:
-            return value, offset
-        shift += 7
-    raise ValueError("invalid protobuf varint")
-
-
-def _fields(data: bytes):
-    offset = 0
-    while offset < len(data):
-        key, offset = _read_varint(data, offset)
-        number, wire_type = key >> 3, key & 7
-        if wire_type == 0:
-            value, offset = _read_varint(data, offset)
-        elif wire_type == 1:
-            value, offset = data[offset:offset + 8], offset + 8
-        elif wire_type == 2:
-            size, offset = _read_varint(data, offset)
-            value, offset = data[offset:offset + size], offset + size
-        elif wire_type == 5:
-            value, offset = data[offset:offset + 4], offset + 4
-        else:
-            raise ValueError(f"unsupported protobuf wire type: {wire_type}")
-        if offset > len(data):
-            raise ValueError("truncated protobuf field")
-        yield number, wire_type, value
-
-
-def _message_values(data: bytes) -> dict[int, list[bytes | int]]:
-    result: dict[int, list[bytes | int]] = {}
-    for number, _wire_type, value in _fields(data):
-        result.setdefault(number, []).append(value)
-    return result
 
 
 def _floats(payload: bytes | int | None) -> tuple[float, ...]:
@@ -115,7 +81,7 @@ def _canvas_size(page_fields: dict[int, list[bytes | int]]) -> tuple[float, floa
 
 
 def read_notewise_strokes(page_payload: bytes) -> tuple[tuple[NotewiseStroke, ...], tuple[float, float]]:
-    """Return supported ink objects and the page's canvas dimensions."""
+    """지원하는 필기 객체와 그 페이지의 캔버스 크기를 돌려준다."""
     message = base64.b64decode(page_payload, validate=False)
     page_fields = _message_values(message)
     strokes: list[NotewiseStroke] = []
@@ -124,12 +90,12 @@ def read_notewise_strokes(page_payload: bytes) -> tuple[tuple[NotewiseStroke, ..
             continue
         outer = _message_values(object_payload)
         transform = outer.get(3, [None])[0]
-        if 4 in outer:  # variable-width pen
+        if 4 in outer:  # 굵기가 변하는 펜
             pen = _message_values(bytes(outer[4][0]))
             xs, ys, widths = _floats(pen.get(4, [None])[0]), _floats(pen.get(5, [None])[0]), _floats(pen.get(6, [None])[0])
             color, opacity = _style(pen.get(3, [None])[0])
             kind = "pen"
-        elif 5 in outer:  # fixed-width highlighter
+        elif 5 in outer:  # 굵기가 일정한 형광펜
             pen = _message_values(bytes(outer[5][0]))
             xs, ys = _floats(pen.get(3, [None])[0]), _floats(pen.get(4, [None])[0])
             width = float(pen.get(1, [1])[0]) if isinstance(pen.get(1, [1])[0], int) else 1.0

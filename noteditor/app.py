@@ -8,9 +8,16 @@ from typing import Any
 from . import __version__
 from .engine import ComposerSession, PdfComposerError
 from .ranges import PageRangeError, parse_page_ranges
-from .handwriting_transfer import inspect_transfer, preview_transfer, transfer_handwriting
+from .handwriting_transfer import (
+    inspect_transfer,
+    output_suffix,
+    preview_transfer,
+    transfer_handwriting,
+    with_output_suffix,
+)
 
 APP_USER_MODEL_ID = "NotEditor.Desktop"
+MISSING_HANDWRITING_MESSAGE = "필기 원본과 대상 PDF를 모두 선택하세요."
 
 
 def _png_data_uri(payload: bytes) -> str:
@@ -112,7 +119,7 @@ class ComposerApi:
     def _inspection(self):
         """본문 정렬 추정은 문서 전체를 훑으므로 파일이 그대로면 결과를 다시 쓴다."""
         if not self._handwriting_source or not self._handwriting_target:
-            raise PdfComposerError("필기 원본 SDOCX와 대상 PDF를 모두 선택하세요.")
+            raise PdfComposerError(MISSING_HANDWRITING_MESSAGE)
         key = (
             str(self._handwriting_source),
             str(self._handwriting_target),
@@ -217,14 +224,12 @@ class ComposerApi:
             import webview
 
             safe_name = re.sub(r'[<>:"/\\|?*]+', "_", suggested_name).strip(" .")
-            source_suffix = self._handwriting_source.suffix.lower()
-            output_suffix = ".notewise" if source_suffix == ".notewise" else ".sdocx"
-            if not safe_name.lower().endswith(output_suffix):
-                safe_name = str(Path(safe_name).with_suffix(output_suffix))
+            suffix = output_suffix(self._handwriting_source)
             selected = self._window.create_file_dialog(
                 webview.FileDialog.SAVE,
-                save_filename=safe_name or f"필기-이전{output_suffix}",
-                file_types=(("Notewise 문서 (*.notewise)",) if output_suffix == ".notewise"
+                save_filename=with_output_suffix(safe_name, self._handwriting_source)
+                if safe_name else f"필기-이전{suffix}",
+                file_types=(("Notewise 문서 (*.notewise)",) if suffix == ".notewise"
                             else ("Samsung Notes 문서 (*.sdocx)",)),
             )
             output = self._dialog_path(selected)

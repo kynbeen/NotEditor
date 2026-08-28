@@ -17,8 +17,10 @@ from noteditor.engine import ComposerSession
 class FakeWindow:
     def __init__(self, responses):
         self.responses = list(responses)
+        self.dialog_calls = []
 
-    def create_file_dialog(self, *_args, **_kwargs):
+    def create_file_dialog(self, *_args, **kwargs):
+        self.dialog_calls.append(kwargs)
         return self.responses.pop(0)
 
     def toggle_fullscreen(self):
@@ -137,6 +139,36 @@ class ComposerApiTests(unittest.TestCase):
         self.assertTrue(saved["ok"])
         self.assertFalse(saved["cancelled"])
         transfer.assert_called_once_with(source.resolve(), target.resolve(), output.resolve())
+
+    def test_save_dialog_keeps_dots_in_the_name_and_follows_the_source_format(self):
+        """이름 안의 마침표를 확장자로 오해해 뒷부분을 잘라내면 안 된다."""
+        cases = [
+            ("annotated.sdocx", "강의자료 v1.2-필기", "강의자료 v1.2-필기.sdocx"),
+            ("annotated.notewise", "강의자료 v1.2-필기", "강의자료 v1.2-필기.notewise"),
+            ("annotated.notewise", "이미-붙은.sdocx", "이미-붙은.notewise"),
+        ]
+        for source_name, suggested, expected in cases:
+            with self.subTest(source=source_name, suggested=suggested):
+                source = self.root / source_name
+                target = self.root / "target.pdf"
+                output = self.root / expected
+                source.write_bytes(b"zip")
+                target.write_bytes(b"%PDF")
+                inspection = SimpleNamespace(as_dict=dict)
+                window = FakeWindow([(str(source),), (str(target),), str(output)])
+                self.api._bind_window(window)
+                with patch.dict(sys.modules, {"webview": self.webview}), \
+                        patch("noteditor.app.inspect_transfer", return_value=inspection), \
+                        patch("noteditor.app.transfer_handwriting", return_value={
+                            "path": str(output), "page_count": 1,
+                        }):
+                    self.api.choose_handwriting_source()
+                    self.api.choose_handwriting_target()
+                    saved = self.api.save_handwriting_transfer(suggested)
+
+                self.assertTrue(saved["ok"], saved)
+                self.assertEqual(window.dialog_calls[-1]["save_filename"], expected)
+                self.api.reset_handwriting_transfer()
 
     def test_handwriting_preview_returns_background_and_ink_data_uris(self):
         source = self.root / "annotated.sdocx"

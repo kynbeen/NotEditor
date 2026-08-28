@@ -12,10 +12,9 @@ import pymupdf
 from PIL import Image
 
 from noteditor.notewise_ink import render_notewise_ink
+from noteditor.notewise_proto import NotewiseTransferError, iter_fields
 from noteditor.notewise_transfer import (
-    NotewiseTransferError,
     _page_ids,
-    _protobuf_fields,
     _validate_mapping,
     inspect_notewise_transfer,
     transfer_notewise_handwriting,
@@ -110,7 +109,7 @@ class NotewiseTransferTests(unittest.TestCase):
             before = archive.read("page/page-id")
             before_note_id = next(
                 value for number, wire, value
-                in _protobuf_fields(base64.b64decode(archive.read("note")))
+                in iter_fields(base64.b64decode(archive.read("note")))
                 if number == 1 and wire == 2
             )
         result = transfer_notewise_handwriting(self.source, self.target_pdf, output)
@@ -122,18 +121,18 @@ class NotewiseTransferTests(unittest.TestCase):
             self.assertNotEqual(output_page_id, "page-id")
             before_objects = [
                 value for number, wire, value
-                in _protobuf_fields(base64.b64decode(before))
+                in iter_fields(base64.b64decode(before))
                 if number == 4 and wire == 2
             ]
             after_objects = [
                 value for number, wire, value
-                in _protobuf_fields(base64.b64decode(archive.read(f"page/{output_page_id}")))
+                in iter_fields(base64.b64decode(archive.read(f"page/{output_page_id}")))
                 if number == 4 and wire == 2
             ]
             self.assertEqual(after_objects, before_objects)
             after_note_id = next(
                 value for number, wire, value
-                in _protobuf_fields(base64.b64decode(archive.read("note")))
+                in iter_fields(base64.b64decode(archive.read("note")))
                 if number == 1 and wire == 2
             )
             self.assertNotEqual(after_note_id, before_note_id)
@@ -174,9 +173,9 @@ class NotewiseTransferTests(unittest.TestCase):
             self.assertNotEqual(page_ids[1], "page-id")
             first_page = base64.b64decode(archive.read(f"page/{page_ids[0]}"))
             second_page = base64.b64decode(archive.read(f"page/{page_ids[1]}"))
-            self.assertFalse(any(number == 4 for number, _wire, _value in _protobuf_fields(first_page)))
-            self.assertTrue(any(number == 4 for number, _wire, _value in _protobuf_fields(second_page)))
-            page_fields = [list(_protobuf_fields(page)) for page in (first_page, second_page)]
+            self.assertFalse(any(number == 4 for number, _wire, _value in iter_fields(first_page)))
+            self.assertTrue(any(number == 4 for number, _wire, _value in iter_fields(second_page)))
+            page_fields = [list(iter_fields(page)) for page in (first_page, second_page)]
             page_orders = [
                 next((value for number, wire, value in fields
                       if number == 2 and wire == 0), 0)
@@ -192,9 +191,9 @@ class NotewiseTransferTests(unittest.TestCase):
             ]
             self.assertEqual(page_orders, [0, 1])
             self.assertEqual(sort_keys, [1024.0, 2048.0])
-            background = next(value for number, wire, value in _protobuf_fields(second_page)
+            background = next(value for number, wire, value in iter_fields(second_page)
                               if number == 3 and wire == 2)
-            page_index = next(value for number, wire, value in _protobuf_fields(background)
+            page_index = next(value for number, wire, value in iter_fields(background)
                               if number == 2 and wire == 0)
             self.assertEqual(page_index, 1)
 

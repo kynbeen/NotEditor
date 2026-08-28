@@ -1,129 +1,32 @@
-"""Transfer Notewise handwriting by replacing its embedded PDF background."""
+"""Notewise 필기를 새 PDF 배경 위로 옮긴다.
+
+``.notewise`` 는 ZIP 컨테이너이고, 노트 색인과 각 페이지는 Base64로 감싼 protobuf 메시지다.
+필기 객체는 페이지 메시지 안에 그대로 두고, 배경 PDF와 그것을 가리키는 참조(페이지 ID, PDF
+id, 쪽 번호, 정렬 키)만 다시 쓴다.
+
+쪽을 더하거나 지우면 페이지 ID가 새로 필요하므로 SDOCX 쪽과 달리 아카이브를 다시 만든다.
+반대로 **기존 쪽의 순서 변경은 명시적으로 거부한다** — 순서가 바뀌면 어느 필기가 어느 쪽의
+것이었는지 확신할 수 없고, 조용히 틀린 결과보다 거절이 낫다.
+"""
 from __future__ import annotations
 
 import base64
-from io import BytesIO
 import os
 import secrets
 import struct
 import tempfile
 from contextlib import contextmanager
-from dataclasses import dataclass
+from io import BytesIO
 from pathlib import Path, PurePosixPath
-from typing import Iterator
 from zipfile import BadZipFile, ZIP_DEFLATED, ZipFile, ZipInfo
 
 from PIL import Image
 
-from .alignment import Alignment
 from .alignment import render_comparison
+from .notewise_ink import render_notewise_ink
+from .notewise_proto import NotewiseTransferError, encode_field, iter_fields
 from .page_match import MatchResult
-from .sdocx_transfer import _plan_transfer
-
-
-class NotewiseTransferError(RuntimeError):
-    pass
-
-
-@dataclass(frozen=True)
-class NotewiseInspection:
-    source_name: str
-    target_name: str
-    page_count: int
-    annotated_page_count: int
-    stroke_cache_count: int
-    embedded_pdf_name: str
-    target_size: int
-    source_page_count: int
-    mode: str
-    alignment: Alignment | None
-    match: MatchResult
-
-    def as_dict(self) -> dict:
-        return {
-            "source_name": self.source_name,
-            "target_name": self.target_name,
-            "page_count": self.page_count,
-            "annotated_page_count": self.annotated_page_count,
-            "stroke_cache_count": self.stroke_cache_count,
-            "embedded_pdf_name": self.embedded_pdf_name,
-            "target_size": self.target_size,
-            "source_page_count": self.source_page_count,
-            "mode": self.mode,
-            "alignment": self.alignment.as_dict() if self.alignment else None,
-            "match": self.match.as_dict(),
-        }
-
-
-def _read_varint(data: bytes, offset: int) -> tuple[int, int]:
-    value = 0
-    shift = 0
-    while offset < len(data) and shift < 70:
-        byte = data[offset]
-        offset += 1
-        value |= (byte & 0x7F) << shift
-        if not byte & 0x80:
-            return value, offset
-        shift += 7
-    raise NotewiseTransferError("Notewise protobuf varint가 손상되었습니다.")
-
-
-def _protobuf_fields(data: bytes) -> Iterator[tuple[int, int, bytes | int]]:
-    """Yield top-level protobuf fields without requiring Notewise's schema."""
-    offset = 0
-    while offset < len(data):
-        key, offset = _read_varint(data, offset)
-        number, wire_type = key >> 3, key & 7
-        if number == 0:
-            raise NotewiseTransferError("Notewise protobuf 필드 번호가 올바르지 않습니다.")
-        if wire_type == 0:
-            value, offset = _read_varint(data, offset)
-        elif wire_type == 1:
-            end = offset + 8
-            value = data[offset:end]
-            offset = end
-        elif wire_type == 2:
-            size, offset = _read_varint(data, offset)
-            end = offset + size
-            value = data[offset:end]
-            offset = end
-        elif wire_type == 5:
-            end = offset + 4
-            value = data[offset:end]
-            offset = end
-        else:
-            raise NotewiseTransferError(
-                f"지원하지 않는 Notewise protobuf wire type입니다: {wire_type}"
-            )
-        if offset > len(data):
-            raise NotewiseTransferError("Notewise protobuf 필드가 중간에서 끝났습니다.")
-        yield number, wire_type, value
-
-
-def _encode_varint(value: int) -> bytes:
-    output = bytearray()
-    while value >= 0x80:
-        output.append((value & 0x7F) | 0x80)
-        value >>= 7
-    output.append(value)
-    return bytes(output)
-
-
-def _encode_field(number: int, wire_type: int, value: bytes | int) -> bytes:
-    encoded = bytearray(_encode_varint((number << 3) | wire_type))
-    if wire_type == 0:
-        encoded.extend(_encode_varint(int(value)))
-    elif wire_type == 1:
-        encoded.extend(bytes(value))
-    elif wire_type == 2:
-        payload = bytes(value)
-        encoded.extend(_encode_varint(len(payload)))
-        encoded.extend(payload)
-    elif wire_type == 5:
-        encoded.extend(bytes(value))
-    else:
-        raise NotewiseTransferError(f"지원하지 않는 protobuf wire type입니다: {wire_type}")
-    return bytes(encoded)
+from .transfer_plan import TransferInspection, plan_transfer
 
 
 def _page_ids(note_payload: bytes) -> list[str]:
@@ -131,7 +34,7 @@ def _page_ids(note_payload: bytes) -> list[str]:
     try:
         return [
             bytes(value).decode("ascii")
-            for number, wire_type, value in _protobuf_fields(message)
+            for number, wire_type, value in iter_fields(message)
             if number == 4 and wire_type == 2
         ]
     except UnicodeDecodeError as exc:
@@ -143,17 +46,17 @@ def _replace_field_sequence(
 ) -> bytes:
     output = bytearray()
     inserted = False
-    for current, wire_type, value in _protobuf_fields(data):
+    for current, wire_type, value in iter_fields(data):
         if current == number:
             if not inserted:
                 for replacement_wire, replacement in replacements:
-                    output.extend(_encode_field(number, replacement_wire, replacement))
+                    output.extend(encode_field(number, replacement_wire, replacement))
                 inserted = True
             continue
-        output.extend(_encode_field(current, wire_type, value))
+        output.extend(encode_field(current, wire_type, value))
     if not inserted:
         for replacement_wire, replacement in replacements:
-            output.extend(_encode_field(number, replacement_wire, replacement))
+            output.extend(encode_field(number, replacement_wire, replacement))
     return bytes(output)
 
 
@@ -169,7 +72,7 @@ def _patch_note(
     message = _decode_message(note_payload, "노트")
     output = bytearray()
     inserted_pages = False
-    for number, wire_type, value in _protobuf_fields(message):
+    for number, wire_type, value in iter_fields(message):
         if number == 1:
             value = note_id.encode("ascii")
             wire_type = 2
@@ -179,7 +82,7 @@ def _patch_note(
         elif number == 4:
             if not inserted_pages:
                 for page_id in page_ids:
-                    output.extend(_encode_field(4, 2, page_id.encode("ascii")))
+                    output.extend(encode_field(4, 2, page_id.encode("ascii")))
                 inserted_pages = True
             continue
         if number == 6 and wire_type == 2:
@@ -197,14 +100,13 @@ def _patch_note(
             value = _replace_field_sequence(
                 bytes(value), 2, [(2, title.encode("utf-8"))]
             )
-        output.extend(_encode_field(number, wire_type, value))
+        output.extend(encode_field(number, wire_type, value))
     if not inserted_pages:
         for page_id in page_ids:
-            output.extend(_encode_field(4, 2, page_id.encode("ascii")))
-    # Notewise exports use Android Base64.DEFAULT formatting: 76-character
-    # lines plus a final newline.  Keeping that representation is important;
-    # some app versions otherwise ignore the note index and recover page files
-    # in nondeterministic archive-processing order.
+            output.extend(encode_field(4, 2, page_id.encode("ascii")))
+    # Notewise 내보내기는 Android의 Base64.DEFAULT 형식을 쓴다 — 76자마다 줄바꿈, 끝에도
+    # 줄바꿈 하나. 이 표기를 그대로 지켜야 한다. 한 줄로 붙여 쓰면 일부 버전이 노트 색인을
+    # 무시하고 아카이브에 담긴 순서대로 페이지를 복구해 쪽 순서가 뒤죽박죽이 된다.
     return base64.encodebytes(bytes(output))
 
 
@@ -221,17 +123,17 @@ def _patch_page(
     output = bytearray()
     wrote_order = False
     wrote_sort_key = False
-    for number, wire_type, value in _protobuf_fields(message):
+    for number, wire_type, value in iter_fields(message):
         if number == 1:
             value = page_id.encode("ascii")
             wire_type = 2
-            output.extend(_encode_field(number, wire_type, value))
+            output.extend(encode_field(number, wire_type, value))
             if target_index > 0:
-                output.extend(_encode_field(2, 0, target_index))
+                output.extend(encode_field(2, 0, target_index))
             wrote_order = True
             continue
         elif number == 2:
-            # Reinserted immediately after the page id using the target order.
+            # 페이지 ID 바로 뒤에 새 쪽 번호로 다시 넣는다.
             continue
         elif number == 3 and wire_type == 2:
             value = _replace_field_sequence(
@@ -247,11 +149,11 @@ def _patch_page(
             value = struct.pack("<d", 1024.0 * (target_index + 1))
             wire_type = 1
             wrote_sort_key = True
-        output.extend(_encode_field(number, wire_type, value))
+        output.extend(encode_field(number, wire_type, value))
     if not wrote_order and target_index > 0:
-        output.extend(_encode_field(2, 0, target_index))
+        output.extend(encode_field(2, 0, target_index))
     if not wrote_sort_key:
-        output.extend(_encode_field(7, 1, struct.pack("<d", 1024.0 * (target_index + 1))))
+        output.extend(encode_field(7, 1, struct.pack("<d", 1024.0 * (target_index + 1))))
     return base64.encodebytes(bytes(output))
 
 
@@ -303,14 +205,14 @@ def _page_stroke_count(payload: bytes) -> int:
     message = _decode_message(payload, "페이지")
     return sum(
         1
-        for number, wire_type, _value in _protobuf_fields(message)
+        for number, wire_type, _value in iter_fields(message)
         if number == 4 and wire_type == 2
     )
 
 
 def inspect_notewise_transfer(
     source_notewise: str | Path, target_pdf: str | Path
-) -> NotewiseInspection:
+) -> TransferInspection:
     source = Path(source_notewise).expanduser().resolve()
     target = Path(target_pdf).expanduser().resolve()
     if source.suffix.lower() != ".notewise" or not source.is_file():
@@ -321,8 +223,10 @@ def inspect_notewise_transfer(
     with _archive_context(source) as (archive, _members, pdf_name, page_names):
         embedded_pdf = archive.read(pdf_name)
         stroke_counts = [_page_stroke_count(archive.read(name)) for name in page_names]
-    mode, alignment, page_count, match = _plan_transfer(embedded_pdf, target)
-    return NotewiseInspection(
+    mode, alignment, page_count, match = plan_transfer(
+        embedded_pdf, target, source_label="Notewise 내장 PDF", error=NotewiseTransferError
+    )
+    return TransferInspection(
         source_name=source.name,
         target_name=target.name,
         page_count=page_count,
@@ -370,11 +274,11 @@ def _validate_archive_structure(
     if archive.read(pdf_name) != expected_pdf:
         raise NotewiseTransferError("저장된 Notewise의 내장 PDF 검증에 실패했습니다.")
     note = _decode_message(archive.read("note"), "노트")
-    note_fields = list(_protobuf_fields(note))
+    note_fields = list(iter_fields(note))
     pdf_metadata = next(
         bytes(value) for number, wire, value in note_fields if number == 6 and wire == 2
     )
-    metadata_fields = list(_protobuf_fields(pdf_metadata))
+    metadata_fields = list(iter_fields(pdf_metadata))
     pdf_id = next(
         bytes(value).decode("ascii")
         for number, wire, value in metadata_fields
@@ -389,7 +293,7 @@ def _validate_archive_structure(
         raise NotewiseTransferError("Notewise 메타데이터의 페이지 수가 일치하지 않습니다.")
     for expected_index, page_name in enumerate(page_names):
         page = _decode_message(archive.read(page_name), "페이지")
-        page_fields = list(_protobuf_fields(page))
+        page_fields = list(iter_fields(page))
         page_id = next(
             bytes(value).decode("ascii")
             for number, wire, value in page_fields
@@ -414,7 +318,7 @@ def _validate_archive_structure(
         background = next(
             bytes(value) for number, wire, value in page_fields if number == 3 and wire == 2
         )
-        background_fields = list(_protobuf_fields(background))
+        background_fields = list(iter_fields(background))
         background_pdf_id = next(
             bytes(value).decode("ascii")
             for number, wire, value in background_fields
@@ -549,11 +453,11 @@ def preview_notewise_transfer(
     source_notewise: str | Path,
     target_pdf: str | Path,
     page_index: int,
-    inspection: NotewiseInspection | None = None,
+    inspection: TransferInspection | None = None,
     *,
     source_index_override: int = -2,
 ) -> tuple[bytes, bytes, bytes, int]:
-    """Render the old/new backgrounds and supported Notewise ink objects."""
+    """이전 배경과 새 배경, 그리고 그 위에 얹을 Notewise 필기 레이어를 그린다."""
     import pymupdf
 
     source = Path(source_notewise).expanduser().resolve()
@@ -607,7 +511,5 @@ def preview_notewise_transfer(
             transparent.save(ink_output, format="PNG")
             ink, stroke_count = ink_output.getvalue(), 0
         else:
-            from .notewise_ink import render_notewise_ink
-
             ink, stroke_count = render_notewise_ink(page_payload, background.size)
     return before, after, ink, stroke_count

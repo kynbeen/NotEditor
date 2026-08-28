@@ -24,11 +24,18 @@ from zipfile import BadZipFile, ZipFile, ZipInfo
 
 from PIL import Image
 
-from .alignment import Alignment, build_aligned_pdf, estimate_alignment, render_comparison
-from .page_match import MatchResult, match_pages
+from .alignment import Alignment, build_aligned_pdf, render_comparison
+from .page_match import MatchResult
 from .sdocx_ink import render_ink_png
 from .sdocx_note import read_page_order
 from .sdocx_page import read_page
+from .transfer_plan import (
+    HandwritingTransferError,
+    TransferInspection,
+    geometry as _geometry,
+    open_pdf,
+    plan_transfer,
+)
 
 _LOCAL_HEADER = b"PK\x03\x04"
 _CENTRAL_HEADER = b"PK\x01\x02"
@@ -37,7 +44,7 @@ _ZIP32_LIMIT = 0xFFFFFFFF
 _COPY_CHUNK = 1 << 20
 
 
-class SdocxTransferError(RuntimeError):
+class SdocxTransferError(HandwritingTransferError):
     pass
 
 
@@ -47,36 +54,6 @@ class MediaEntry:
     filename: str
     hash_offset: int
     file_hash: str
-
-
-@dataclass(frozen=True)
-class TransferInspection:
-    source_name: str
-    target_name: str
-    page_count: int
-    annotated_page_count: int
-    stroke_cache_count: int
-    embedded_pdf_name: str
-    target_size: int
-    source_page_count: int | None = None
-    mode: str = "exact"
-    alignment: Alignment | None = None
-    match: MatchResult | None = None
-
-    def as_dict(self) -> dict:
-        return {
-            "source_name": self.source_name,
-            "target_name": self.target_name,
-            "page_count": self.page_count,
-            "annotated_page_count": self.annotated_page_count,
-            "stroke_cache_count": self.stroke_cache_count,
-            "embedded_pdf_name": self.embedded_pdf_name,
-            "target_size": self.target_size,
-            "source_page_count": self.source_page_count,
-            "mode": self.mode,
-            "alignment": self.alignment.as_dict() if self.alignment else None,
-            "match": self.match.as_dict() if self.match else None,
-        }
 
 
 def parse_media_info(data: bytes) -> list[MediaEntry]:
@@ -139,32 +116,8 @@ def _find_suffix(members: dict[str, ZipInfo], suffix: str) -> str:
 
 
 def _open_pdf(pdf: bytes | Path, label: str):
-    """PDF를 열고 필기 이전에 쓸 수 없는 문서는 그 자리에서 거른다. 호출자가 닫는다."""
-    import pymupdf
-
-    try:
-        if isinstance(pdf, Path):
-            document = pymupdf.open(pdf)
-        else:
-            document = pymupdf.open(stream=pdf, filetype="pdf")
-    except Exception as exc:
-        raise SdocxTransferError(f"{label}를 읽을 수 없습니다: {exc}") from exc
-    try:
-        if document.needs_pass:
-            raise SdocxTransferError(f"암호화된 {label}는 지원하지 않습니다.")
-        if document.page_count < 1:
-            raise SdocxTransferError(f"페이지가 없는 {label}입니다.")
-    except Exception:
-        document.close()
-        raise
-    return document
-
-
-def _geometry(document) -> list[tuple[float, float, int]]:
-    return [
-        (round(float(page.rect.width), 3), round(float(page.rect.height), 3), int(page.rotation))
-        for page in document
-    ]
+    """PDF 열기는 공용이고, 오류만 SDOCX 이름을 달고 나가야 한다."""
+    return open_pdf(pdf, label, error=SdocxTransferError)
 
 
 def _pdf_geometry(pdf: bytes | Path, label: str) -> list[tuple[float, float, int]]:
@@ -197,50 +150,6 @@ def _validate_geometry(source: list[tuple[float, float, int]], target: list[tupl
             f"페이지 크기 또는 회전이 다른 쪽이 있습니다: {shown}{suffix}. "
             "동일한 페이지 좌표계의 PDF만 필기를 정확히 옮길 수 있습니다."
         )
-
-
-def _plan_transfer(
-    embedded_pdf: bytes, target: Path
-) -> tuple[str, Alignment | None, int, MatchResult]:
-    """그대로 넣을지(``exact``), 본문 기준으로 다시 앉힐지(``aligned``) 정한다."""
-    source_document = _open_pdf(embedded_pdf, "SDOCX 내장 PDF")
-    try:
-        target_document = _open_pdf(target, "대상 PDF")
-    except Exception:
-        source_document.close()
-        raise
-    try:
-        source_geometry = _geometry(source_document)
-        target_geometry = _geometry(target_document)
-        match = match_pages(source_document, target_document)
-        matched_indices = [
-            (pair.source_index, pair.target_index) for pair in match.matched_pairs
-        ]
-        same_geometry = all(
-            abs(source_geometry[source][0] - target_geometry[target_index][0]) <= 0.5
-            and abs(source_geometry[source][1] - target_geometry[target_index][1]) <= 0.5
-            and source_geometry[source][2] == target_geometry[target_index][2]
-            for source, target_index in matched_indices
-        )
-        alignment = estimate_alignment(source_document, target_document, matched_indices)
-    finally:
-        source_document.close()
-        target_document.close()
-
-    if alignment is None:
-        if not same_geometry:
-            raise SdocxTransferError(
-                "페이지 크기가 다른데 두 문서의 본문 영역을 찾지 못해 정렬 배율을 정할 수 없습니다. "
-                "내용이 비어 있거나 스캔 품질이 낮은 문서일 수 있습니다."
-            )
-        mode = "rebuild" if match.source_only or match.target_only else "exact"
-        return mode, None, len(target_geometry), match
-    if same_geometry and not (alignment.improves and alignment.axes_agree):
-        # 페이지 크기가 같고 본문 배치도 그대로면 사용자의 PDF를 바이트 그대로 넣는다.
-        mode = "rebuild" if match.source_only or match.target_only else "exact"
-        return mode, None, len(target_geometry), match
-    mode = "rebuild" if match.source_only or match.target_only else "aligned"
-    return mode, alignment, len(target_geometry), match
 
 
 @dataclass(frozen=True)
@@ -561,7 +470,9 @@ def inspect_transfer(source_sdocx: str | Path, target_pdf: str | Path) -> Transf
     finally:
         archive.close()
 
-    mode, alignment, page_count, match = _plan_transfer(embedded_pdf, target)
+    mode, alignment, page_count, match = plan_transfer(
+        embedded_pdf, target, source_label="SDOCX 내장 PDF", error=SdocxTransferError
+    )
 
     return TransferInspection(
         source_name=source.name,

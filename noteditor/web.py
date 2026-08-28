@@ -21,9 +21,9 @@ from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
 
 from . import __version__
-from .app import ComposerApi
+from .app import MISSING_HANDWRITING_MESSAGE, ComposerApi
+from .handwriting_transfer import SUPPORTED_SUFFIXES, output_suffix, transfer_handwriting
 from .page_match import match_from_target_mapping
-from .handwriting_transfer import transfer_handwriting
 
 SESSION_COOKIE = "noteditor_session"
 # Uptime pings arrive without a cookie, so giving them a session would mint a new
@@ -254,7 +254,7 @@ async def _set_handwriting_upload(request: Request, upload: UploadFile, kind: st
     api = _api(request)
     if kind == "source":
         suffix = Path(upload.filename or "").suffix.lower()
-        if suffix not in {".sdocx", ".notewise"}:
+        if suffix not in SUPPORTED_SUFFIXES:
             return JSONResponse(
                 {"ok": False, "error": ".sdocx 또는 .notewise 파일을 선택하세요."},
                 status_code=400,
@@ -318,10 +318,15 @@ def _export_handwriting(api: ComposerApi, payload: HandwritingExportRequest, out
 @app.post("/api/handwriting/export")
 async def export_handwriting(request: Request, payload: HandwritingExportRequest):
     api = _api(request)
-    source_suffix = api._handwriting_source.suffix.lower()
-    output_suffix = ".notewise" if source_suffix == ".notewise" else ".sdocx"
-    filename = _safe_name(payload.suggested_name, f"필기-이전{output_suffix}", output_suffix)
-    output = api._session.temp_dir / f"export-{uuid.uuid4().hex}{output_suffix}"
+    if api._handwriting_source is None or api._handwriting_target is None:
+        # 확장자를 읽기 전에 걸러야 한다. 아래 계산이 먼저 터지면 500이 나가고,
+        # 사용자는 무엇을 안 골랐는지 알 수 없게 된다.
+        return JSONResponse(
+            {"ok": False, "error": MISSING_HANDWRITING_MESSAGE}, status_code=400
+        )
+    suffix = output_suffix(api._handwriting_source)
+    filename = _safe_name(payload.suggested_name, f"필기-이전{suffix}", suffix)
+    output = api._session.temp_dir / f"export-{uuid.uuid4().hex}{suffix}"
     try:
         result = await run_in_threadpool(_export_handwriting, api, payload, output)
     except Exception as exc:

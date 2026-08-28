@@ -51,7 +51,7 @@ const refs = {
   handwritingMatchRows: $("#handwritingMatchRows"),
   handwritingMatchSummary: $("#handwritingMatchSummary"),
   handwritingMatchError: $("#handwritingMatchError"),
-  webPdfInput: $("#webPdfInput"), webSdocxInput: $("#webSdocxInput"),
+  webPdfInput: $("#webPdfInput"), webHandwritingInput: $("#webHandwritingInput"),
   webTargetPdfInput: $("#webTargetPdfInput"),
 };
 
@@ -135,7 +135,7 @@ const webApi = {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ value, page_count: pageCount }),
   }),
   save_result: (order, suggestedName) => downloadWebResult("/api/documents/export", { order, suggested_name: suggestedName }),
-  choose_handwriting_source: () => uploadWebFiles(refs.webSdocxInput, "/api/handwriting/source", "file"),
+  choose_handwriting_source: () => uploadWebFiles(refs.webHandwritingInput, "/api/handwriting/source", "file"),
   choose_handwriting_target: () => uploadWebFiles(refs.webTargetPdfInput, "/api/handwriting/target", "file"),
   handwriting_preview: (pageIndex, sourceIndex) => fetchJson(`/api/handwriting/preview?page_index=${pageIndex}&source_index=${sourceIndex}`),
   reset_handwriting_transfer: () => fetchJson("/api/handwriting/reset", { method: "POST" }),
@@ -475,8 +475,7 @@ async function resetHandwritingTransfer() {
 async function saveHandwritingTransfer() {
   if (!state.handwriting.ready) return;
   const base = (state.handwriting.target_name || "새-문서.pdf").replace(/\.pdf$/i, "");
-  const outputExtension = state.handwriting.source_name?.toLowerCase().endsWith(".notewise")
-    ? ".notewise" : ".sdocx";
+  const outputExtension = state.handwriting.source_format === "notewise" ? ".notewise" : ".sdocx";
   setBusy(true, "필기와 형광펜을 새 PDF로 옮기는 중…");
   try {
     const response = await callApi("save_handwriting_transfer",

@@ -102,6 +102,17 @@ class WebAppTests(unittest.TestCase):
         self.assertEqual(exported.status_code, 200, exported.text)
         self.assertTrue(exported.content.startswith(b"PK"))
 
+    def test_export_without_a_source_answers_with_an_error_not_a_crash(self):
+        """원본을 안 고른 채 저장을 누르면 400과 안내 문구가 나가야 한다."""
+        exported = self.client.post(
+            "/api/handwriting/export",
+            json={"suggested_name": "moved.sdocx", "target_mapping": None},
+        )
+        self.assertEqual(exported.status_code, 400, exported.text)
+        body = exported.json()
+        self.assertFalse(body["ok"])
+        self.assertIn("선택", body["error"])
+
     def test_upload_preview_and_export_notewise(self):
         notewise_pdf = self.root / "notewise.pdf"
         make_notewise_pdf(notewise_pdf, "same text")
