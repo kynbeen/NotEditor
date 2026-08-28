@@ -224,7 +224,7 @@ function showTool(tool) {
 
 function renderHandwritingStatus(error = "") {
   const status = state.handwriting;
-  refs.handwritingSourceName.textContent = status.source_name || ".sdocx 파일 선택";
+  refs.handwritingSourceName.textContent = status.source_name || ".sdocx 또는 .notewise 파일 선택";
   refs.handwritingTargetName.textContent = status.target_name || ".pdf 파일 선택";
   refs.saveHandwriting.disabled = !state.bridgeReady || !status.ready;
   const card = refs.handwritingCompatibility;
@@ -451,7 +451,7 @@ function jumpToAlignPage() {
 }
 
 async function chooseHandwriting(kind) {
-  setBusy(true, kind === "source" ? "Samsung Notes를 확인하는 중…" : "대상 PDF를 확인하는 중…");
+  setBusy(true, kind === "source" ? "필기 문서를 확인하는 중…" : "대상 PDF를 확인하는 중…");
   try {
     const method = kind === "source" ? "choose_handwriting_source" : "choose_handwriting_target";
     const response = await callApi(method);
@@ -475,15 +475,17 @@ async function resetHandwritingTransfer() {
 async function saveHandwritingTransfer() {
   if (!state.handwriting.ready) return;
   const base = (state.handwriting.target_name || "새-문서.pdf").replace(/\.pdf$/i, "");
+  const outputExtension = state.handwriting.source_name?.toLowerCase().endsWith(".notewise")
+    ? ".notewise" : ".sdocx";
   setBusy(true, "필기와 형광펜을 새 PDF로 옮기는 중…");
   try {
     const response = await callApi("save_handwriting_transfer",
-      `${base}-필기.sdocx`,
+      `${base}-필기${outputExtension}`,
       state.handwriting.inspection?.mode === "rebuild" ? state.handwriting.matchMapping : null,
     );
     if (!response.ok) throw new Error(response.error);
     if (response.cancelled) return;
-    toast(`Samsung Notes 파일을 저장했습니다.\n${response.result.path}`, "success");
+    toast(`필기 문서를 저장했습니다.\n${response.result.path}`, "success");
   } catch (error) {
     renderHandwritingStatus(error.message);
     reportClientError(error);

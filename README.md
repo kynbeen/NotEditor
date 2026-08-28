@@ -1,7 +1,7 @@
 # NotEditor
 
-NotEditor는 PDF 문서 합치기와 Samsung Notes 필기 옮기기를 한 화면에서 제공하는 도구입니다.
-Windows 데스크톱 앱과 Docker 기반 웹앱이 같은 PDF·SDOCX 처리 엔진을 사용합니다.
+NotEditor는 PDF 문서 합치기와 Samsung Notes·Notewise 필기 옮기기를 한 화면에서 제공하는 도구입니다.
+Windows 데스크톱 앱과 Docker 기반 웹앱이 같은 PDF·필기 문서 처리 엔진을 사용합니다.
 
 ## 기능
 
@@ -16,10 +16,12 @@ Windows 데스크톱 앱과 Docker 기반 웹앱이 같은 PDF·SDOCX 처리 엔
 ### 필기 옮기기
 
 - 필기·형광펜이 들어 있는 Samsung Notes `.sdocx`를 새 PDF 배경으로 이전
+- 필기가 들어 있는 Notewise `.notewise`를 새 PDF 배경으로 이전하고 추가·삭제된 쪽 자동 매칭
 - 쪽 추가·삭제 시 본문 지문과 순서를 이용해 공통 쪽 자동 매칭
 - 페이지 크기나 여백 변경 시 본문 위치 기준 자동 정렬
 - 실제 필기를 원본·새 배경 위에 겹쳐 저장 전에 확인
 - 원본 SDOCX와 PDF를 수정하지 않고 새 `.sdocx`로 저장
+- 원본 Notewise와 PDF를 수정하지 않고 새 `.notewise`로 저장
 
 ## 가장 쉬운 Windows 설치
 
@@ -153,6 +155,9 @@ NotEditor/                 Git 저장소 루트
 - 페이지 구성이 바뀌므로 기존 디지털 서명은 유효하지 않게 됩니다.
 - 여러 원본을 합칠 때 책갈피, 문서 첨부, 문서 단위 서명은 복사하지 않고 경고합니다.
 - 필기 이전은 Samsung의 비공개 SDOCX 형식을 이용한 상호운용 기능입니다.
+- Notewise 이전은 공개되지 않은 내보내기 형식을 관찰해 구현한 상호운용 기능이며, PDF 배경 교체,
+  페이지 추가·삭제, 펜·형광펜 미리보기를 지원합니다. 페이지 크기 자동 정렬과 그 밖의 Notewise
+  객체 렌더링은 후속 지원 범위입니다.
 - 원본 파일은 읽기 전용으로 열며 사용자가 요청한 결과 외에는 영구 파일을 만들지 않습니다.
 
 제3자 코드 고지는 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)를 확인하세요.
