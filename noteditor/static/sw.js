@@ -2,7 +2,7 @@
 
 const CACHE_NAME = "noteditor-shell-v1";
 const APP_SHELL = [
-  "/",
+  "/index.html",
   "/app.css",
   "/app.js",
   "/manifest.webmanifest",
@@ -41,7 +41,7 @@ self.addEventListener("fetch", (event) => {
     } catch (error) {
       const cached = await caches.match(event.request, { ignoreSearch: true });
       if (cached) return cached;
-      if (event.request.mode === "navigate") return caches.match("/");
+      if (event.request.mode === "navigate") return caches.match("/index.html");
       throw error;
     }
   })());

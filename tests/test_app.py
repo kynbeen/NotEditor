@@ -6,11 +6,11 @@ import types
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import pymupdf
 
-from noteditor.app import ComposerApi
+from noteditor.app import ComposerApi, run
 from noteditor.engine import ComposerSession
 
 
@@ -20,6 +20,18 @@ class FakeWindow:
 
     def create_file_dialog(self, *_args, **_kwargs):
         return self.responses.pop(0)
+
+    def toggle_fullscreen(self):
+        self.fullscreen_toggled = True
+
+
+class FakeEvent:
+    def __init__(self):
+        self.callback = None
+
+    def __iadd__(self, callback):
+        self.callback = callback
+        return self
 
 
 class ComposerApiTests(unittest.TestCase):
@@ -63,6 +75,30 @@ class ComposerApiTests(unittest.TestCase):
         result = self.api.health()
         self.assertTrue(result["ok"])
         self.assertRegex(result["version"], r"^\d+\.\d+\.\d+$")
+
+    def test_fullscreen_toggle_uses_the_native_window(self):
+        window = FakeWindow([])
+        self.api._bind_window(window)
+        self.assertTrue(self.api.toggle_fullscreen()["ok"])
+        self.assertTrue(window.fullscreen_toggled)
+
+    def test_desktop_window_starts_maximized(self):
+        closed = FakeEvent()
+        window = SimpleNamespace(events=SimpleNamespace(closed=closed))
+        webview = SimpleNamespace(
+            create_window=Mock(return_value=window),
+            start=Mock(),
+        )
+        with patch.dict(sys.modules, {"webview": webview}), \
+                patch("noteditor.app.configure_windows_app_identity"):
+            run()
+
+        self.assertTrue(webview.create_window.call_args.kwargs["maximized"])
+        self.assertEqual(webview.create_window.call_args.kwargs["min_size"], (1080, 680))
+        self.assertTrue(webview.create_window.call_args.args[1].endswith("index.html#desktop"))
+        self.assertTrue(webview.start.call_args.kwargs["http_server"])
+        self.assertIsNotNone(closed.callback)
+        closed.callback()
 
     def test_native_objects_are_not_exposed_as_public_api_attributes(self):
         self.assertFalse(hasattr(self.api, "window"))

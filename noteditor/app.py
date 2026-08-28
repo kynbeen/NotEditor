@@ -77,6 +77,15 @@ class ComposerApi:
         logging.getLogger("noteditor").error("UI error: %s", message)
         return self._ok()
 
+    def toggle_fullscreen(self) -> dict:
+        try:
+            if self._window is None:
+                raise PdfComposerError("앱 창이 아직 준비되지 않았습니다.")
+            self._window.toggle_fullscreen()
+            return self._ok()
+        except Exception as exc:
+            return self._error(exc)
+
     def choose_pdfs(self) -> dict:
         try:
             if self._window is None:
@@ -306,11 +315,12 @@ def run(debug: bool = False) -> None:
     static_file = Path(__file__).with_name("static") / "index.html"
     window = webview.create_window(
         "NotEditor",
-        static_file.resolve().as_uri(),
+        str(static_file.resolve()) + "#desktop",
         js_api=api,
         width=1440,
         height=900,
         min_size=(1080, 680),
+        maximized=True,
         background_color="#0b1020",
         text_select=True,
     )
@@ -319,6 +329,7 @@ def run(debug: bool = False) -> None:
     icon = Path(__file__).parents[1] / "assets" / "icon.ico"
     webview.start(
         debug=debug,
+        http_server=True,
         private_mode=True,
         gui="edgechromium",
         icon=str(icon) if icon.exists() else None,

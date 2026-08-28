@@ -47,7 +47,7 @@ class StaticUiContractTests(unittest.TestCase):
         self.assertIn('id="emptyAddButton" class="button primary" type="button" disabled', self.html)
         self.assertIn('callApi("health")', self.js)
         self.assertIn("NotEditor 연결을 확인할 수 없습니다", self.js)
-        self.assertIn('runtime: window.location.protocol.startsWith("http")', self.js)
+        self.assertIn('runtime: window.location.hash === "#desktop"', self.js)
 
     def test_merge_and_handwriting_are_peer_tabs(self):
         self.assertIn('id="handwritingButton"', self.html)
@@ -111,17 +111,19 @@ class StaticUiContractTests(unittest.TestCase):
         self.assertIn('rel="manifest" href="manifest.webmanifest"', self.html)
         self.assertIn('rel="apple-touch-icon"', self.html)
         self.assertEqual(self.manifest["display"], "standalone")
-        self.assertEqual(self.manifest["start_url"], "/")
+        self.assertEqual(self.manifest["start_url"], "/index.html")
         self.assertEqual(
             {icon["sizes"] for icon in self.manifest["icons"]},
             {"192x192", "512x512"},
         )
         self.assertIn('navigator.serviceWorker.register("/sw.js")', self.js)
+        self.assertIn('window.location.hash === "#desktop"', self.js)
+        self.assertIn('callApi("toggle_fullscreen")', self.js)
 
     def test_service_worker_never_caches_api_or_upload_responses(self):
         self.assertIn('url.pathname.startsWith("/api/")', self.service_worker)
         self.assertIn('event.request.method !== "GET"', self.service_worker)
-        self.assertIn('caches.match("/")', self.service_worker)
+        self.assertIn('caches.match("/index.html")', self.service_worker)
 
 
 if __name__ == "__main__":

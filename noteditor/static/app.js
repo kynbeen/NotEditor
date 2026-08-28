@@ -11,7 +11,9 @@ const state = {
   previewScrollFrame: 0,
   bridgeReady: false,
   bridgeFailed: false,
-  runtime: window.location.protocol.startsWith("http") ? "web" : "desktop",
+  runtime: window.location.hash === "#desktop" || !window.location.protocol.startsWith("http")
+    ? "desktop"
+    : "web",
   handwriting: { source_name: null, target_name: null, ready: false, inspection: null, matchMapping: null },
   alignPreview: { index: 0, pageCount: 0, loading: false, strokeCount: null },
   alignWheelLocked: false,
@@ -960,6 +962,13 @@ refs.previewStage.addEventListener("scroll", () => {
   state.previewScrollFrame = requestAnimationFrame(updatePreviewFromScroll);
 }, { passive: true });
 
+document.addEventListener("keydown", async (event) => {
+  if (event.key !== "F11" || state.runtime !== "desktop") return;
+  event.preventDefault();
+  const response = await callApi("toggle_fullscreen");
+  if (!response.ok) toast(response.error, "error");
+});
+
 window.addEventListener("error", (event) => reportClientError(event.error || event.message));
 window.addEventListener("unhandledrejection", (event) => reportClientError(event.reason));
 window.addEventListener("pywebviewready", initializeBridge);
@@ -972,7 +981,7 @@ setTimeout(() => {
   if (!state.bridgeReady) setBridgeState(false, true);
 }, 6000);
 
-if (state.runtime === "web" && "serviceWorker" in navigator) {
+if (window.location.protocol.startsWith("http") && "serviceWorker" in navigator) {
   window.addEventListener("load", () => {
     navigator.serviceWorker.register("/sw.js").catch((error) => {
       console.warn("NotEditor PWA service worker registration failed", error);
