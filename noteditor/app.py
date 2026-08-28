@@ -267,6 +267,22 @@ class ComposerApi:
         except Exception as exc:
             return self._error(exc)
 
+    def reset_workspace(self) -> dict:
+        """작업 중 만든 것을 전부 버리고 빈 작업공간을 새로 연다.
+
+        임시 폴더째 지우고 새로 만든다. 목록만 비우면 미리보기 캐시나 업로드된 파일이
+        남아, 사용자가 "지웠다"고 믿는 것이 디스크에 그대로 있게 된다.
+        """
+        try:
+            self._handwriting_source = None
+            self._handwriting_target = None
+            self._handwriting_cache = None
+            self._session.close()
+            self._session = ComposerSession()
+            return self._ok(sources=[])
+        except Exception as exc:
+            return self._error(exc)
+
     def remove_document(self, document_id: str) -> dict:
         try:
             self._session.remove_source(document_id)

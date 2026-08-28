@@ -40,6 +40,7 @@ const refs = {
   chooseHandwritingTarget: $("#chooseHandwritingTarget"), handwritingSourceName: $("#handwritingSourceName"),
   handwritingTargetName: $("#handwritingTargetName"), handwritingCompatibility: $("#handwritingCompatibility"),
   resetHandwriting: $("#resetHandwritingButton"), saveHandwriting: $("#saveHandwritingButton"),
+  resetWorkspace: $("#resetWorkspaceButton"),
   handwritingPreview: $("#handwritingPreview"), alignStage: $("#alignStage"),
   alignBefore: $("#alignBefore"),
   alignAfter: $("#alignAfter"), alignInk: $("#alignInk"), alignBlend: $("#alignBlend"),
@@ -139,6 +140,7 @@ const webApi = {
   choose_handwriting_target: () => uploadWebFiles(refs.webTargetPdfInput, "/api/handwriting/target", "file"),
   handwriting_preview: (pageIndex, sourceIndex) => fetchJson(`/api/handwriting/preview?page_index=${pageIndex}&source_index=${sourceIndex}`),
   reset_handwriting_transfer: () => fetchJson("/api/handwriting/reset", { method: "POST" }),
+  reset_workspace: () => fetchJson("/api/session/reset", { method: "POST" }),
   save_handwriting_transfer: (suggestedName, targetMapping) => downloadWebResult("/api/handwriting/export", {
     suggested_name: suggestedName, target_mapping: targetMapping,
   }),
@@ -470,6 +472,37 @@ async function resetHandwritingTransfer() {
     toast(error.message, "error");
     reportClientError(error);
   }
+}
+
+async function resetWorkspace() {
+  if (!window.confirm("올린 파일과 미리보기를 모두 지우고 빈 작업공간으로 되돌립니다. 계속할까요?")) return;
+  setBusy(true, "작업공간을 비우는 중…");
+  try {
+    const response = await callApi("reset_workspace");
+    if (!response.ok) throw new Error(response.error);
+    // 서버가 임시 폴더째 지웠으므로 화면에 남은 것도 모두 버린다.
+    alignRequestSequence += 1;
+    state.documents = [];
+    state.selected.clear();
+    state.order = [];
+    state.orderDirty = false;
+    state.active = null;
+    state.thumbnailCache.clear();
+    state.handwriting = {
+      source_name: null, target_name: null, source_format: null,
+      ready: false, inspection: null, matchMapping: null,
+    };
+    state.alignPreview = { index: 0, pageCount: 0, loading: false, strokeCount: null };
+    refs.handwritingPreview.hidden = true;
+    renderHandwritingStatus();
+    renderMatchEditor();
+    syncOrder();
+    render();
+    toast("작업공간을 비웠습니다.", "success");
+  } catch (error) {
+    toast(error.message, "error");
+    reportClientError(error);
+  } finally { setBusy(false); }
 }
 
 async function saveHandwritingTransfer() {
@@ -956,6 +989,7 @@ refs.alignStage.addEventListener("wheel", (event) => {
 refs.chooseHandwritingSource.addEventListener("click", () => chooseHandwriting("source"));
 refs.chooseHandwritingTarget.addEventListener("click", () => chooseHandwriting("target"));
 refs.resetHandwriting.addEventListener("click", resetHandwritingTransfer);
+refs.resetWorkspace.addEventListener("click", resetWorkspace);
 refs.saveHandwriting.addEventListener("click", saveHandwritingTransfer);
 refs.resetOrder.addEventListener("click", () => { state.orderDirty = false; state.order = defaultOrder(); renderResult(); });
 refs.previewStage.addEventListener("scroll", () => {

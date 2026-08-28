@@ -3,6 +3,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
@@ -144,6 +145,155 @@ class WebAppTests(unittest.TestCase):
         self.assertEqual(exported.status_code, 200, exported.text)
         self.assertIn("moved.notewise", exported.headers["content-disposition"])
         self.assertTrue(exported.content.startswith(b"PK"))
+
+
+class WorkspaceIsolationTests(unittest.TestCase):
+    """접속자마다 하나씩만, 남기지 않고, 남에게 새지 않게."""
+
+    def setUp(self):
+        store.close()
+        self.folder = tempfile.TemporaryDirectory()
+        self.root = Path(self.folder.name)
+        self.pdf = self.root / "source.pdf"
+        make_pdf(self.pdf, ["ONE", "TWO"])
+
+    def tearDown(self):
+        store.close()
+        self.folder.cleanup()
+
+    @staticmethod
+    def _files(temp_dir: Path) -> list[str]:
+        return sorted(str(p.relative_to(temp_dir)) for p in temp_dir.rglob("*") if p.is_file())
+
+    def _only_workspace(self) -> Path:
+        self.assertEqual(len(store._sessions), 1, "작업공간이 정확히 하나여야 합니다.")
+        return next(iter(store._sessions.values())).api._session.temp_dir
+
+    def _upload(self, client: TestClient) -> str:
+        response = client.post(
+            "/api/documents",
+            files={"files": ("source.pdf", self.pdf.read_bytes(), "application/pdf")},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        return response.json()["sources"][0]["id"]
+
+    def test_a_first_load_creates_one_workspace_even_before_the_cookie_lands(self):
+        """브라우저는 첫 화면과 정적 자산을 쿠키가 정해지기 전에 한꺼번에 요청한다.
+
+        그때 자산마다 작업공간이 생기면, 접속 한 번에 아무도 쓰지 않는 임시 폴더가
+        여러 개 만들어져 세션 수명(기본 2시간) 내내 디스크에 남는다.
+        """
+        for path in ("/", "/app.js", "/app.css", "/sw.js", "/manifest.webmanifest"):
+            client = TestClient(app)  # 아직 쿠키를 받지 못한 병렬 요청
+            self.assertEqual(client.get(path).status_code, 200, path)
+        self.assertEqual(len(store._sessions), 1)
+
+    def test_uptime_pings_never_create_a_workspace(self):
+        client = TestClient(app)
+        with client:
+            for _ in range(5):
+                client.cookies.clear()
+                client.get("/api/health")
+            self.assertEqual(len(store._sessions), 0)
+
+    def test_static_assets_alone_create_no_workspace(self):
+        client = TestClient(app)
+        with client:
+            client.cookies.clear()
+            client.get("/app.js")
+            self.assertEqual(len(store._sessions), 0)
+
+    def test_per_user_responses_forbid_shared_caching(self):
+        """첫 화면은 세션 쿠키를 실어 보낸다. 공용 캐시에 저장되면 모두가 한 작업공간을 쓴다."""
+        with TestClient(app) as browser:
+            for path in ("/", "/api/health"):
+                response = browser.get(path)
+                if path == "/api/health":
+                    continue
+                self.assertIn("no-store", response.headers.get("cache-control", ""))
+                self.assertEqual(response.headers.get("vary"), "Cookie")
+            document_id = self._upload(browser)
+            image = browser.get(f"/api/documents/{document_id}/pages/0?kind=thumbnail")
+            self.assertIn("no-store", image.headers.get("cache-control", ""))
+            self.assertEqual(image.headers.get("vary"), "Cookie")
+
+    def test_two_visitors_never_see_each_other_documents(self):
+        other = self.root / "other.pdf"
+        make_pdf(other, ["ZZZ"])
+        with TestClient(app) as alice, TestClient(app) as bob:
+            alice.get("/")
+            bob.get("/")
+            alice_docs = alice.post(
+                "/api/documents",
+                files={"files": ("alice.pdf", self.pdf.read_bytes(), "application/pdf")},
+            ).json()["sources"]
+            bob_docs = bob.post(
+                "/api/documents",
+                files={"files": ("bob.pdf", other.read_bytes(), "application/pdf")},
+            ).json()["sources"]
+        self.assertEqual([doc["name"] for doc in alice_docs], ["alice.pdf"])
+        self.assertEqual([doc["name"] for doc in bob_docs], ["bob.pdf"])
+
+    def test_removing_a_document_also_deletes_its_uploaded_copy(self):
+        with TestClient(app) as browser:
+            document_id = self._upload(browser)
+            workspace = self._only_workspace()
+            self.assertEqual(len(self._files(workspace)), 1)
+            self.assertEqual(browser.delete(f"/api/documents/{document_id}").status_code, 200)
+            self.assertEqual(self._files(workspace), [])
+
+    def test_rejected_upload_does_not_stay_on_disk(self):
+        broken = self.root / "broken.pdf"
+        broken.write_bytes(b"not a pdf at all")
+        with TestClient(app) as browser:
+            browser.get("/")
+            response = browser.post(
+                "/api/documents",
+                files={"files": ("broken.pdf", broken.read_bytes(), "application/pdf")},
+            )
+            self.assertEqual(response.status_code, 400, response.text)
+            self.assertEqual(self._files(self._only_workspace()), [])
+
+    def test_reset_empties_the_workspace_without_losing_the_session(self):
+        with TestClient(app) as browser:
+            self._upload(browser)
+            browser.post(
+                "/api/handwriting/target",
+                files={"file": ("target.pdf", self.pdf.read_bytes(), "application/pdf")},
+            )
+            session = next(iter(store._sessions.values()))
+            before = session.api._session.temp_dir
+            self.assertEqual(len(self._files(before)), 2)
+
+            result = browser.post("/api/session/reset")
+            self.assertEqual(result.status_code, 200, result.text)
+            self.assertTrue(result.json()["ok"])
+
+            after = session.api._session.temp_dir
+            self.assertFalse(before.exists(), "옛 임시 폴더가 남아 있으면 안 됩니다.")
+            self.assertNotEqual(before, after)
+            self.assertEqual(self._files(after), [])
+            self.assertIsNone(session.api._handwriting_target)
+            self.assertEqual(session.api._session.sources, [])
+            self.assertEqual(len(store._sessions), 1, "초기화가 세션을 끊어서는 안 됩니다.")
+
+    def test_workspace_count_is_capped(self):
+        with patch("noteditor.web.MAX_SESSIONS", 3):
+            clients = []
+            for _ in range(6):
+                client = TestClient(app)
+                client.get("/")
+                clients.append(client)
+            self.assertLessEqual(len(store._sessions), 3)
+
+    def test_idle_workspaces_are_swept_without_any_request(self):
+        with TestClient(app) as browser:
+            self._upload(browser)
+            workspace = self._only_workspace()
+            with patch("noteditor.web.SESSION_TTL_SECONDS", -1):
+                store.expire_idle()
+            self.assertEqual(len(store._sessions), 0)
+            self.assertFalse(workspace.exists())
 
 
 if __name__ == "__main__":

@@ -33,7 +33,10 @@ self.addEventListener("fetch", (event) => {
   event.respondWith((async () => {
     try {
       const response = await fetch(event.request);
-      if (response.ok) {
+      // 서버가 사용자별 응답이라고 표시한 것은 절대 저장하지 않는다. 첫 화면은 세션 쿠키를
+      // 발급하는 응답이라 여기 걸린다.
+      const noStore = (response.headers.get("Cache-Control") || "").includes("no-store");
+      if (response.ok && !noStore) {
         const cache = await caches.open(CACHE_NAME);
         await cache.put(event.request, response.clone());
       }

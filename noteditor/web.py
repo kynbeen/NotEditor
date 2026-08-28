@@ -29,8 +29,20 @@ SESSION_COOKIE = "noteditor_session"
 # Uptime pings arrive without a cookie, so giving them a session would mint a new
 # ComposerApi and temp dir every few minutes for nobody to use.
 SESSIONLESS_PATHS = frozenset({"/api/health"})
+# 첫 화면만 세션을 심는다. 브라우저는 이 문서와 함께 정적 자산을 병렬로 요청하는데, 그것들이
+# 저마다 세션을 만들면 접속 한 번에 빈 작업공간이 여러 개 생겨 TTL 동안 디스크에 남는다.
+SESSION_ENTRY_PATHS = frozenset({"/", "/index.html"})
 SESSION_TTL_SECONDS = int(os.environ.get("NOTEDITOR_SESSION_TTL", "7200"))
 MAX_UPLOAD_BYTES = int(os.environ.get("NOTEDITOR_MAX_UPLOAD_MB", "512")) * 1024 * 1024
+MAX_SESSIONS = int(os.environ.get("NOTEDITOR_MAX_SESSIONS", "200"))
+SWEEP_INTERVAL_SECONDS = int(os.environ.get("NOTEDITOR_SWEEP_INTERVAL", "60"))
+
+
+def needs_session(path: str) -> bool:
+    """이 경로가 사용자별 작업공간을 필요로 하는가."""
+    if path in SESSIONLESS_PATHS:
+        return False
+    return path in SESSION_ENTRY_PATHS or path.startswith("/api/")
 
 
 @dataclass
@@ -55,10 +67,20 @@ class SessionStore:
                 session = self._sessions[token]
                 session.touched_at = now
                 return token, session, False
+            self._enforce_capacity()
             token = secrets.token_urlsafe(32)
             session = WebSession(ComposerApi(), now)
             self._sessions[token] = session
             return token, session, True
+
+    def drop(self, token: str | None) -> None:
+        """세션 하나를 통째로 닫는다. 임시 폴더도 함께 사라진다."""
+        if not token:
+            return
+        with self._lock:
+            session = self._sessions.pop(token, None)
+        if session:
+            session.close()
 
     def expire_idle(self) -> None:
         with self._lock:
@@ -71,6 +93,19 @@ class SessionStore:
         ]
         for token in expired:
             self._sessions.pop(token).close()
+
+    def _enforce_capacity(self) -> None:
+        """세션 수에 상한을 둔다. 없으면 디스크가 먼저 차고 아무도 저장하지 못한다."""
+        if MAX_SESSIONS <= 0 or len(self._sessions) < MAX_SESSIONS:
+            return
+        overflow = len(self._sessions) - MAX_SESSIONS + 1
+        oldest = sorted(self._sessions.items(), key=lambda item: item[1].touched_at)
+        for token, session in oldest[:overflow]:
+            self._sessions.pop(token, None)
+            session.close()
+        logging.getLogger("noteditor.web").warning(
+            "세션 상한 %d에 도달해 오래된 작업공간 %d개를 정리했습니다.", MAX_SESSIONS, overflow
+        )
 
     def close(self) -> None:
         with self._lock:
@@ -105,13 +140,18 @@ app = FastAPI(title="NotEditor", version=__version__, docs_url=None, redoc_url=N
 
 @app.middleware("http")
 async def attach_session(request: Request, call_next):
-    if request.url.path in SESSIONLESS_PATHS:
-        # Still let the ping drive cleanup, just without creating anything.
-        store.expire_idle()
+    if not needs_session(request.url.path):
+        # 상시 가동 핑과 정적 자산은 작업공간을 만들지 않는다. 핑은 정리만 굴린다.
+        if request.url.path in SESSIONLESS_PATHS:
+            store.expire_idle()
         return await call_next(request)
     token, session, created = store.acquire(request.cookies.get(SESSION_COOKIE))
     request.state.noteditor = session
     response = await call_next(request)
+    # 이 응답은 특정 사용자의 것이다. 중간 프록시나 브라우저가 이걸 저장해 두면 다음 사람에게
+    # 남의 문서가, 심지어 Set-Cookie가 실린 응답이면 남의 세션 자체가 건네진다.
+    response.headers["Cache-Control"] = "no-store, private"
+    response.headers["Vary"] = "Cookie"
     if created:
         response.set_cookie(
             SESSION_COOKIE,
@@ -124,8 +164,24 @@ async def attach_session(request: Request, call_next):
     return response
 
 
+@app.on_event("startup")
+async def start_sweeper() -> None:
+    """요청이 없어도 버려진 작업공간이 사라지도록 주기적으로 정리한다."""
+    import asyncio
+
+    async def sweep() -> None:
+        while True:
+            await asyncio.sleep(SWEEP_INTERVAL_SECONDS)
+            await run_in_threadpool(store.expire_idle)
+
+    app.state.sweeper = asyncio.create_task(sweep())
+
+
 @app.on_event("shutdown")
-def close_sessions() -> None:
+async def close_sessions() -> None:
+    sweeper = getattr(app.state, "sweeper", None)
+    if sweeper is not None:
+        sweeper.cancel()
     store.close()
 
 
@@ -206,12 +262,30 @@ async def add_documents(request: Request, files: list[UploadFile] = File(...)):
     api = _api(request)
     paths = [await _save_upload(api, upload, ".pdf") for upload in files]
     result = await run_in_threadpool(api.add_paths, [str(path) for path in paths])
+    # 읽을 수 없는 PDF 하나 때문에 전부 등록되지 않으면, 방금 받은 사본이 갈 곳을 잃는다.
+    registered = {Path(source.path) for source in api._session.sources}
+    for path in paths:
+        if path.resolve() not in {source.resolve() for source in registered}:
+            _remove_upload(api, path)
     return _json_result(result)
 
 
 @app.delete("/api/documents/{document_id}")
 async def remove_document(request: Request, document_id: str):
-    return _json_result(await run_in_threadpool(_api(request).remove_document, document_id))
+    api = _api(request)
+    # 목록에서 빼기 전에 경로를 알아 둬야 사본을 지울 수 있다.
+    uploaded = api._session.source_path(document_id)
+    result = await run_in_threadpool(api.remove_document, document_id)
+    if result.get("ok"):
+        _remove_upload(api, uploaded)
+    return _json_result(result)
+
+
+@app.post("/api/session/reset")
+async def reset_session(request: Request):
+    """작업공간을 통째로 비운다. 임시 폴더가 사라지므로 올린 파일도 함께 지워진다."""
+    api = _api(request)
+    return _json_result(await run_in_threadpool(api.reset_workspace))
 
 
 @app.get("/api/documents/{document_id}/pages/{page_index}")

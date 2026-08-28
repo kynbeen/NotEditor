@@ -61,6 +61,8 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent-2); 
 .tool-tab { min-width: 112px; min-height: 36px; padding: 0 15px; border: 0; border-radius: 9px; color: var(--muted); background: transparent; cursor: pointer; font-size: 12px; font-weight: 720; transition: .16s ease; }
 .tool-tab:hover { color: var(--text); background: rgba(255,255,255,.045); }
 .tool-tab.active { color: #f5f3ff; background: linear-gradient(135deg, rgba(138,120,255,.9), rgba(108,87,232,.78)); box-shadow: 0 7px 18px rgba(108,87,232,.2); }
+/* 도구를 바꿔도 남아 있어야 하는 것(작업공간 비우기)과 문서 합치기 전용 버튼을 함께 담는다. */
+.top-actions-area { display: flex; align-items: center; justify-content: flex-end; gap: 14px; min-width: 0; }
 .top-actions { display: flex; align-items: center; justify-content: flex-end; gap: 10px; min-width: 0; }
 .selection-summary { color: var(--muted); font-size: 12px; margin-right: 5px; white-space: nowrap; }
 

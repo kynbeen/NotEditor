@@ -125,6 +125,20 @@ class StaticUiContractTests(unittest.TestCase):
         self.assertIn('event.request.method !== "GET"', self.service_worker)
         self.assertIn('caches.match("/index.html")', self.service_worker)
 
+    def test_service_worker_skips_responses_marked_per_user(self):
+        self.assertIn('includes("no-store")', self.service_worker)
+        self.assertIn("!noStore", self.service_worker)
+
+    def test_workspace_reset_is_reachable_from_both_tools(self):
+        """도구 탭을 바꿔도 남아 있어야 한다. 문서 합치기 전용 버튼 묶음 밖에 둔다."""
+        self.assertIn('id="resetWorkspaceButton"', self.html)
+        self.assertIn("top-actions-area", self.html)
+        self.assertIn(".top-actions-area", self.css)
+        self.assertIn('refs.resetWorkspace.addEventListener("click", resetWorkspace)', self.js)
+        self.assertIn('"/api/session/reset"', self.js)
+        # 되돌릴 수 없는 동작이므로 확인을 한 번 받는다.
+        self.assertIn("window.confirm", self.js)
+
 
 if __name__ == "__main__":
     unittest.main()

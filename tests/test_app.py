@@ -171,6 +171,26 @@ class ComposerApiTests(unittest.TestCase):
                 self.assertEqual(window.dialog_calls[-1]["save_filename"], expected)
                 self.api.reset_handwriting_transfer()
 
+    def test_reset_workspace_throws_away_files_previews_and_handwriting(self):
+        """목록만 비우면 미리보기 캐시와 임시 파일이 디스크에 그대로 남는다."""
+        self.api.add_paths([str(self.source)])
+        self.api.page_image(self.api._session.sources[0].id, 0, "thumbnail")
+        self.api._handwriting_source = self.root / "annotated.sdocx"
+        self.api._handwriting_target = self.root / "target.pdf"
+        before = self.api._session.temp_dir
+        self.assertTrue(before.exists())
+
+        result = self.api.reset_workspace()
+
+        self.assertTrue(result["ok"], result)
+        self.assertFalse(before.exists(), "옛 임시 폴더가 남아 있으면 안 됩니다.")
+        self.assertNotEqual(before, self.api._session.temp_dir)
+        self.assertEqual(self.api._session.sources, [])
+        self.assertEqual(self.api._session._preview_cache, {})
+        self.assertIsNone(self.api._handwriting_source)
+        self.assertIsNone(self.api._handwriting_target)
+        self.assertIsNone(self.api._handwriting_cache)
+
     def test_handwriting_preview_returns_background_and_ink_data_uris(self):
         source = self.root / "annotated.sdocx"
         target = self.root / "target.pdf"

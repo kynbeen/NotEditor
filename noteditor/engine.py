@@ -105,6 +105,12 @@ class ComposerSession:
             added.append(source.as_dict())
         return added
 
+    def source_path(self, source_id: str) -> Path | None:
+        """등록된 원본의 실제 경로. 목록에서 뺀 파일을 정리하려는 쪽에서 쓴다."""
+        with self._lock:
+            source = self._sources.get(source_id)
+            return source.path if source else None
+
     def remove_source(self, source_id: str) -> None:
         with self._lock:
             if source_id not in self._sources:
