@@ -6,6 +6,7 @@ import logging
 import os
 import re
 import secrets
+import shutil
 import threading
 import time
 import uuid
@@ -22,7 +23,12 @@ from starlette.concurrency import run_in_threadpool
 
 from . import __version__
 from .app import MISSING_HANDWRITING_MESSAGE, ComposerApi
-from .handwriting_transfer import SUPPORTED_SUFFIXES, output_suffix, transfer_handwriting
+from .handwriting_transfer import (
+    SUPPORTED_SUFFIXES,
+    output_suffix,
+    transfer_handwriting,
+    with_output_suffix,
+)
 from .page_match import match_from_target_mapping
 
 SESSION_COOKIE = "noteditor_session"
@@ -193,16 +199,30 @@ def _json_result(payload: dict) -> JSONResponse:
     return JSONResponse(payload, status_code=200 if payload.get("ok") else 400)
 
 
+def _sanitize_name(value: str, fallback: str) -> str:
+    return re.sub(r'[<>:"/\\|?*]+', "_", Path(value).name).strip(" .") or fallback
+
+
 def _safe_name(value: str, fallback: str, suffix: str) -> str:
-    name = re.sub(r'[<>:"/\\|?*]+', "_", Path(value).name).strip(" .") or fallback
+    name = _sanitize_name(value, fallback)
     return name if name.lower().endswith(suffix) else name + suffix
 
 
-async def _save_upload(api: ComposerApi, upload: UploadFile, suffix: str) -> Path:
+def _upload_area(api: ComposerApi, area: str) -> Path:
+    """도구마다 자기 업로드 폴더를 쓴다. 한 도구를 비울 때 남의 파일을 건드리지 않으려면
+    애초에 섞어 두지 말아야 한다."""
+    return api._session.temp_dir / "uploads" / area
+
+
+def _purge_upload_area(api: ComposerApi, area: str) -> None:
+    shutil.rmtree(_upload_area(api, area), ignore_errors=True)
+
+
+async def _save_upload(api: ComposerApi, upload: UploadFile, suffix: str, area: str) -> Path:
     original = Path(upload.filename or "upload").name
     if Path(original).suffix.lower() != suffix:
         raise HTTPException(415, detail=f"{suffix} 파일만 업로드할 수 있습니다.")
-    upload_dir = api._session.temp_dir / "uploads"
+    upload_dir = _upload_area(api, area)
     upload_dir.mkdir(parents=True, exist_ok=True)
     file_dir = upload_dir / uuid.uuid4().hex
     file_dir.mkdir()
@@ -260,13 +280,23 @@ def client_error(payload: ClientErrorRequest) -> dict:
 @app.post("/api/documents")
 async def add_documents(request: Request, files: list[UploadFile] = File(...)):
     api = _api(request)
-    paths = [await _save_upload(api, upload, ".pdf") for upload in files]
+    paths = [await _save_upload(api, upload, ".pdf", "documents") for upload in files]
     result = await run_in_threadpool(api.add_paths, [str(path) for path in paths])
     # 읽을 수 없는 PDF 하나 때문에 전부 등록되지 않으면, 방금 받은 사본이 갈 곳을 잃는다.
-    registered = {Path(source.path) for source in api._session.sources}
+    registered = {source.path.resolve() for source in api._session.sources}
     for path in paths:
-        if path.resolve() not in {source.resolve() for source in registered}:
+        if path.resolve() not in registered:
             _remove_upload(api, path)
+    return _json_result(result)
+
+
+@app.post("/api/documents/reset")
+async def reset_documents(request: Request):
+    """문서 합치기 쪽만 비운다. 필기 옮기기에서 고르던 파일은 그대로 둔다."""
+    api = _api(request)
+    result = await run_in_threadpool(api.reset_documents)
+    if result.get("ok"):
+        _purge_upload_area(api, "documents")
     return _json_result(result)
 
 
@@ -281,11 +311,6 @@ async def remove_document(request: Request, document_id: str):
     return _json_result(result)
 
 
-@app.post("/api/session/reset")
-async def reset_session(request: Request):
-    """작업공간을 통째로 비운다. 임시 폴더가 사라지므로 올린 파일도 함께 지워진다."""
-    api = _api(request)
-    return _json_result(await run_in_threadpool(api.reset_workspace))
 
 
 @app.get("/api/documents/{document_id}/pages/{page_index}")
@@ -335,7 +360,7 @@ async def _set_handwriting_upload(request: Request, upload: UploadFile, kind: st
             )
     else:
         suffix = ".pdf"
-    path = await _save_upload(api, upload, suffix)
+    path = await _save_upload(api, upload, suffix, "handwriting")
     attribute = "_handwriting_source" if kind == "source" else "_handwriting_target"
     previous = getattr(api, attribute)
     setattr(api, attribute, path)
@@ -365,10 +390,10 @@ async def handwriting_preview(request: Request, page_index: int = 0, source_inde
 @app.post("/api/handwriting/reset")
 async def reset_handwriting(request: Request):
     api = _api(request)
-    source, target = api._handwriting_source, api._handwriting_target
     result = api.reset_handwriting_transfer()
-    _remove_upload(api, source)
-    _remove_upload(api, target)
+    if result.get("ok"):
+        # 필기 폴더만 비운다. 문서 합치기에 올려 둔 PDF는 그대로 남는다.
+        _purge_upload_area(api, "handwriting")
     return _json_result(result)
 
 
@@ -398,8 +423,11 @@ async def export_handwriting(request: Request, payload: HandwritingExportRequest
         return JSONResponse(
             {"ok": False, "error": MISSING_HANDWRITING_MESSAGE}, status_code=400
         )
-    suffix = output_suffix(api._handwriting_source)
-    filename = _safe_name(payload.suggested_name, f"필기-이전{suffix}", suffix)
+    source = api._handwriting_source
+    suffix = output_suffix(source)
+    # 화면이 보낸 이름에 다른 필기 확장자가 붙어 와도 갈아 끼운다. 그대로 뒤에 붙이면
+    # `문서-필기.sdocx.notewise` 처럼 두 형식이 섞인 이름이 내려간다.
+    filename = with_output_suffix(_sanitize_name(payload.suggested_name, "필기-이전"), source)
     output = api._session.temp_dir / f"export-{uuid.uuid4().hex}{suffix}"
     try:
         result = await run_in_threadpool(_export_handwriting, api, payload, output)

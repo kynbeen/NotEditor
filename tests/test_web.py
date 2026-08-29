@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+from urllib.parse import unquote
 
 from fastapi.testclient import TestClient
 
@@ -113,6 +114,34 @@ class WebAppTests(unittest.TestCase):
         body = exported.json()
         self.assertFalse(body["ok"])
         self.assertIn("선택", body["error"])
+
+    def test_notewise_download_name_never_carries_the_other_format(self):
+        """화면이 `.sdocx` 가 붙은 이름을 보내와도 `.sdocx.notewise` 로 내려가면 안 된다."""
+        notewise_pdf = self.root / "notewise.pdf"
+        make_notewise_pdf(notewise_pdf, "same text")
+        source_notewise = self.root / "annotated.notewise"
+        _make_notewise(source_notewise, notewise_pdf)
+
+        status = self.client.post(
+            "/api/handwriting/source",
+            files={"file": ("annotated.notewise", source_notewise.read_bytes(), "application/zip")},
+        ).json()
+        self.assertEqual(status["source_format"], "notewise")
+        self.client.post(
+            "/api/handwriting/target",
+            files={"file": ("target.pdf", notewise_pdf.read_bytes(), "application/pdf")},
+        )
+
+        for suggested in ("target-필기.sdocx", "target-필기.notewise", "target-필기"):
+            with self.subTest(suggested=suggested):
+                exported = self.client.post(
+                    "/api/handwriting/export",
+                    json={"suggested_name": suggested, "target_mapping": None},
+                )
+                self.assertEqual(exported.status_code, 200, exported.text)
+                disposition = unquote(exported.headers["content-disposition"])
+                self.assertIn("target-필기.notewise", disposition)
+                self.assertNotIn(".sdocx", disposition)
 
     def test_upload_preview_and_export_notewise(self):
         notewise_pdf = self.root / "notewise.pdf"
@@ -254,28 +283,61 @@ class WorkspaceIsolationTests(unittest.TestCase):
             self.assertEqual(response.status_code, 400, response.text)
             self.assertEqual(self._files(self._only_workspace()), [])
 
-    def test_reset_empties_the_workspace_without_losing_the_session(self):
-        with TestClient(app) as browser:
-            self._upload(browser)
-            browser.post(
-                "/api/handwriting/target",
-                files={"file": ("target.pdf", self.pdf.read_bytes(), "application/pdf")},
-            )
-            session = next(iter(store._sessions.values()))
-            before = session.api._session.temp_dir
-            self.assertEqual(len(self._files(before)), 2)
+    def _load_both_tools(self, browser: TestClient) -> None:
+        self._upload(browser)
+        response = browser.post(
+            "/api/handwriting/target",
+            files={"file": ("target.pdf", self.pdf.read_bytes(), "application/pdf")},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
 
-            result = browser.post("/api/session/reset")
+    def test_clearing_documents_leaves_the_handwriting_tool_untouched(self):
+        with TestClient(app) as browser:
+            self._load_both_tools(browser)
+            session = next(iter(store._sessions.values()))
+            workspace = session.api._session.temp_dir
+            self.assertEqual(len(self._files(workspace)), 2)
+
+            result = browser.post("/api/documents/reset")
             self.assertEqual(result.status_code, 200, result.text)
             self.assertTrue(result.json()["ok"])
 
-            after = session.api._session.temp_dir
-            self.assertFalse(before.exists(), "옛 임시 폴더가 남아 있으면 안 됩니다.")
-            self.assertNotEqual(before, after)
-            self.assertEqual(self._files(after), [])
-            self.assertIsNone(session.api._handwriting_target)
             self.assertEqual(session.api._session.sources, [])
+            self.assertIsNotNone(session.api._handwriting_target, "필기 선택이 사라졌습니다.")
+            remaining = self._files(workspace)
+            self.assertEqual(len(remaining), 1, remaining)
+            self.assertTrue(remaining[0].startswith("uploads"))
+            self.assertIn("handwriting", remaining[0])
             self.assertEqual(len(store._sessions), 1, "초기화가 세션을 끊어서는 안 됩니다.")
+
+    def test_clearing_handwriting_leaves_the_merge_tool_untouched(self):
+        with TestClient(app) as browser:
+            self._load_both_tools(browser)
+            session = next(iter(store._sessions.values()))
+            workspace = session.api._session.temp_dir
+
+            result = browser.post("/api/handwriting/reset")
+            self.assertEqual(result.status_code, 200, result.text)
+
+            self.assertIsNone(session.api._handwriting_target)
+            self.assertEqual(len(session.api._session.sources), 1, "올린 PDF가 사라졌습니다.")
+            remaining = self._files(workspace)
+            self.assertEqual(len(remaining), 1, remaining)
+            self.assertIn("documents", remaining[0])
+
+    def test_replacing_a_handwriting_file_drops_the_previous_one(self):
+        """잘못 올린 파일을 곧바로 다시 올리면 앞엣것이 디스크에 남으면 안 된다."""
+        with TestClient(app) as browser:
+            browser.get("/")
+            for name in ("first.pdf", "second.pdf", "third.pdf"):
+                response = browser.post(
+                    "/api/handwriting/target",
+                    files={"file": (name, self.pdf.read_bytes(), "application/pdf")},
+                )
+                self.assertEqual(response.status_code, 200, response.text)
+                remaining = self._files(self._only_workspace())
+                self.assertEqual(len(remaining), 1, remaining)
+                self.assertTrue(remaining[0].endswith(name), remaining)
 
     def test_workspace_count_is_capped(self):
         with patch("noteditor.web.MAX_SESSIONS", 3):

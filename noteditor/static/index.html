@@ -26,14 +26,12 @@
         <button id="mergeTabButton" class="tool-tab active" type="button" role="tab" aria-selected="true" aria-controls="mergeWorkspace">문서 합치기</button>
         <button id="handwritingButton" class="tool-tab" type="button" role="tab" aria-selected="false" aria-controls="handwritingWorkspace">필기 옮기기</button>
       </nav>
-      <div class="top-actions-area">
-        <div id="mergeTopActions" class="top-actions">
-          <div id="selectionSummary" class="selection-summary">PDF를 추가해 시작하세요</div>
-          <button id="addPdfButton" class="button secondary" type="button" disabled>PDF 추가</button>
-          <button id="saveButton" class="button primary" type="button" disabled>PDF로 저장</button>
-        </div>
-        <button id="resetWorkspaceButton" class="text-button" type="button"
-                title="올린 파일과 미리보기를 모두 지우고 빈 작업공간으로 되돌립니다">작업공간 비우기</button>
+      <div id="mergeTopActions" class="top-actions">
+        <div id="selectionSummary" class="selection-summary">PDF를 추가해 시작하세요</div>
+        <button id="resetDocumentsButton" class="text-button" type="button" disabled
+                title="문서 합치기에 올린 PDF를 모두 지웁니다. 필기 옮기기는 그대로 둡니다">문서 비우기</button>
+        <button id="addPdfButton" class="button secondary" type="button" disabled>PDF 추가</button>
+        <button id="saveButton" class="button primary" type="button" disabled>PDF로 저장</button>
       </div>
     </header>
 
@@ -192,7 +190,8 @@
         </div>
 
         <div class="handwriting-footer">
-          <button id="resetHandwritingButton" class="text-button" type="button">선택 초기화</button>
+          <button id="resetHandwritingButton" class="text-button" type="button"
+                  title="필기 옮기기에 올린 파일을 지웁니다. 문서 합치기는 그대로 둡니다">선택 초기화</button>
           <button id="saveHandwritingButton" class="button primary" type="button" disabled>새 필기 문서로 저장</button>
         </div>
       </section>

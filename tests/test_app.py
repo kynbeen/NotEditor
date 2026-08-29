@@ -171,25 +171,39 @@ class ComposerApiTests(unittest.TestCase):
                 self.assertEqual(window.dialog_calls[-1]["save_filename"], expected)
                 self.api.reset_handwriting_transfer()
 
-    def test_reset_workspace_throws_away_files_previews_and_handwriting(self):
-        """목록만 비우면 미리보기 캐시와 임시 파일이 디스크에 그대로 남는다."""
+    def test_reset_documents_clears_previews_but_never_the_other_tool(self):
+        """도구별로 따로 비워야 한다. 한쪽을 정리하다 다른 쪽 선택이 사라지면 안 된다."""
         self.api.add_paths([str(self.source)])
         self.api.page_image(self.api._session.sources[0].id, 0, "thumbnail")
         self.api._handwriting_source = self.root / "annotated.sdocx"
         self.api._handwriting_target = self.root / "target.pdf"
-        before = self.api._session.temp_dir
-        self.assertTrue(before.exists())
+        self.assertNotEqual(self.api._session._preview_cache, {})
 
-        result = self.api.reset_workspace()
+        result = self.api.reset_documents()
 
         self.assertTrue(result["ok"], result)
-        self.assertFalse(before.exists(), "옛 임시 폴더가 남아 있으면 안 됩니다.")
-        self.assertNotEqual(before, self.api._session.temp_dir)
         self.assertEqual(self.api._session.sources, [])
         self.assertEqual(self.api._session._preview_cache, {})
+        self.assertEqual(result["cleared"], [str(self.source)])
+        # 필기 옮기기는 그대로다.
+        self.assertEqual(self.api._handwriting_source, self.root / "annotated.sdocx")
+        self.assertEqual(self.api._handwriting_target, self.root / "target.pdf")
+
+    def test_reset_handwriting_never_touches_the_merge_tool(self):
+        self.api.add_paths([str(self.source)])
+        self.api._handwriting_source = self.root / "annotated.sdocx"
+
+        result = self.api.reset_handwriting_transfer()
+
+        self.assertTrue(result["ok"], result)
         self.assertIsNone(self.api._handwriting_source)
-        self.assertIsNone(self.api._handwriting_target)
-        self.assertIsNone(self.api._handwriting_cache)
+        self.assertEqual([source.path for source in self.api._session.sources], [self.source])
+
+    def test_reset_documents_does_not_delete_the_users_own_files(self):
+        """데스크톱에서는 목록의 경로가 사용자의 원본이다. 절대 지우면 안 된다."""
+        self.api.add_paths([str(self.source)])
+        self.api.reset_documents()
+        self.assertTrue(self.source.exists())
 
     def test_handwriting_preview_returns_background_and_ink_data_uris(self):
         source = self.root / "annotated.sdocx"

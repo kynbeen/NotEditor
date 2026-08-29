@@ -14,7 +14,10 @@ const state = {
   runtime: window.location.hash === "#desktop" || !window.location.protocol.startsWith("http")
     ? "desktop"
     : "web",
-  handwriting: { source_name: null, target_name: null, ready: false, inspection: null, matchMapping: null },
+  handwriting: {
+    source_name: null, source_format: null, target_name: null,
+    ready: false, inspection: null, matchMapping: null,
+  },
   alignPreview: { index: 0, pageCount: 0, loading: false, strokeCount: null },
   alignWheelLocked: false,
 };
@@ -40,7 +43,7 @@ const refs = {
   chooseHandwritingTarget: $("#chooseHandwritingTarget"), handwritingSourceName: $("#handwritingSourceName"),
   handwritingTargetName: $("#handwritingTargetName"), handwritingCompatibility: $("#handwritingCompatibility"),
   resetHandwriting: $("#resetHandwritingButton"), saveHandwriting: $("#saveHandwritingButton"),
-  resetWorkspace: $("#resetWorkspaceButton"),
+  resetDocuments: $("#resetDocumentsButton"),
   handwritingPreview: $("#handwritingPreview"), alignStage: $("#alignStage"),
   alignBefore: $("#alignBefore"),
   alignAfter: $("#alignAfter"), alignInk: $("#alignInk"), alignBlend: $("#alignBlend"),
@@ -140,7 +143,7 @@ const webApi = {
   choose_handwriting_target: () => uploadWebFiles(refs.webTargetPdfInput, "/api/handwriting/target", "file"),
   handwriting_preview: (pageIndex, sourceIndex) => fetchJson(`/api/handwriting/preview?page_index=${pageIndex}&source_index=${sourceIndex}`),
   reset_handwriting_transfer: () => fetchJson("/api/handwriting/reset", { method: "POST" }),
-  reset_workspace: () => fetchJson("/api/session/reset", { method: "POST" }),
+  reset_documents: () => fetchJson("/api/documents/reset", { method: "POST" }),
   save_handwriting_transfer: (suggestedName, targetMapping) => downloadWebResult("/api/handwriting/export", {
     suggested_name: suggestedName, target_mapping: targetMapping,
   }),
@@ -362,6 +365,8 @@ function applyHandwritingResponse(response) {
   }
   state.handwriting = {
     source_name: response.source_name || null,
+    // 저장할 파일의 확장자를 이 값으로 정한다. 빠뜨리면 Notewise를 옮겨도 .sdocx로 나간다.
+    source_format: response.source_format || null,
     target_name: response.target_name || null,
     ready: Boolean(response.ready),
     inspection: response.inspection || null,
@@ -474,31 +479,22 @@ async function resetHandwritingTransfer() {
   }
 }
 
-async function resetWorkspace() {
-  if (!window.confirm("올린 파일과 미리보기를 모두 지우고 빈 작업공간으로 되돌립니다. 계속할까요?")) return;
-  setBusy(true, "작업공간을 비우는 중…");
+async function resetDocuments() {
+  if (!state.documents.length) return;
+  if (!window.confirm("문서 합치기에 올린 PDF를 모두 지웁니다. 필기 옮기기는 그대로 둡니다. 계속할까요?")) return;
+  setBusy(true, "올린 문서를 지우는 중…");
   try {
-    const response = await callApi("reset_workspace");
+    const response = await callApi("reset_documents");
     if (!response.ok) throw new Error(response.error);
-    // 서버가 임시 폴더째 지웠으므로 화면에 남은 것도 모두 버린다.
-    alignRequestSequence += 1;
     state.documents = [];
     state.selected.clear();
     state.order = [];
     state.orderDirty = false;
     state.active = null;
     state.thumbnailCache.clear();
-    state.handwriting = {
-      source_name: null, target_name: null, source_format: null,
-      ready: false, inspection: null, matchMapping: null,
-    };
-    state.alignPreview = { index: 0, pageCount: 0, loading: false, strokeCount: null };
-    refs.handwritingPreview.hidden = true;
-    renderHandwritingStatus();
-    renderMatchEditor();
     syncOrder();
     render();
-    toast("작업공간을 비웠습니다.", "success");
+    toast("올린 문서를 모두 지웠습니다.", "success");
   } catch (error) {
     toast(error.message, "error");
     reportClientError(error);
@@ -888,6 +884,7 @@ function renderSummary() {
       ? `${state.documents.length}개 문서에서 ${state.order.length}쪽 선택`
       : "PDF를 추가해 시작하세요");
   refs.save.disabled = !state.bridgeReady || state.order.length === 0;
+  refs.resetDocuments.disabled = !state.bridgeReady || state.documents.length === 0;
 }
 
 function render() { renderDocuments(); renderPreviewPages(); renderResult(); renderSummary(); }
@@ -989,7 +986,7 @@ refs.alignStage.addEventListener("wheel", (event) => {
 refs.chooseHandwritingSource.addEventListener("click", () => chooseHandwriting("source"));
 refs.chooseHandwritingTarget.addEventListener("click", () => chooseHandwriting("target"));
 refs.resetHandwriting.addEventListener("click", resetHandwritingTransfer);
-refs.resetWorkspace.addEventListener("click", resetWorkspace);
+refs.resetDocuments.addEventListener("click", resetDocuments);
 refs.saveHandwriting.addEventListener("click", saveHandwritingTransfer);
 refs.resetOrder.addEventListener("click", () => { state.orderDirty = false; state.order = defaultOrder(); renderResult(); });
 refs.previewStage.addEventListener("scroll", () => {

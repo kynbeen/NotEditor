@@ -105,6 +105,19 @@ class ComposerSession:
             added.append(source.as_dict())
         return added
 
+    def clear_sources(self) -> list[Path]:
+        """등록된 원본을 모두 비우고 그 경로들을 돌려준다.
+
+        파일을 지우는 일은 여기서 하지 않는다. 데스크톱에서는 이 경로가 사용자의 원본
+        파일이라 지우면 안 되고, 웹에서만 임시 폴더 안의 사본이기 때문이다.
+        """
+        with self._lock:
+            paths = [source.path for source in self._sources.values()]
+            self._sources.clear()
+            self._source_order.clear()
+            self._preview_cache.clear()
+            return paths
+
     def source_path(self, source_id: str) -> Path | None:
         """등록된 원본의 실제 경로. 목록에서 뺀 파일을 정리하려는 쪽에서 쓴다."""
         with self._lock:

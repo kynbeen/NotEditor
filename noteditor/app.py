@@ -267,19 +267,15 @@ class ComposerApi:
         except Exception as exc:
             return self._error(exc)
 
-    def reset_workspace(self) -> dict:
-        """작업 중 만든 것을 전부 버리고 빈 작업공간을 새로 연다.
+    def reset_documents(self) -> dict:
+        """문서 합치기 쪽만 비운다.
 
-        임시 폴더째 지우고 새로 만든다. 목록만 비우면 미리보기 캐시나 업로드된 파일이
-        남아, 사용자가 "지웠다"고 믿는 것이 디스크에 그대로 있게 된다.
+        도구별로 따로 비울 수 있어야 한다. 한쪽을 정리하려다 다른 쪽에서 고르던 파일까지
+        사라지면, 사용자는 하지도 않은 일을 당한다. 그래서 필기 옮기기 상태는 건드리지 않는다.
         """
         try:
-            self._handwriting_source = None
-            self._handwriting_target = None
-            self._handwriting_cache = None
-            self._session.close()
-            self._session = ComposerSession()
-            return self._ok(sources=[])
+            cleared = self._session.clear_sources()
+            return self._ok(sources=[], cleared=[str(path) for path in cleared])
         except Exception as exc:
             return self._error(exc)
 

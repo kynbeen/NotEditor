@@ -129,15 +129,24 @@ class StaticUiContractTests(unittest.TestCase):
         self.assertIn('includes("no-store")', self.service_worker)
         self.assertIn("!noStore", self.service_worker)
 
-    def test_workspace_reset_is_reachable_from_both_tools(self):
-        """도구 탭을 바꿔도 남아 있어야 한다. 문서 합치기 전용 버튼 묶음 밖에 둔다."""
-        self.assertIn('id="resetWorkspaceButton"', self.html)
-        self.assertIn("top-actions-area", self.html)
-        self.assertIn(".top-actions-area", self.css)
-        self.assertIn('refs.resetWorkspace.addEventListener("click", resetWorkspace)', self.js)
-        self.assertIn('"/api/session/reset"', self.js)
+    def test_each_tool_clears_only_its_own_files(self):
+        """초기화는 도구별이다. 한쪽 버튼이 다른 쪽 선택까지 지우면 안 된다."""
+        self.assertIn('id="resetDocumentsButton"', self.html)
+        self.assertIn('id="resetHandwritingButton"', self.html)
+        self.assertIn('refs.resetDocuments.addEventListener("click", resetDocuments)', self.js)
+        self.assertIn('refs.resetHandwriting.addEventListener("click", resetHandwritingTransfer)', self.js)
+        self.assertIn('"/api/documents/reset"', self.js)
+        self.assertIn('"/api/handwriting/reset"', self.js)
+        # 전체를 한 번에 지우는 버튼은 두지 않는다.
+        self.assertNotIn("resetWorkspaceButton", self.html)
+        self.assertNotIn("/api/session/reset", self.js)
         # 되돌릴 수 없는 동작이므로 확인을 한 번 받는다.
         self.assertIn("window.confirm", self.js)
+
+    def test_saved_handwriting_name_follows_the_source_format(self):
+        """확장자를 파일명에서 추측하지 않고 서버가 알려준 형식으로 정한다."""
+        self.assertIn("source_format: response.source_format", self.js)
+        self.assertIn('state.handwriting.source_format === "notewise"', self.js)
 
 
 if __name__ == "__main__":
