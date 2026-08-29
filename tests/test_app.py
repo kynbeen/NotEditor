@@ -184,7 +184,9 @@ class ComposerApiTests(unittest.TestCase):
         self.assertTrue(result["ok"], result)
         self.assertEqual(self.api._session.sources, [])
         self.assertEqual(self.api._session._preview_cache, {})
-        self.assertEqual(result["cleared"], [str(self.source)])
+        # 임시 폴더가 8.3 단축 경로로 잡히는 환경이 있어(예: CI 러너의 RUNNER~1),
+        # 앱이 정규화한 경로와 맞춰 본다.
+        self.assertEqual(result["cleared"], [str(self.source.resolve())])
         # 필기 옮기기는 그대로다.
         self.assertEqual(self.api._handwriting_source, self.root / "annotated.sdocx")
         self.assertEqual(self.api._handwriting_target, self.root / "target.pdf")
@@ -197,7 +199,9 @@ class ComposerApiTests(unittest.TestCase):
 
         self.assertTrue(result["ok"], result)
         self.assertIsNone(self.api._handwriting_source)
-        self.assertEqual([source.path for source in self.api._session.sources], [self.source])
+        self.assertEqual(
+            [source.path for source in self.api._session.sources], [self.source.resolve()]
+        )
 
     def test_reset_documents_does_not_delete_the_users_own_files(self):
         """데스크톱에서는 목록의 경로가 사용자의 원본이다. 절대 지우면 안 된다."""
