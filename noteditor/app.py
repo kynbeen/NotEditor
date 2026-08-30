@@ -416,7 +416,8 @@ class ComposerApi:
                 )
                 if plan.unconfirmed:
                     result.setdefault("warnings", []).append(
-                        f"확인하지 않은 쪽 대응 {len(plan.unconfirmed)}개를 사용자 승인으로 저장했습니다."
+                        f"확인하지 않은 쪽 대응 {len(plan.unconfirmed)}개를 사용자 승인으로 저장했습니다: "
+                        + ", ".join(plan.unconfirmed_labels)
                     )
             elif page_plan is not None and getattr(inspection, "mode", None) == "rebuild":
                 from .page_match import match_from_target_mapping

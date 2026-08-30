@@ -434,7 +434,8 @@ def _export_handwriting(api: ComposerApi, payload: HandwritingExportRequest, out
         )
         if plan.unconfirmed:
             result.setdefault("warnings", []).append(
-                f"확인하지 않은 쪽 대응 {len(plan.unconfirmed)}개를 사용자 승인으로 저장했습니다."
+                f"확인하지 않은 쪽 대응 {len(plan.unconfirmed)}개를 사용자 승인으로 저장했습니다: "
+                + ", ".join(plan.unconfirmed_labels)
             )
         return result
     if payload.target_mapping is not None and inspection.mode == "rebuild":

@@ -130,10 +130,13 @@ class StaticUiContractTests(unittest.TestCase):
         self.assertIn('id="handwritingReview"', self.html)
         self.assertIn("function shiftedTargetPlan", self.js)
         self.assertIn('target.addEventListener("dragstart"', self.js)
-        self.assertIn("기존 대응 관계가 달라집니다", self.js)
+        self.assertIn("개 대응이 달라집니다", self.js)
         self.assertIn("변경된 행은 다시 확인해야 합니다", self.js)
         self.assertIn('className = "review-confirm"', self.js)
         self.assertIn("확인하지 않은 쪽 대응", self.js)
+        self.assertIn("unconfirmedPages", self.js)
+        for summary in ("전체", "자동 연결", "새 전용", "옛 전용", "확인 필요"):
+            self.assertIn(summary, self.js)
         self.assertIn("page_plan: pagePlan", self.js)
         self.assertIn("allow_unconfirmed: allowUnconfirmed", self.js)
 

@@ -351,6 +351,7 @@ function clonePagePlan(plan) {
     target_index: slot.target_index,
     confirmed: Boolean(slot.confirmed),
     manual: Boolean(slot.manual),
+    attention: Boolean(slot.needs_confirmation || slot.kind !== "matched"),
   }));
 }
 
@@ -358,22 +359,35 @@ function reviewBadge(slot) {
   if (slot.source_index === null) return "새 쪽";
   if (slot.target_index === null) return "원본에만 있음";
   if (slot.manual) return "수동 정렬";
+  if (slot.attention && slot.confirmed) return "확인 완료";
   return slot.confirmed ? "자동 매칭" : "확인 필요";
 }
 
 function renderReviewSummary() {
   const plan = state.handwriting.plan;
   const unconfirmed = plan.filter((slot) => !slot.confirmed).length;
-  const matched = plan.filter((slot) => slot.source_index !== null && slot.target_index !== null).length;
-  refs.handwritingReviewSummary.textContent = unconfirmed
-    ? `${matched}쪽 연결 · ${unconfirmed}개 확인 필요`
-    : `${matched}쪽 연결 · 모두 확인됨`;
+  const automatic = plan.filter((slot) => (
+    slot.source_index !== null && slot.target_index !== null && !slot.manual
+  )).length;
+  const targetOnly = plan.filter((slot) => slot.source_index === null).length;
+  const sourceOnly = plan.filter((slot) => slot.target_index === null).length;
+  refs.handwritingReviewSummary.textContent = [
+    `전체 ${plan.length}행`,
+    `자동 연결 ${automatic}`,
+    `새 전용 ${targetOnly}`,
+    `옛 전용 ${sourceOnly}`,
+    unconfirmed ? `확인 필요 ${unconfirmed}` : "모두 확인됨",
+  ].join(" · ");
   refs.saveHandwriting.disabled = !state.bridgeReady || !state.handwriting.ready;
 }
 
 function setReviewRowState(row, slot) {
   row.classList.toggle("needs-confirmation", !slot.confirmed);
   row.classList.toggle("confirmed", slot.confirmed);
+  row.classList.toggle(
+    "special-row",
+    slot.attention || slot.manual || slot.source_index === null || slot.target_index === null,
+  );
   const button = row.querySelector(".review-confirm");
   if (!button) return;
   button.textContent = slot.confirmed ? "확인됨" : "이 대응 확인";
@@ -428,6 +442,7 @@ function shiftedTargetPlan(from, to) {
       target_index: target,
       confirmed: same ? same.confirmed : false,
       manual: same ? same.manual : true,
+      attention: same ? same.attention : true,
     };
   }).filter((slot) => slot.source_index !== null || slot.target_index !== null);
 }
@@ -438,12 +453,16 @@ function moveReviewTarget(from, to) {
   if (!before[from] || before[from].target_index === null) return;
   const next = shiftedTargetPlan(from, Math.max(0, Math.min(to, before.length - 1)));
   const changed = describeChangedPages(before, next);
+  const relationshipCount = next.filter((slot, index) => (
+    before[index]?.source_index !== slot.source_index
+    || before[index]?.target_index !== slot.target_index
+  )).length;
   const details = [
     changed.targetPages.length ? `새 PDF ${changed.targetPages.join(", ")}쪽` : "",
     changed.sourcePages.length ? `원본 ${changed.sourcePages.join(", ")}쪽` : "",
   ].filter(Boolean).join("과 ");
   if (details && !window.confirm(
-    `${details}의 기존 대응 관계가 달라집니다. 변경된 행은 다시 확인해야 합니다. 계속할까요?`,
+    `${relationshipCount}개 대응이 달라집니다 (${details}). 변경된 행은 다시 확인해야 합니다. 계속할까요?`,
   )) return;
   state.handwriting.plan = next;
   renderPageReview();
@@ -742,9 +761,14 @@ async function saveHandwritingTransfer() {
   const base = (state.handwriting.target_name || "새-문서.pdf").replace(/\.pdf$/i, "");
   const outputExtension = state.handwriting.source_format === "notewise" ? ".notewise" : ".sdocx";
   const requestedName = withoutKnownExtension(refs.handwritingOutputName.value.trim()) || `${base}-필기`;
-  const unconfirmed = state.handwriting.plan.filter((slot) => !slot.confirmed).length;
+  const unconfirmedSlots = state.handwriting.plan.filter((slot) => !slot.confirmed);
+  const unconfirmed = unconfirmedSlots.length;
+  const unconfirmedPages = unconfirmedSlots.map((slot) => [
+    slot.source_index === null ? "" : `원본 ${slot.source_index + 1}쪽`,
+    slot.target_index === null ? "" : `새 PDF ${slot.target_index + 1}쪽`,
+  ].filter(Boolean).join(" ↔ ")).join(", ");
   if (unconfirmed && !window.confirm(
-    `확인하지 않은 쪽 대응이 ${unconfirmed}개 남아 있습니다. 그대로 필기를 옮길까요?`,
+    `확인하지 않은 쪽 대응이 ${unconfirmed}개 남아 있습니다 (${unconfirmedPages}). 그대로 필기를 옮길까요?`,
   )) return;
   setBusy(true, "필기와 형광펜을 새 PDF로 옮기는 중…");
   try {

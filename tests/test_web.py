@@ -181,7 +181,7 @@ class WebAppTests(unittest.TestCase):
             [(0, 1), (1, 0)],
         )
         self.assertEqual(result["warnings"], [
-            "확인하지 않은 쪽 대응 1개를 사용자 승인으로 저장했습니다."
+            "확인하지 않은 쪽 대응 1개를 사용자 승인으로 저장했습니다: 원본 2쪽 ↔ 새 PDF 1쪽"
         ])
 
     def test_analysis_failure_keeps_web_uploads_and_retry_uses_the_same_files(self):

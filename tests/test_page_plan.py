@@ -58,6 +58,7 @@ class PagePlanTests(unittest.TestCase):
         plan = PagePlan.from_payload(3, 3, payload, automatic_match())
 
         self.assertEqual(plan.unconfirmed, (2,))
+        self.assertEqual(plan.unconfirmed_labels, ("원본 3쪽",))
         self.assertTrue(plan.slots[1].manual)
         self.assertTrue(plan.slots[3].manual)
 

@@ -160,6 +160,19 @@ class PagePlan:
     def unconfirmed(self) -> tuple[int, ...]:
         return tuple(index for index, slot in enumerate(self.slots) if slot.needs_confirmation)
 
+    @property
+    def unconfirmed_labels(self) -> tuple[str, ...]:
+        labels = []
+        for index in self.unconfirmed:
+            slot = self.slots[index]
+            sides = []
+            if slot.source_index is not None:
+                sides.append(f"원본 {slot.source_index + 1}쪽")
+            if slot.target_index is not None:
+                sides.append(f"새 PDF {slot.target_index + 1}쪽")
+            labels.append(" ↔ ".join(sides))
+        return tuple(labels)
+
     def as_dict(self) -> dict[str, Any]:
         return {
             "source_count": self.source_count,
