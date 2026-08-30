@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 import tempfile
+import time
 import types
 import unittest
 from pathlib import Path
@@ -51,6 +52,15 @@ class ComposerApiTests(unittest.TestCase):
     def tearDown(self):
         self.api._close()
         self.folder.cleanup()
+
+    def wait_for_handwriting_analysis(self) -> dict:
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            status = self.api.handwriting_status()
+            if status["analysis"]["state"] != "running":
+                return status
+            time.sleep(0.01)
+        self.fail("필기 분석이 끝나지 않았습니다.")
 
     def test_choose_parse_and_save_contract(self):
         output = self.root / "saved.pdf"
@@ -132,6 +142,7 @@ class ComposerApiTests(unittest.TestCase):
                 }) as transfer:
             selected_source = self.api.choose_handwriting_source()
             selected_target = self.api.choose_handwriting_target()
+            selected_target = self.wait_for_handwriting_analysis()
             saved = self.api.save_handwriting_transfer("target-필기.sdocx")
 
         self.assertTrue(selected_source["ok"])
@@ -140,6 +151,51 @@ class ComposerApiTests(unittest.TestCase):
         self.assertTrue(saved["ok"])
         self.assertFalse(saved["cancelled"])
         transfer.assert_called_once_with(source.resolve(), target.resolve(), output.resolve())
+
+    def test_failed_analysis_keeps_both_files_and_can_retry_without_upload(self):
+        source = self.root / "annotated.sdocx"
+        target = self.root / "target.pdf"
+        source.write_bytes(b"zip")
+        target.write_bytes(b"%PDF")
+        inspection = SimpleNamespace(as_dict=lambda: {"page_count": 2})
+        attempts = 0
+        stages: list[str] = []
+
+        def inspect(_source, _target, *, progress):
+            nonlocal attempts
+            attempts += 1
+            progress("structure")
+            stages.append("structure")
+            progress("matching")
+            stages.append("matching")
+            if attempts == 1:
+                raise RuntimeError("합성 분석 실패")
+            progress("alignment")
+            stages.append("alignment")
+            progress("preview")
+            stages.append("preview")
+            return inspection
+
+        with patch("noteditor.app.inspect_transfer", side_effect=inspect):
+            self.api._set_handwriting_path("source", source)
+            self.api._set_handwriting_path("target", target)
+            failed = self.wait_for_handwriting_analysis()
+            self.assertEqual(failed["analysis"]["state"], "error")
+            self.assertEqual(failed["source_name"], source.name)
+            self.assertEqual(failed["target_name"], target.name)
+
+            retried = self.api.retry_handwriting_analysis()
+            self.assertTrue(retried["ok"])
+            ready = self.wait_for_handwriting_analysis()
+
+        self.assertTrue(ready["ready"], ready)
+        self.assertEqual(attempts, 2)
+        self.assertEqual(
+            stages,
+            ["structure", "matching", "structure", "matching", "alignment", "preview"],
+        )
+        self.assertTrue(source.exists())
+        self.assertTrue(target.exists())
 
     def test_save_dialog_keeps_dots_in_the_name_and_follows_the_source_format(self):
         """이름 안의 마침표를 확장자로 오해해 뒷부분을 잘라내면 안 된다."""
@@ -165,6 +221,7 @@ class ComposerApiTests(unittest.TestCase):
                         }):
                     self.api.choose_handwriting_source()
                     self.api.choose_handwriting_target()
+                    self.wait_for_handwriting_analysis()
                     saved = self.api.save_handwriting_transfer(suggested)
 
                 self.assertTrue(saved["ok"], saved)

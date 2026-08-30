@@ -363,12 +363,13 @@ async def _set_handwriting_upload(request: Request, upload: UploadFile, kind: st
     else:
         suffix = ".pdf"
     path = await _save_upload(api, upload, suffix, "handwriting")
-    attribute = "_handwriting_source" if kind == "source" else "_handwriting_target"
-    previous = getattr(api, attribute)
-    setattr(api, attribute, path)
-    api._handwriting_cache = None
+    try:
+        previous = api._set_handwriting_path(kind, path)
+    except Exception as exc:
+        _remove_upload(api, path)
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
     _remove_upload(api, previous)
-    result = await run_in_threadpool(api._handwriting_status)
+    result = api._handwriting_status()
     return _json_result({"ok": True, "cancelled": False, **result})
 
 
@@ -380,6 +381,16 @@ async def upload_handwriting_source(request: Request, file: UploadFile = File(..
 @app.post("/api/handwriting/target")
 async def upload_handwriting_target(request: Request, file: UploadFile = File(...)):
     return await _set_handwriting_upload(request, file, "target")
+
+
+@app.get("/api/handwriting/status")
+async def handwriting_status(request: Request):
+    return _json_result(_api(request).handwriting_status())
+
+
+@app.post("/api/handwriting/retry")
+async def retry_handwriting_analysis(request: Request):
+    return _json_result(_api(request).retry_handwriting_analysis())
 
 
 @app.get("/api/handwriting/preview")

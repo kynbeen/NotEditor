@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 
 from .alignment import Alignment, estimate_alignment, place_page
 from .page_match import MatchResult, match_pages
@@ -143,6 +143,7 @@ def plan_transfer(
     *,
     source_label: str = "내장 PDF",
     error: type[Exception] = HandwritingTransferError,
+    progress: Callable[[str], None] | None = None,
 ) -> tuple[str, Alignment | None, int, MatchResult]:
     """그대로 넣을지(``exact``), 본문 기준으로 다시 앉힐지(``aligned``) 정한다."""
     source_document = open_pdf(embedded_pdf, source_label, error=error)
@@ -154,6 +155,8 @@ def plan_transfer(
     try:
         source_geometry = geometry(source_document)
         target_geometry = geometry(target_document)
+        if progress:
+            progress("matching")
         match = match_pages(source_document, target_document)
         matched_indices = [
             (pair.source_index, pair.target_index) for pair in match.matched_pairs
@@ -164,7 +167,11 @@ def plan_transfer(
             and source_geometry[source][2] == target_geometry[target_index][2]
             for source, target_index in matched_indices
         )
+        if progress:
+            progress("alignment")
         alignment = estimate_alignment(source_document, target_document, matched_indices)
+        if progress:
+            progress("preview")
     finally:
         source_document.close()
         target_document.close()

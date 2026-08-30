@@ -15,6 +15,7 @@ import os
 import secrets
 import struct
 import tempfile
+from collections.abc import Callable
 from contextlib import contextmanager
 from io import BytesIO
 from pathlib import Path, PurePosixPath
@@ -216,7 +217,10 @@ def _page_stroke_count(payload: bytes) -> int:
 
 
 def inspect_notewise_transfer(
-    source_notewise: str | Path, target_pdf: str | Path
+    source_notewise: str | Path,
+    target_pdf: str | Path,
+    *,
+    progress: Callable[[str], None] | None = None,
 ) -> TransferInspection:
     source = Path(source_notewise).expanduser().resolve()
     target = Path(target_pdf).expanduser().resolve()
@@ -225,11 +229,17 @@ def inspect_notewise_transfer(
     if target.suffix.lower() != ".pdf" or not target.is_file():
         raise NotewiseTransferError("새 배경으로 사용할 PDF를 선택하세요.")
 
+    if progress:
+        progress("structure")
     with _archive_context(source) as (archive, _members, pdf_name, page_names):
         embedded_pdf = archive.read(pdf_name)
         stroke_counts = [_page_stroke_count(archive.read(name)) for name in page_names]
     mode, alignment, page_count, match = plan_transfer(
-        embedded_pdf, target, source_label="Notewise 내장 PDF", error=NotewiseTransferError
+        embedded_pdf,
+        target,
+        source_label="Notewise 내장 PDF",
+        error=NotewiseTransferError,
+        progress=progress,
     )
     return TransferInspection(
         source_name=source.name,

@@ -32,6 +32,7 @@ button, input { font: inherit; }
 button { color: inherit; }
 button:focus-visible, input:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 2px; }
 [hidden] { display: none !important; }
+.sr-only { position: absolute !important; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
 
 .topbar {
   height: 92px;
@@ -75,6 +76,13 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent-2); 
 .button.primary:hover:not(:disabled) { box-shadow: 0 11px 30px rgba(108, 87, 232, .38); }
 .button.secondary { background: rgba(255,255,255,.055); border-color: var(--line-strong); }
 .button.secondary:hover:not(:disabled) { background: rgba(255,255,255,.085); }
+.button.utility { min-height: 36px; padding-inline: 12px; color: #d7ddec; border-color: var(--line-strong); background: rgba(255,255,255,.045); font-size: 11px; }
+.button.utility:hover:not(:disabled) { color: #fff; border-color: rgba(169,156,255,.5); background: rgba(128,108,255,.11); }
+.output-name-field { min-width: 0; height: 40px; display: flex; align-items: center; overflow: hidden; border: 1px solid var(--line-strong); border-radius: 11px; background: rgba(4,7,15,.55); }
+.output-name-field:focus-within { border-color: var(--accent-2); box-shadow: 0 0 0 2px rgba(169,156,255,.14); }
+.output-name-field input { width: 190px; min-width: 0; height: 100%; padding: 0 4px 0 11px; border: 0; outline: 0; color: var(--text); background: transparent; font-size: 11px; }
+.output-name-field > span:not(.sr-only) { padding-right: 10px; color: var(--muted); font-size: 10px; }
+.output-name-field.compact input { width: 132px; }
 .workspace {
   height: calc(100vh - 92px); min-height: 588px;
   display: grid; grid-template-columns: minmax(310px, 1.05fr) minmax(430px, 1.48fr) minmax(310px, .95fr);
@@ -201,6 +209,9 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent-2); 
 .compatibility-icon { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 50%; color: var(--muted); background: rgba(255,255,255,.055); font-size: 12px; font-weight: 850; }
 .compatibility-card strong { display: block; font-size: 12px; }
 .compatibility-card p { margin: 5px 0 0; color: var(--muted); font-size: 10px; line-height: 1.5; white-space: pre-line; }
+.compatibility-icon .loader.compact { width: 19px; height: 19px; }
+.analysis-retry { margin-top: 10px; color: #ffd7df; border-color: rgba(255,113,139,.34); background: rgba(255,113,139,.08); }
+.analysis-retry[hidden] { display: none; }
 .compatibility-card.ready { border-color: rgba(86,211,165,.32); background: rgba(86,211,165,.065); }
 .compatibility-card.ready .compatibility-icon { color: #08261c; background: var(--success); }
 .compatibility-card.error { border-color: rgba(255,113,139,.38); background: rgba(255,113,139,.07); }
@@ -251,11 +262,14 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent-2); 
 .handwriting-notice strong { font-size: 10px; }
 .handwriting-notice span { color: var(--muted); font-size: 10px; line-height: 1.55; }
 .handwriting-footer { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--line); }
+.handwriting-save-actions { min-width: 0; display: flex; align-items: center; gap: 10px; }
 
 @media (max-width: 760px) {
   .handwriting-shell { padding: 20px; }
   .handwriting-flow { grid-template-columns: 1fr; }
   .transfer-arrow { transform: rotate(90deg); }
+  .handwriting-footer, .handwriting-save-actions { align-items: stretch; flex-direction: column; }
+  .output-name-field input { width: 100%; }
 }
 
 @keyframes spin { to { transform: rotate(360deg); } }

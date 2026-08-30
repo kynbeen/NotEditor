@@ -5,6 +5,8 @@ const state = {
   selected: new Set(),
   order: [],
   orderDirty: false,
+  mergeOutputNameDirty: false,
+  handwritingOutputNameDirty: false,
   active: null,
   thumbnailCache: new Map(),
   thumbnailCacheBytes: 0,
@@ -21,6 +23,7 @@ const state = {
   handwriting: {
     source_name: null, source_format: null, target_name: null,
     ready: false, inspection: null, matchMapping: null,
+    analysis: { state: "waiting", stage: "waiting", message: "두 파일을 선택해 주세요.", error: null },
   },
   alignPreview: { index: 0, pageCount: 0, loading: false, strokeCount: null },
   alignWheelLocked: false,
@@ -28,10 +31,12 @@ const state = {
 
 let alignRequestSequence = 0;
 let alignScrubTimer = 0;
+let handwritingPollTimer = 0;
 
 const $ = (selector) => document.querySelector(selector);
 const refs = {
   add: $("#addPdfButton"), emptyAdd: $("#emptyAddButton"), save: $("#saveButton"),
+  mergeOutputName: $("#mergeOutputName"),
   resetOrder: $("#resetOrderButton"), sourceEmpty: $("#sourceEmpty"),
   documentList: $("#documentList"), documentCount: $("#documentCount"),
   resultEmpty: $("#resultEmpty"), resultList: $("#resultList"), pageCount: $("#pageCount"),
@@ -46,7 +51,9 @@ const refs = {
   mergeTopActions: $("#mergeTopActions"), chooseHandwritingSource: $("#chooseHandwritingSource"),
   chooseHandwritingTarget: $("#chooseHandwritingTarget"), handwritingSourceName: $("#handwritingSourceName"),
   handwritingTargetName: $("#handwritingTargetName"), handwritingCompatibility: $("#handwritingCompatibility"),
+  retryHandwriting: $("#retryHandwritingButton"),
   resetHandwriting: $("#resetHandwritingButton"), saveHandwriting: $("#saveHandwritingButton"),
+  handwritingOutputName: $("#handwritingOutputName"), handwritingOutputSuffix: $("#handwritingOutputSuffix"),
   resetDocuments: $("#resetDocumentsButton"),
   handwritingPreview: $("#handwritingPreview"), alignStage: $("#alignStage"),
   alignBefore: $("#alignBefore"),
@@ -113,12 +120,37 @@ function pickWebFiles(input) {
   });
 }
 
-async function uploadWebFiles(input, endpoint, field = "files") {
+function uploadFormJson(endpoint, form, progressLabel) {
+  return new Promise((resolve) => {
+    const request = new XMLHttpRequest();
+    request.open("POST", endpoint);
+    request.upload.addEventListener("progress", (event) => {
+      if (!event.lengthComputable || !progressLabel) return;
+      const percent = Math.max(0, Math.min(100, Math.round((event.loaded / event.total) * 100)));
+      refs.busyText.textContent = `${progressLabel} ${percent}%`;
+    });
+    request.addEventListener("load", () => {
+      let payload;
+      try { payload = JSON.parse(request.responseText); }
+      catch (_error) { payload = { ok: false, error: `HTTP ${request.status}` }; }
+      if (!payload.error && payload.detail) payload.error = payload.detail;
+      if (request.status < 200 || request.status >= 300) payload.ok = false;
+      payload.http_status = request.status;
+      resolve(payload);
+    });
+    request.addEventListener("error", () => resolve({
+      ok: false, error: "파일 업로드 연결이 끊겼습니다.", http_status: 0,
+    }));
+    request.send(form);
+  });
+}
+
+async function uploadWebFiles(input, endpoint, field = "files", progressLabel = "파일 업로드 중…") {
   const files = await pickWebFiles(input);
   if (!files.length) return { ok: true, cancelled: true, added: [], sources: state.documents };
   const form = new FormData();
   files.forEach((file) => form.append(field, file, file.name));
-  return fetchJson(endpoint, { method: "POST", body: form });
+  return uploadFormJson(endpoint, form, progressLabel);
 }
 
 async function downloadWebResult(endpoint, payload) {
@@ -160,15 +192,17 @@ const webApi = {
   log_client_error: (message) => fetchJson("/api/client-error", {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ message }),
   }),
-  choose_pdfs: () => uploadWebFiles(refs.webPdfInput, "/api/documents"),
+  choose_pdfs: () => uploadWebFiles(refs.webPdfInput, "/api/documents", "files", "PDF 업로드 중…"),
   remove_document: (documentId) => fetchJson(`/api/documents/${encodeURIComponent(documentId)}`, { method: "DELETE" }),
   page_image: (documentId, pageIndex, kind) => fetchJson(`/api/documents/${encodeURIComponent(documentId)}/pages/${pageIndex}?kind=${encodeURIComponent(kind)}`),
   parse_range: (value, pageCount) => fetchJson("/api/ranges", {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ value, page_count: pageCount }),
   }),
   save_result: (order, suggestedName) => downloadWebResult("/api/documents/export", { order, suggested_name: suggestedName }),
-  choose_handwriting_source: () => uploadWebFiles(refs.webHandwritingInput, "/api/handwriting/source", "file"),
-  choose_handwriting_target: () => uploadWebFiles(refs.webTargetPdfInput, "/api/handwriting/target", "file"),
+  choose_handwriting_source: () => uploadWebFiles(refs.webHandwritingInput, "/api/handwriting/source", "file", "필기 파일 업로드 중…"),
+  choose_handwriting_target: () => uploadWebFiles(refs.webTargetPdfInput, "/api/handwriting/target", "file", "대상 PDF 업로드 중…"),
+  handwriting_status: () => fetchJson("/api/handwriting/status"),
+  retry_handwriting_analysis: () => fetchJson("/api/handwriting/retry", { method: "POST" }),
   handwriting_preview: (pageIndex, sourceIndex) => fetchJson(`/api/handwriting/preview?page_index=${pageIndex}&source_index=${sourceIndex}`),
   reset_handwriting_transfer: () => fetchJson("/api/handwriting/reset", { method: "POST" }),
   reset_documents: () => fetchJson("/api/documents/reset", { method: "POST" }),
@@ -257,9 +291,11 @@ function showTool(tool) {
 
 function renderHandwritingStatus(error = "") {
   const status = state.handwriting;
+  const analysis = status.analysis || {};
   refs.handwritingSourceName.textContent = status.source_name || ".sdocx 또는 .notewise 파일 선택";
   refs.handwritingTargetName.textContent = status.target_name || ".pdf 파일 선택";
   refs.saveHandwriting.disabled = !state.bridgeReady || !status.ready;
+  refs.retryHandwriting.hidden = analysis.state !== "error";
   const card = refs.handwritingCompatibility;
   card.classList.remove("waiting", "ready", "error");
   const icon = card.querySelector(".compatibility-icon");
@@ -268,8 +304,22 @@ function renderHandwritingStatus(error = "") {
   if (error) {
     card.classList.add("error");
     icon.textContent = "!";
-    heading.textContent = "두 문서의 필기 좌표를 맞출 수 없습니다.";
+    heading.textContent = "필기 문서를 분석하지 못했습니다.";
     detail.textContent = error;
+    return;
+  }
+  if (analysis.state === "error") {
+    card.classList.add("error");
+    icon.textContent = "!";
+    heading.textContent = "필기 문서를 분석하지 못했습니다.";
+    detail.textContent = `${analysis.error || analysis.message}\n올린 파일은 유지됩니다. 분석을 다시 시도할 수 있습니다.`;
+    return;
+  }
+  if (analysis.state === "running") {
+    card.classList.add("waiting");
+    icon.innerHTML = '<span class="loader compact"></span>';
+    heading.textContent = analysis.message || "필기 문서를 분석하는 중…";
+    detail.textContent = "업로드는 끝났습니다. 이 화면을 계속 사용할 수 있으며 분석이 끝나면 자동으로 갱신됩니다.";
     return;
   }
   if (status.ready && status.inspection) {
@@ -386,11 +436,40 @@ function alignmentWarnings(fit) {
   return warnings;
 }
 
+function withoutKnownExtension(name) {
+  return String(name || "").replace(/\.(pdf|sdocx|notewise)$/i, "");
+}
+
+function updateHandwritingOutputName(force = false) {
+  const extension = state.handwriting.source_format === "notewise" ? ".notewise" : ".sdocx";
+  refs.handwritingOutputSuffix.textContent = extension;
+  if (force || !state.handwritingOutputNameDirty) {
+    const base = withoutKnownExtension(state.handwriting.target_name || "새-문서");
+    refs.handwritingOutputName.value = `${base}-필기`;
+    state.handwritingOutputNameDirty = false;
+  }
+}
+
+function updateMergeOutputName(force = false) {
+  if (!state.documents.length) {
+    if (force || !state.mergeOutputNameDirty) refs.mergeOutputName.value = "";
+    return;
+  }
+  if (force || !state.mergeOutputNameDirty) {
+    refs.mergeOutputName.value = `${withoutKnownExtension(state.documents[0].name)}-편집본`;
+    state.mergeOutputNameDirty = false;
+  }
+}
+
 function applyHandwritingResponse(response) {
   if (!response.ok) {
     renderHandwritingStatus(response.error || "파일을 확인할 수 없습니다.");
     return false;
   }
+  const previous = state.handwriting;
+  const selectionChanged = previous.source_name !== (response.source_name || null)
+    || previous.target_name !== (response.target_name || null);
+  const becameReady = !previous.ready && Boolean(response.ready);
   state.handwriting = {
     source_name: response.source_name || null,
     // 저장할 파일의 확장자를 이 값으로 정한다. 빠뜨리면 Notewise를 옮겨도 .sdocx로 나간다.
@@ -398,20 +477,58 @@ function applyHandwritingResponse(response) {
     target_name: response.target_name || null,
     ready: Boolean(response.ready),
     inspection: response.inspection || null,
-    matchMapping: null,
+    matchMapping: selectionChanged ? null : previous.matchMapping,
+    analysis: response.analysis || {
+      state: response.ready ? "ready" : "waiting",
+      stage: response.ready ? "ready" : "waiting",
+      message: "",
+      error: null,
+    },
   };
+  if (selectionChanged) updateHandwritingOutputName(!state.handwritingOutputNameDirty);
+  else updateHandwritingOutputName(false);
   renderHandwritingStatus();
   renderMatchEditor();
   alignRequestSequence += 1;
-  state.alignPreview = {
-    index: 0,
-    pageCount: state.handwriting.inspection?.page_count || 0,
-    loading: false,
-    strokeCount: null,
-  };
-  if (state.handwriting.ready) loadAlignPreview(0);
-  else refs.handwritingPreview.hidden = true;
+  if (selectionChanged || becameReady) {
+    state.alignPreview = {
+      index: 0,
+      pageCount: state.handwriting.inspection?.page_count || 0,
+      loading: false,
+      strokeCount: null,
+    };
+  }
+  if (state.handwriting.ready && (selectionChanged || becameReady)) loadAlignPreview(0);
+  else if (!state.handwriting.ready) refs.handwritingPreview.hidden = true;
+  scheduleHandwritingPoll();
   return true;
+}
+
+function scheduleHandwritingPoll() {
+  clearTimeout(handwritingPollTimer);
+  if (state.handwriting.analysis?.state !== "running") return;
+  handwritingPollTimer = setTimeout(async () => {
+    try {
+      const response = await callApi("handwriting_status");
+      applyHandwritingResponse(response);
+    } catch (error) {
+      renderHandwritingStatus(error.message);
+      reportClientError(error);
+    }
+  }, 450);
+}
+
+async function retryHandwritingAnalysis() {
+  refs.retryHandwriting.disabled = true;
+  try {
+    const response = await callApi("retry_handwriting_analysis");
+    if (!applyHandwritingResponse(response)) toast(response.error, "error");
+  } catch (error) {
+    renderHandwritingStatus(error.message);
+    reportClientError(error);
+  } finally {
+    refs.retryHandwriting.disabled = false;
+  }
 }
 
 function renderAlignPreviewState() {
@@ -486,7 +603,7 @@ function jumpToAlignPage() {
 }
 
 async function chooseHandwriting(kind) {
-  setBusy(true, kind === "source" ? "필기 문서를 확인하는 중…" : "대상 PDF를 확인하는 중…");
+  setBusy(true, kind === "source" ? "필기 파일 업로드 중…" : "대상 PDF 업로드 중…");
   try {
     const method = kind === "source" ? "choose_handwriting_source" : "choose_handwriting_target";
     const response = await callApi(method);
@@ -500,6 +617,7 @@ async function chooseHandwriting(kind) {
 async function resetHandwritingTransfer() {
   try {
     const response = await callApi("reset_handwriting_transfer");
+    state.handwritingOutputNameDirty = false;
     if (!applyHandwritingResponse(response)) toast(response.error, "error");
   } catch (error) {
     toast(error.message, "error");
@@ -518,9 +636,11 @@ async function resetDocuments() {
     state.selected.clear();
     state.order = [];
     state.orderDirty = false;
+    state.mergeOutputNameDirty = false;
     state.active = null;
     state.thumbnailCache.clear();
     state.thumbnailCacheBytes = 0;
+    updateMergeOutputName(true);
     syncOrder();
     render();
     toast("올린 문서를 모두 지웠습니다.", "success");
@@ -534,10 +654,11 @@ async function saveHandwritingTransfer() {
   if (!state.handwriting.ready) return;
   const base = (state.handwriting.target_name || "새-문서.pdf").replace(/\.pdf$/i, "");
   const outputExtension = state.handwriting.source_format === "notewise" ? ".notewise" : ".sdocx";
+  const requestedName = withoutKnownExtension(refs.handwritingOutputName.value.trim()) || `${base}-필기`;
   setBusy(true, "필기와 형광펜을 새 PDF로 옮기는 중…");
   try {
     const response = await callApi("save_handwriting_transfer",
-      `${base}-필기${outputExtension}`,
+      `${requestedName}${outputExtension}`,
       state.handwriting.inspection?.mode === "rebuild" ? state.handwriting.matchMapping : null,
     );
     if (!response.ok) throw new Error(response.error);
@@ -1003,6 +1124,7 @@ function renderSummary() {
       ? `${state.documents.length}개 문서에서 ${state.order.length}쪽 선택`
       : "PDF를 추가해 시작하세요");
   refs.save.disabled = !state.bridgeReady || state.order.length === 0;
+  refs.mergeOutputName.disabled = state.documents.length === 0;
   refs.resetDocuments.disabled = !state.bridgeReady || state.documents.length === 0;
 }
 
@@ -1016,6 +1138,7 @@ async function addPdfs() {
     if (!response.added.length) return;
     response.added.forEach((doc) => doc.pages.forEach((page) => state.selected.add(pageKey(doc.id, page.index))));
     state.documents = response.sources;
+    updateMergeOutputName(false);
     syncOrder();
     render();
     const first = response.added[0];
@@ -1029,6 +1152,7 @@ async function removeDocument(id) {
     const response = await callApi("remove_document", id);
     if (!response.ok) { toast(response.error, "error"); return; }
     state.documents = state.documents.filter((doc) => doc.id !== id);
+    updateMergeOutputName(false);
     [...state.selected].filter((key) => key.startsWith(`${id}:`)).forEach((key) => state.selected.delete(key));
     state.order = state.order.filter((ref) => ref.document_id !== id);
     [...state.thumbnailCache.keys()]
@@ -1047,9 +1171,8 @@ async function removeDocument(id) {
 async function saveResult() {
   if (!state.order.length) return;
   const firstDoc = documentById(state.order[0].document_id);
-  const suggestion = state.documents.length === 1
-    ? `${firstDoc.name.replace(/\.pdf$/i, "")}-선택.pdf`
-    : "조합된 문서.pdf";
+  const fallback = firstDoc ? `${withoutKnownExtension(firstDoc.name)}-편집본` : "조합된 문서";
+  const suggestion = `${withoutKnownExtension(refs.mergeOutputName.value.trim()) || fallback}.pdf`;
   setBusy(true, "원본 품질로 PDF를 저장하는 중…");
   try {
     const response = await callApi("save_result", state.order, suggestion);
@@ -1065,6 +1188,8 @@ async function saveResult() {
 refs.add.addEventListener("click", addPdfs);
 refs.emptyAdd.addEventListener("click", addPdfs);
 refs.save.addEventListener("click", saveResult);
+refs.mergeOutputName.addEventListener("input", () => { state.mergeOutputNameDirty = true; });
+refs.handwritingOutputName.addEventListener("input", () => { state.handwritingOutputNameDirty = true; });
 refs.mergeTab.addEventListener("click", () => showTool("merge"));
 refs.handwriting.addEventListener("click", () => showTool("handwriting"));
 refs.alignBlend.addEventListener("input", () => {
@@ -1106,6 +1231,7 @@ refs.alignStage.addEventListener("wheel", (event) => {
 }, { passive: false });
 refs.chooseHandwritingSource.addEventListener("click", () => chooseHandwriting("source"));
 refs.chooseHandwritingTarget.addEventListener("click", () => chooseHandwriting("target"));
+refs.retryHandwriting.addEventListener("click", retryHandwritingAnalysis);
 refs.resetHandwriting.addEventListener("click", resetHandwritingTransfer);
 refs.resetDocuments.addEventListener("click", resetDocuments);
 refs.saveHandwriting.addEventListener("click", saveHandwritingTransfer);

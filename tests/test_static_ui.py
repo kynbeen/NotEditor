@@ -78,6 +78,22 @@ class StaticUiContractTests(unittest.TestCase):
         self.assertIn('choose_handwriting_target: () => uploadWebFiles', self.js)
         self.assertIn('setBusy(true, kind === "source"', self.js)
 
+    def test_handwriting_upload_and_analysis_have_distinct_retryable_stages(self):
+        self.assertIn("new XMLHttpRequest()", self.js)
+        self.assertIn("request.upload.addEventListener", self.js)
+        self.assertIn("필기 파일 업로드 중…", self.js)
+        self.assertIn('handwriting_status: () => fetchJson("/api/handwriting/status")', self.js)
+        self.assertIn('callApi("handwriting_status")', self.js)
+        self.assertIn('callApi("retry_handwriting_analysis")', self.js)
+        for message in (
+            "파일 구조 확인 중…",
+            "페이지 비교·자동 매칭 중…",
+            "필기 좌표 정렬 중…",
+            "미리보기 준비 중…",
+        ):
+            self.assertIn(message, (Path(__file__).parents[1] / "noteditor" / "app.py").read_text(encoding="utf-8"))
+        self.assertIn('id="retryHandwritingButton"', self.html)
+
     def test_result_content_starts_at_same_header_boundary(self):
         self.assertNotIn('class="result-toolbar"', self.html)
         self.assertIn('class="panel-header-actions"', self.html)
@@ -145,6 +161,8 @@ class StaticUiContractTests(unittest.TestCase):
         """초기화는 도구별이다. 한쪽 버튼이 다른 쪽 선택까지 지우면 안 된다."""
         self.assertIn('id="resetDocumentsButton"', self.html)
         self.assertIn('id="resetHandwritingButton"', self.html)
+        self.assertIn('id="resetDocumentsButton" class="button utility"', self.html)
+        self.assertIn('id="resetHandwritingButton" class="button utility"', self.html)
         self.assertIn('refs.resetDocuments.addEventListener("click", resetDocuments)', self.js)
         self.assertIn('refs.resetHandwriting.addEventListener("click", resetHandwritingTransfer)', self.js)
         self.assertIn('"/api/documents/reset"', self.js)
@@ -159,6 +177,16 @@ class StaticUiContractTests(unittest.TestCase):
         """확장자를 파일명에서 추측하지 않고 서버가 알려준 형식으로 정한다."""
         self.assertIn("source_format: response.source_format", self.js)
         self.assertIn('state.handwriting.source_format === "notewise"', self.js)
+
+    def test_output_names_are_editable_without_letting_extensions_drift(self):
+        self.assertIn('id="mergeOutputName"', self.html)
+        self.assertIn('id="handwritingOutputName"', self.html)
+        self.assertIn('id="handwritingOutputSuffix"', self.html)
+        self.assertIn("updateMergeOutputName", self.js)
+        self.assertIn("updateHandwritingOutputName", self.js)
+        self.assertIn("withoutKnownExtension(refs.mergeOutputName.value.trim())", self.js)
+        self.assertIn("withoutKnownExtension(refs.handwritingOutputName.value.trim())", self.js)
+        self.assertIn(".output-name-field", self.css)
 
 
 if __name__ == "__main__":

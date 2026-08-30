@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import inspect
 import tempfile
+import time
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 from urllib.parse import unquote
 
@@ -26,6 +28,17 @@ class WebAppTests(unittest.TestCase):
     def tearDown(self):
         self.client.__exit__(None, None, None)
         self.folder.cleanup()
+
+    def wait_for_handwriting_analysis(self) -> dict:
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            response = self.client.get("/api/handwriting/status")
+            self.assertEqual(response.status_code, 200, response.text)
+            status = response.json()
+            if status["analysis"]["state"] != "running":
+                return status
+            time.sleep(0.02)
+        self.fail("필기 분석이 끝나지 않았습니다.")
 
     def test_health_ping_creates_no_session(self):
         client = TestClient(app)
@@ -96,7 +109,8 @@ class WebAppTests(unittest.TestCase):
             files={"file": ("target.pdf", self.pdf.read_bytes(), "application/pdf")},
         )
         self.assertEqual(target.status_code, 200, target.text)
-        self.assertTrue(target.json()["ready"])
+        status = self.wait_for_handwriting_analysis()
+        self.assertTrue(status["ready"], status)
 
         preview = self.client.get("/api/handwriting/preview?page_index=0&source_index=-2")
         self.assertEqual(preview.status_code, 200, preview.text)
@@ -120,6 +134,48 @@ class WebAppTests(unittest.TestCase):
         self.assertFalse(body["ok"])
         self.assertIn("선택", body["error"])
 
+    def test_analysis_failure_keeps_web_uploads_and_retry_uses_the_same_files(self):
+        source = self.root / "retry.sdocx"
+        source.write_bytes(b"synthetic sdocx")
+        inspection = SimpleNamespace(as_dict=lambda: {"page_count": 2, "mode": "exact"})
+        attempts = 0
+
+        def inspect(_source, _target, *, progress):
+            nonlocal attempts
+            attempts += 1
+            progress("structure")
+            if attempts == 1:
+                raise RuntimeError("합성 분석 실패")
+            progress("matching")
+            progress("alignment")
+            progress("preview")
+            return inspection
+
+        with patch("noteditor.app.inspect_transfer", side_effect=inspect):
+            uploaded_source = self.client.post(
+                "/api/handwriting/source",
+                files={"file": (source.name, source.read_bytes(), "application/zip")},
+            )
+            self.assertEqual(uploaded_source.status_code, 200, uploaded_source.text)
+            uploaded_target = self.client.post(
+                "/api/handwriting/target",
+                files={"file": ("target.pdf", self.pdf.read_bytes(), "application/pdf")},
+            )
+            self.assertEqual(uploaded_target.status_code, 200, uploaded_target.text)
+            failed = self.wait_for_handwriting_analysis()
+            self.assertEqual(failed["analysis"]["state"], "error")
+            self.assertEqual(failed["source_name"], source.name)
+            self.assertEqual(failed["target_name"], "target.pdf")
+            retry = self.client.post("/api/handwriting/retry")
+            self.assertEqual(retry.status_code, 200, retry.text)
+            ready = self.wait_for_handwriting_analysis()
+
+        self.assertTrue(ready["ready"], ready)
+        self.assertEqual(attempts, 2)
+        session = store._sessions[self.client.cookies.get(SESSION_COOKIE)]
+        self.assertTrue(session.api._handwriting_source.exists())
+        self.assertTrue(session.api._handwriting_target.exists())
+
     def test_notewise_download_name_never_carries_the_other_format(self):
         """화면이 `.sdocx` 가 붙은 이름을 보내와도 `.sdocx.notewise` 로 내려가면 안 된다."""
         notewise_pdf = self.root / "notewise.pdf"
@@ -136,6 +192,7 @@ class WebAppTests(unittest.TestCase):
             "/api/handwriting/target",
             files={"file": ("target.pdf", notewise_pdf.read_bytes(), "application/pdf")},
         )
+        self.assertTrue(self.wait_for_handwriting_analysis()["ready"])
 
         for suggested in ("target-필기.sdocx", "target-필기.notewise", "target-필기"):
             with self.subTest(suggested=suggested):
@@ -166,7 +223,8 @@ class WebAppTests(unittest.TestCase):
             files={"file": ("target.pdf", notewise_pdf.read_bytes(), "application/pdf")},
         )
         self.assertEqual(target.status_code, 200, target.text)
-        self.assertTrue(target.json()["ready"])
+        status = self.wait_for_handwriting_analysis()
+        self.assertTrue(status["ready"], status)
 
         preview = self.client.get("/api/handwriting/preview?page_index=0&source_index=-2")
         self.assertEqual(preview.status_code, 200, preview.text)

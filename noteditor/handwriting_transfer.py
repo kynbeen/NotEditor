@@ -6,6 +6,7 @@ UI(데스크톱 ``app.py``, 웹 ``web.py``)는 어떤 필기 앱에서 나온 �
 """
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 from .notewise_transfer import (
@@ -27,10 +28,15 @@ def _is_notewise(source: str | Path) -> bool:
     return Path(source).suffix.lower() == ".notewise"
 
 
-def inspect_transfer(source: str | Path, target_pdf: str | Path) -> TransferInspection:
+def inspect_transfer(
+    source: str | Path,
+    target_pdf: str | Path,
+    *,
+    progress: Callable[[str], None] | None = None,
+) -> TransferInspection:
     if _is_notewise(source):
-        return inspect_notewise_transfer(source, target_pdf)
-    return inspect_sdocx_transfer(source, target_pdf)
+        return inspect_notewise_transfer(source, target_pdf, progress=progress)
+    return inspect_sdocx_transfer(source, target_pdf, progress=progress)
 
 
 def preview_transfer(

@@ -85,6 +85,9 @@ docker compose up --build
 | `NOTEDITOR_SESSION_TTL` | `7200` | 비활성 작업공간 만료 시간(초) |
 | `NOTEDITOR_MAX_SESSIONS` | `200` | 동시 작업공간 상한. 넘으면 가장 오래 쉰 것부터 정리 |
 | `NOTEDITOR_SWEEP_INTERVAL` | `60` | 만료된 작업공간을 쓸어내는 주기(초) |
+| `NOTEDITOR_PREVIEW_CONCURRENCY` | `2` | 프로세스 전체에서 동시에 렌더링할 미리보기 수 |
+| `NOTEDITOR_PREVIEW_CACHE_MB` | `16` | 사용자 작업공간 하나의 미리보기 LRU 캐시 상한(MB) |
+| `NOTEDITOR_ANALYSIS_CONCURRENCY` | `1` | 동시에 실행할 필기 문서 분석 작업 수 |
 
 ### 접속자별 작업공간
 

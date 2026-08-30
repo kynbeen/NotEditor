@@ -1,14 +1,22 @@
 from __future__ import annotations
 
-import re
 import logging
+import os
+import re
+import threading
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
+
+# pikepdf의 nanobind 열거형 등록은 첫 import가 두 스레드에서 겹치면 프로세스를 종료할 수 있다.
+# 분석 작업 스레드를 만들기 전에 주 스레드에서 한 번 초기화한다.
+import pikepdf  # noqa: F401
 
 from . import __version__
 from .engine import ComposerSession, PdfComposerError
 from .ranges import PageRangeError, parse_page_ranges
 from .handwriting_transfer import (
+    SUPPORTED_SUFFIXES,
     inspect_transfer,
     output_suffix,
     preview_transfer,
@@ -18,6 +26,22 @@ from .handwriting_transfer import (
 
 APP_USER_MODEL_ID = "NotEditor.Desktop"
 MISSING_HANDWRITING_MESSAGE = "필기 원본과 대상 PDF를 모두 선택하세요."
+HANDWRITING_ANALYSIS_CONCURRENCY = max(
+    1, int(os.environ.get("NOTEDITOR_ANALYSIS_CONCURRENCY", "1"))
+)
+_HANDWRITING_ANALYSIS_EXECUTOR = ThreadPoolExecutor(
+    max_workers=HANDWRITING_ANALYSIS_CONCURRENCY,
+    thread_name_prefix="noteditor-analysis",
+)
+_ANALYSIS_MESSAGES = {
+    "waiting": "두 파일을 선택해 주세요.",
+    "structure": "파일 구조 확인 중…",
+    "matching": "페이지 비교·자동 매칭 중…",
+    "alignment": "필기 좌표 정렬 중…",
+    "preview": "미리보기 준비 중…",
+    "ready": "분석이 끝났습니다.",
+    "error": "분석하지 못했습니다.",
+}
 
 
 def _png_data_uri(payload: bytes) -> str:
@@ -62,6 +86,15 @@ class ComposerApi:
         self._handwriting_source: Path | None = None
         self._handwriting_target: Path | None = None
         self._handwriting_cache: tuple | None = None
+        self._handwriting_lock = threading.RLock()
+        self._handwriting_generation = 0
+        self._handwriting_future: Future | None = None
+        self._handwriting_analysis = {
+            "state": "waiting",
+            "stage": "waiting",
+            "message": _ANALYSIS_MESSAGES["waiting"],
+            "error": None,
+        }
 
     def _bind_window(self, window: Any) -> None:
         self._window = window
@@ -118,33 +151,159 @@ class ComposerApi:
 
     def _inspection(self):
         """본문 정렬 추정은 문서 전체를 훑으므로 파일이 그대로면 결과를 다시 쓴다."""
-        if not self._handwriting_source or not self._handwriting_target:
-            raise PdfComposerError(MISSING_HANDWRITING_MESSAGE)
-        key = (
-            str(self._handwriting_source),
-            str(self._handwriting_target),
-            self._handwriting_source.stat().st_mtime_ns,
-            self._handwriting_target.stat().st_mtime_ns,
-        )
-        cached = self._handwriting_cache
-        if cached and cached[0] == key:
-            return cached[1]
-        inspection = inspect_transfer(self._handwriting_source, self._handwriting_target)
-        self._handwriting_cache = (key, inspection)
+        with self._handwriting_lock:
+            source = self._handwriting_source
+            target = self._handwriting_target
+            if not source or not target:
+                raise PdfComposerError(MISSING_HANDWRITING_MESSAGE)
+            key = self._handwriting_key(source, target)
+            cached = self._handwriting_cache
+            if cached and cached[0] == key:
+                return cached[1]
+            analysis = dict(self._handwriting_analysis)
+            future = self._handwriting_future
+        if future is not None and not future.done():
+            raise PdfComposerError("필기 문서를 분석하는 중입니다. 잠시 후 다시 시도하세요.")
+        if analysis["state"] == "error":
+            raise PdfComposerError(analysis["error"] or _ANALYSIS_MESSAGES["error"])
+
+        # 테스트나 데스크톱 내부 호출처럼 선택 도우미를 거치지 않은 경우만 동기로 계산한다.
+        # 정상 UI 경로는 _start_handwriting_analysis가 백그라운드에서 이 캐시를 채운다.
+        inspection = inspect_transfer(source, target)
+        with self._handwriting_lock:
+            if source == self._handwriting_source and target == self._handwriting_target:
+                self._handwriting_cache = (key, inspection)
         return inspection
 
+    @staticmethod
+    def _handwriting_key(source: Path, target: Path) -> tuple:
+        return (
+            str(source),
+            str(target),
+            source.stat().st_mtime_ns,
+            target.stat().st_mtime_ns,
+        )
+
+    def _set_analysis_stage(self, generation: int, stage: str) -> None:
+        with self._handwriting_lock:
+            if generation != self._handwriting_generation:
+                return
+            self._handwriting_analysis = {
+                "state": "running",
+                "stage": stage,
+                "message": _ANALYSIS_MESSAGES[stage],
+                "error": None,
+            }
+
+    def _run_handwriting_analysis(
+        self, generation: int, source: Path, target: Path, inspector
+    ) -> None:
+        try:
+            inspection = inspector(
+                source,
+                target,
+                progress=lambda stage: self._set_analysis_stage(generation, stage),
+            )
+            key = self._handwriting_key(source, target)
+        except Exception as exc:
+            with self._handwriting_lock:
+                if generation != self._handwriting_generation:
+                    return
+                self._handwriting_cache = None
+                self._handwriting_analysis = {
+                    "state": "error",
+                    "stage": "error",
+                    "message": _ANALYSIS_MESSAGES["error"],
+                    "error": str(exc),
+                }
+            return
+        with self._handwriting_lock:
+            if generation != self._handwriting_generation:
+                return
+            self._handwriting_cache = (key, inspection)
+            self._handwriting_analysis = {
+                "state": "ready",
+                "stage": "ready",
+                "message": _ANALYSIS_MESSAGES["ready"],
+                "error": None,
+            }
+
+    def _start_handwriting_analysis(self) -> None:
+        with self._handwriting_lock:
+            self._handwriting_generation += 1
+            generation = self._handwriting_generation
+            previous = self._handwriting_future
+            self._handwriting_future = None
+            self._handwriting_cache = None
+            source = self._handwriting_source
+            target = self._handwriting_target
+            if previous is not None:
+                previous.cancel()
+            if not source or not target:
+                self._handwriting_analysis = {
+                    "state": "waiting",
+                    "stage": "waiting",
+                    "message": _ANALYSIS_MESSAGES["waiting"],
+                    "error": None,
+                }
+                return
+            self._handwriting_analysis = {
+                "state": "running",
+                "stage": "structure",
+                "message": _ANALYSIS_MESSAGES["structure"],
+                "error": None,
+            }
+            self._handwriting_future = _HANDWRITING_ANALYSIS_EXECUTOR.submit(
+                self._run_handwriting_analysis, generation, source, target, inspect_transfer
+            )
+
+    def _set_handwriting_path(self, kind: str, path: Path) -> Path | None:
+        path = path.expanduser().resolve()
+        if not path.is_file():
+            raise PdfComposerError(f"파일을 찾을 수 없습니다: {path.name}")
+        if kind == "source":
+            if path.suffix.lower() not in SUPPORTED_SUFFIXES:
+                raise PdfComposerError(".sdocx 또는 .notewise 파일을 선택하세요.")
+            attribute = "_handwriting_source"
+        elif kind == "target":
+            if path.suffix.lower() != ".pdf":
+                raise PdfComposerError(".pdf 파일을 선택하세요.")
+            attribute = "_handwriting_target"
+        else:
+            raise PdfComposerError("알 수 없는 필기 파일 종류입니다.")
+        with self._handwriting_lock:
+            previous = getattr(self, attribute)
+            setattr(self, attribute, path)
+        self._start_handwriting_analysis()
+        return previous
+
     def _handwriting_status(self) -> dict:
-        payload = {
-            "source_name": self._handwriting_source.name if self._handwriting_source else None,
-            "source_format": self._handwriting_source.suffix.lower().lstrip(".")
-            if self._handwriting_source else None,
-            "target_name": self._handwriting_target.name if self._handwriting_target else None,
-            "ready": False,
-            "inspection": None,
+        with self._handwriting_lock:
+            source = self._handwriting_source
+            target = self._handwriting_target
+            analysis = dict(self._handwriting_analysis)
+            cached = self._handwriting_cache
+        inspection = cached[1].as_dict() if cached and analysis["state"] == "ready" else None
+        return {
+            "source_name": source.name if source else None,
+            "source_format": source.suffix.lower().lstrip(".") if source else None,
+            "target_name": target.name if target else None,
+            "ready": inspection is not None,
+            "inspection": inspection,
+            "analysis": analysis,
         }
-        if self._handwriting_source and self._handwriting_target:
-            payload.update(ready=True, inspection=self._inspection().as_dict())
-        return payload
+
+    def handwriting_status(self) -> dict:
+        return self._ok(**self._handwriting_status())
+
+    def retry_handwriting_analysis(self) -> dict:
+        try:
+            if not self._handwriting_source or not self._handwriting_target:
+                raise PdfComposerError(MISSING_HANDWRITING_MESSAGE)
+            self._start_handwriting_analysis()
+            return self._ok(**self._handwriting_status())
+        except Exception as exc:
+            return self._error(exc)
 
     def handwriting_preview(self, page_index: int = 0, source_index: int = -2) -> dict:
         try:
@@ -182,7 +341,7 @@ class ComposerApi:
             path = self._dialog_path(selected)
             if path is None:
                 return self._ok(cancelled=True, **self._handwriting_status())
-            self._handwriting_source = path
+            self._set_handwriting_path("source", path)
             return self._ok(cancelled=False, **self._handwriting_status())
         except Exception as exc:
             return self._error(exc)
@@ -201,15 +360,16 @@ class ComposerApi:
             path = self._dialog_path(selected)
             if path is None:
                 return self._ok(cancelled=True, **self._handwriting_status())
-            self._handwriting_target = path
+            self._set_handwriting_path("target", path)
             return self._ok(cancelled=False, **self._handwriting_status())
         except Exception as exc:
             return self._error(exc)
 
     def reset_handwriting_transfer(self) -> dict:
-        self._handwriting_source = None
-        self._handwriting_target = None
-        self._handwriting_cache = None
+        with self._handwriting_lock:
+            self._handwriting_source = None
+            self._handwriting_target = None
+        self._start_handwriting_analysis()
         return self._ok(**self._handwriting_status())
 
     def save_handwriting_transfer(
@@ -326,6 +486,10 @@ class ComposerApi:
         if self._closed:
             return
         self._closed = True
+        with self._handwriting_lock:
+            self._handwriting_generation += 1
+            if self._handwriting_future is not None:
+                self._handwriting_future.cancel()
         self._session.close()
 
 

@@ -16,6 +16,7 @@ import os
 import struct
 import tempfile
 import zlib
+from collections.abc import Callable
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path, PurePosixPath
@@ -443,7 +444,12 @@ def _aligned_pdf_bytes(
         staged.unlink(missing_ok=True)
 
 
-def inspect_transfer(source_sdocx: str | Path, target_pdf: str | Path) -> TransferInspection:
+def inspect_transfer(
+    source_sdocx: str | Path,
+    target_pdf: str | Path,
+    *,
+    progress: Callable[[str], None] | None = None,
+) -> TransferInspection:
     source = Path(source_sdocx).expanduser().resolve()
     target = Path(target_pdf).expanduser().resolve()
     if source.suffix.lower() != ".sdocx" or not source.is_file():
@@ -451,6 +457,8 @@ def inspect_transfer(source_sdocx: str | Path, target_pdf: str | Path) -> Transf
     if target.suffix.lower() != ".pdf" or not target.is_file():
         raise SdocxTransferError("필기를 옮길 대상 PDF 파일을 선택하세요.")
 
+    if progress:
+        progress("structure")
     archive, members, _media_info_name, _media_info, _pdf_entry, embedded_name = _archive_context(source)
     try:
         embedded_pdf = archive.read(embedded_name)
@@ -461,7 +469,11 @@ def inspect_transfer(source_sdocx: str | Path, target_pdf: str | Path) -> Transf
         archive.close()
 
     mode, alignment, page_count, match = plan_transfer(
-        embedded_pdf, target, source_label="SDOCX 내장 PDF", error=SdocxTransferError
+        embedded_pdf,
+        target,
+        source_label="SDOCX 내장 PDF",
+        error=SdocxTransferError,
+        progress=progress,
     )
 
     return TransferInspection(
