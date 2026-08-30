@@ -32,6 +32,18 @@ class StaticUiContractTests(unittest.TestCase):
         self.assertIn('refs.previewStage.addEventListener("scroll"', self.js)
         self.assertIn('scrollIntoView({ behavior: "smooth"', self.js)
 
+    def test_image_requests_are_lazy_bounded_deduplicated_and_retryable_inline(self):
+        self.assertIn("function createRequestQueue(limit)", self.js)
+        self.assertIn("createRequestQueue(3)", self.js)
+        self.assertIn("createRequestQueue(1)", self.js)
+        self.assertIn("state.imageInflight.has(key)", self.js)
+        self.assertIn("CLIENT_IMAGE_CACHE_BYTES", self.js)
+        self.assertIn("lazyImageObserver(refs.documentList)", self.js)
+        self.assertIn("lazyImageObserver(refs.resultList)", self.js)
+        self.assertIn("[502, 503, 504].includes", self.js)
+        self.assertIn("미리보기를 불러오지 못했습니다 · 다시 시도", self.js)
+        self.assertIn(".image-load-error", self.css)
+
     def test_page_toggle_does_not_rebuild_left_document_list(self):
         toggle_body = self.js.split("function togglePage", 1)[1].split("function previewNode", 1)[0]
         self.assertNotIn("renderDocuments()", toggle_body)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import tempfile
 import unittest
 from pathlib import Path
@@ -8,7 +9,7 @@ from urllib.parse import unquote
 
 from fastapi.testclient import TestClient
 
-from noteditor.web import SESSION_COOKIE, app, store
+from noteditor.web import SESSION_COOKIE, app, health, health_head, store
 from tests.test_notewise_transfer import _make_notewise, _make_pdf as make_notewise_pdf
 from tests.test_sdocx_transfer import make_pdf, make_sdocx
 
@@ -37,6 +38,10 @@ class WebAppTests(unittest.TestCase):
             self.assertEqual(len(store._sessions), before)
             self.assertEqual(client.get("/").status_code, 200)
             self.assertEqual(len(store._sessions), before + 1)
+
+    def test_health_handlers_never_wait_for_the_worker_pool(self):
+        self.assertTrue(inspect.iscoroutinefunction(health))
+        self.assertTrue(inspect.iscoroutinefunction(health_head))
 
     def test_serves_noteditor_ui_and_health(self):
         health = self.client.get("/api/health")

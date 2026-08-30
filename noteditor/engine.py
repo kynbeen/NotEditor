@@ -5,9 +5,20 @@ import os
 import tempfile
 import threading
 import uuid
+from collections import OrderedDict
+from concurrent.futures import Future
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
+
+
+PREVIEW_CACHE_MAX_BYTES = int(
+    os.environ.get("NOTEDITOR_PREVIEW_CACHE_MB", "16")
+) * 1024 * 1024
+PREVIEW_RENDER_CONCURRENCY = max(
+    1, int(os.environ.get("NOTEDITOR_PREVIEW_CONCURRENCY", "2"))
+)
+_PREVIEW_RENDER_SLOTS = threading.BoundedSemaphore(PREVIEW_RENDER_CONCURRENCY)
 
 
 class PdfComposerError(RuntimeError):
@@ -68,12 +79,15 @@ def _has_key(container, key: str) -> bool:
 class ComposerSession:
     """Owns source paths and preview caches for one process-local app session."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, preview_cache_max_bytes: int = PREVIEW_CACHE_MAX_BYTES) -> None:
         self._temporary = tempfile.TemporaryDirectory(prefix="noteditor-")
         self.temp_dir = Path(self._temporary.name)
         self._sources: dict[str, SourceDocument] = {}
         self._source_order: list[str] = []
-        self._preview_cache: dict[tuple[str, int, str], str] = {}
+        self._preview_cache: OrderedDict[tuple[str, int, str], str] = OrderedDict()
+        self._preview_cache_bytes = 0
+        self._preview_cache_max_bytes = max(0, int(preview_cache_max_bytes))
+        self._preview_inflight: dict[tuple[str, int, str], Future[str]] = {}
         self._lock = threading.RLock()
 
     @property
@@ -83,6 +97,7 @@ class ComposerSession:
     def close(self) -> None:
         with self._lock:
             self._preview_cache.clear()
+            self._preview_cache_bytes = 0
             self._sources.clear()
             self._source_order.clear()
             self._temporary.cleanup()
@@ -116,6 +131,7 @@ class ComposerSession:
             self._sources.clear()
             self._source_order.clear()
             self._preview_cache.clear()
+            self._preview_cache_bytes = 0
             return paths
 
     def source_path(self, source_id: str) -> Path | None:
@@ -131,7 +147,7 @@ class ComposerSession:
             del self._sources[source_id]
             self._source_order.remove(source_id)
             for key in [key for key in self._preview_cache if key[0] == source_id]:
-                del self._preview_cache[key]
+                self._drop_cached_preview(key)
 
     def _inspect_source(self, path: Path) -> SourceDocument:
         if path.suffix.lower() != ".pdf" or not path.is_file():
@@ -202,20 +218,69 @@ class ComposerSession:
         with self._lock:
             cached = self._preview_cache.get(key)
             if cached:
+                self._preview_cache.move_to_end(key)
                 return cached
+            pending = self._preview_inflight.get(key)
+            if pending is None:
+                pending = Future()
+                self._preview_inflight[key] = pending
+                owns_render = True
+            else:
+                owns_render = False
 
+        # 같은 쪽을 왼쪽·오른쪽에서 동시에 요청해도 렌더는 한 번만 한다. 기다리는 요청은
+        # 전역 렌더 슬롯을 차지하지 않아 다른 쪽이 굶지 않는다.
+        if not owns_render:
+            return pending.result()
+
+        try:
+            with _PREVIEW_RENDER_SLOTS:
+                value = self._render_page_image(source, page_index, kind)
+            with self._lock:
+                if source_id in self._sources:
+                    self._store_cached_preview(key, value)
+            pending.set_result(value)
+            return value
+        except BaseException as exc:
+            pending.set_exception(exc)
+            raise
+        finally:
+            with self._lock:
+                self._preview_inflight.pop(key, None)
+
+    @staticmethod
+    def _render_page_image(source: SourceDocument, page_index: int, kind: str) -> str:
         import pymupdf
 
         max_side = 260 if kind == "thumbnail" else 1500
         with pymupdf.open(source.path) as document:
             page = document[page_index]
             scale = min(max_side / max(page.rect.width, page.rect.height), 2.5)
-            pixmap = page.get_pixmap(matrix=pymupdf.Matrix(scale, scale), alpha=False, annots=True)
+            pixmap = page.get_pixmap(
+                matrix=pymupdf.Matrix(scale, scale), alpha=False, annots=True
+            )
             encoded = base64.b64encode(pixmap.tobytes("png")).decode("ascii")
-        value = "data:image/png;base64," + encoded
-        with self._lock:
-            self._preview_cache[key] = value
-        return value
+        return "data:image/png;base64," + encoded
+
+    def _store_cached_preview(self, key: tuple[str, int, str], value: str) -> None:
+        if self._preview_cache_max_bytes <= 0:
+            return
+        previous = self._preview_cache.pop(key, None)
+        if previous is not None:
+            self._preview_cache_bytes -= len(previous)
+        self._preview_cache[key] = value
+        self._preview_cache_bytes += len(value)
+        while (
+            self._preview_cache
+            and self._preview_cache_bytes > self._preview_cache_max_bytes
+        ):
+            oldest_key = next(iter(self._preview_cache))
+            self._drop_cached_preview(oldest_key)
+
+    def _drop_cached_preview(self, key: tuple[str, int, str]) -> None:
+        value = self._preview_cache.pop(key, None)
+        if value is not None:
+            self._preview_cache_bytes -= len(value)
 
     def build_pdf(self, order: Iterable[dict], output_path: str | Path) -> dict:
         refs = [PageRef.from_value(item) for item in order]

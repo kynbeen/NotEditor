@@ -7,6 +7,10 @@ const state = {
   orderDirty: false,
   active: null,
   thumbnailCache: new Map(),
+  thumbnailCacheBytes: 0,
+  imageInflight: new Map(),
+  sourceThumbnailObserver: null,
+  resultThumbnailObserver: null,
   previewObserver: null,
   previewScrollFrame: 0,
   bridgeReady: false,
@@ -61,12 +65,36 @@ const refs = {
 
 const pageKey = (docId, index) => `${docId}:${index}`;
 const refKey = (ref) => pageKey(ref.document_id, ref.page_index);
+const CLIENT_IMAGE_CACHE_BYTES = 12 * 1024 * 1024;
+
+function createRequestQueue(limit) {
+  let active = 0;
+  const waiting = [];
+  const pump = () => {
+    while (active < limit && waiting.length) {
+      const entry = waiting.shift();
+      active += 1;
+      Promise.resolve()
+        .then(entry.task)
+        .then(entry.resolve, entry.reject)
+        .finally(() => { active -= 1; pump(); });
+    }
+  };
+  return (task) => new Promise((resolve, reject) => {
+    waiting.push({ task, resolve, reject });
+    pump();
+  });
+}
+
+const queueThumbnailRequest = createRequestQueue(3);
+const queuePreviewRequest = createRequestQueue(1);
 
 async function fetchJson(url, options = {}) {
   const response = await fetch(url, options);
   const payload = await response.json().catch(() => ({ ok: false, error: `HTTP ${response.status}` }));
   if (!payload.error && payload.detail) payload.error = payload.detail;
   if (!response.ok && payload.ok !== false) payload.ok = false;
+  payload.http_status = response.status;
   return payload;
 }
 
@@ -492,6 +520,7 @@ async function resetDocuments() {
     state.orderDirty = false;
     state.active = null;
     state.thumbnailCache.clear();
+    state.thumbnailCacheBytes = 0;
     syncOrder();
     render();
     toast("올린 문서를 모두 지웠습니다.", "success");
@@ -552,13 +581,62 @@ function formatRanges(indices) {
   return chunks.join(", ");
 }
 
+function cachedImage(key) {
+  const value = state.thumbnailCache.get(key);
+  if (!value) return null;
+  state.thumbnailCache.delete(key);
+  state.thumbnailCache.set(key, value);
+  return value;
+}
+
+function cacheImage(key, value) {
+  const previous = state.thumbnailCache.get(key);
+  if (previous) state.thumbnailCacheBytes -= previous.length;
+  state.thumbnailCache.delete(key);
+  state.thumbnailCache.set(key, value);
+  state.thumbnailCacheBytes += value.length;
+  while (state.thumbnailCacheBytes > CLIENT_IMAGE_CACHE_BYTES && state.thumbnailCache.size) {
+    const oldest = state.thumbnailCache.keys().next().value;
+    const removed = state.thumbnailCache.get(oldest);
+    state.thumbnailCache.delete(oldest);
+    state.thumbnailCacheBytes -= removed?.length || 0;
+  }
+}
+
+function dropCachedImage(key) {
+  const value = state.thumbnailCache.get(key);
+  if (value) state.thumbnailCacheBytes -= value.length;
+  state.thumbnailCache.delete(key);
+}
+
+async function requestImage(docId, pageIndex, kind) {
+  const delays = [0, 350, 900];
+  let lastError = null;
+  for (let attempt = 0; attempt < delays.length; attempt += 1) {
+    if (delays[attempt]) await new Promise((resolve) => setTimeout(resolve, delays[attempt]));
+    const response = await callApi("page_image", docId, pageIndex, kind);
+    if (response.ok) return response.image;
+    lastError = new Error(response.error || `HTTP ${response.http_status || "오류"}`);
+    const retryable = state.runtime === "web" && [502, 503, 504].includes(response.http_status);
+    if (!retryable) break;
+  }
+  throw lastError || new Error("미리보기를 불러오지 못했습니다.");
+}
+
 async function loadImage(docId, pageIndex, kind = "thumbnail") {
   const key = `${docId}:${pageIndex}:${kind}`;
-  if (state.thumbnailCache.has(key)) return state.thumbnailCache.get(key);
-  const response = await callApi("page_image", docId, pageIndex, kind);
-  if (!response.ok) throw new Error(response.error);
-  state.thumbnailCache.set(key, response.image);
-  return response.image;
+  const cached = cachedImage(key);
+  if (cached) return cached;
+  if (state.imageInflight.has(key)) return state.imageInflight.get(key);
+  const enqueue = kind === "preview" ? queuePreviewRequest : queueThumbnailRequest;
+  const pending = enqueue(() => requestImage(docId, pageIndex, kind))
+    .then((image) => {
+      if (documentById(docId)) cacheImage(key, image);
+      return image;
+    })
+    .finally(() => state.imageInflight.delete(key));
+  state.imageInflight.set(key, pending);
+  return pending;
 }
 
 function makeThumbnail(doc, page, className = "") {
@@ -566,22 +644,61 @@ function makeThumbnail(doc, page, className = "") {
   tile.type = "button";
   tile.className = `page-tile ${className}`;
   tile.dataset.key = pageKey(doc.id, page.index);
+  tile.dataset.documentId = doc.id;
+  tile.dataset.pageIndex = String(page.index);
   tile.title = `${doc.name} · ${page.number}쪽`;
   tile.innerHTML = `<span class="image-placeholder"></span><span class="selection-check">✓</span><span class="page-number">${page.number}</span>`;
-  requestAnimationFrame(async () => {
-    try {
-      const src = await loadImage(doc.id, page.index);
-      if (!tile.isConnected) return;
-      const image = new Image();
-      image.alt = `${page.number}쪽`;
-      image.src = src;
-      tile.querySelector(".image-placeholder").replaceWith(image);
-    } catch (error) { toast(error.message, "error"); }
-  });
   return tile;
 }
 
+function showInlineImageError(node, placeholder, retry) {
+  placeholder.classList.add("image-load-error");
+  placeholder.textContent = "미리보기 실패 · 다시 시도";
+  placeholder.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    placeholder.classList.remove("image-load-error");
+    placeholder.textContent = "미리보기 준비 중…";
+    retry();
+  }, { once: true });
+}
+
+async function loadThumbnailNode(node) {
+  if (!node?.isConnected || node.dataset.imageLoaded === "true" || node.dataset.imageLoading === "true") return;
+  node.dataset.imageLoading = "true";
+  const placeholder = node.querySelector(".image-placeholder, .result-image-placeholder");
+  try {
+    const pageIndex = Number(node.dataset.pageIndex);
+    const src = await loadImage(node.dataset.documentId, pageIndex, "thumbnail");
+    if (!node.isConnected) return;
+    const image = new Image();
+    image.className = node.classList.contains("result-item") ? "result-thumb" : "";
+    image.alt = node.classList.contains("result-item") ? "" : `${pageIndex + 1}쪽`;
+    image.src = src;
+    placeholder?.replaceWith(image);
+    node.dataset.imageLoaded = "true";
+  } catch (_error) {
+    if (placeholder?.isConnected) {
+      showInlineImageError(node, placeholder, () => loadThumbnailNode(node));
+    }
+  } finally {
+    delete node.dataset.imageLoading;
+  }
+}
+
+function lazyImageObserver(root) {
+  return new IntersectionObserver((entries, observer) => {
+    entries.forEach((entry) => {
+      if (!entry.isIntersecting) return;
+      observer.unobserve(entry.target);
+      loadThumbnailNode(entry.target);
+    });
+  }, { root, rootMargin: "350px 0px" });
+}
+
 function renderDocuments() {
+  state.sourceThumbnailObserver?.disconnect();
+  state.sourceThumbnailObserver = lazyImageObserver(refs.documentList);
   refs.documentCount.textContent = state.documents.length;
   refs.sourceEmpty.hidden = state.documents.length > 0;
   refs.documentList.hidden = state.documents.length === 0;
@@ -615,6 +732,7 @@ function renderDocuments() {
       const tile = makeThumbnail(doc, page, state.selected.has(pageKey(doc.id, page.index)) ? "selected" : "");
       tile.addEventListener("click", () => togglePage(doc, page, tile));
       grid.append(tile);
+      state.sourceThumbnailObserver.observe(tile);
     });
     refs.documentList.append(card);
   });
@@ -706,7 +824,7 @@ async function loadPreviewPage(node) {
   try {
     const src = await loadImage(docId, pageIndex, "preview");
     if (!node.isConnected || node.dataset.previewNear !== "true") {
-      state.thumbnailCache.delete(`${docId}:${pageIndex}:preview`);
+      dropCachedImage(`${docId}:${pageIndex}:preview`);
       return;
     }
     const image = new Image();
@@ -718,9 +836,13 @@ async function loadPreviewPage(node) {
     const placeholder = node.querySelector(".preview-page-placeholder");
     if (placeholder) {
       placeholder.classList.add("error");
-      placeholder.textContent = "미리보기를 불러오지 못했습니다";
+      placeholder.textContent = "미리보기를 불러오지 못했습니다 · 다시 시도";
+      placeholder.addEventListener("click", () => {
+        placeholder.classList.remove("error");
+        placeholder.textContent = "미리보기 준비 중…";
+        loadPreviewPage(node);
+      }, { once: true });
     }
-    toast(error.message, "error");
   } finally {
     delete node.dataset.loading;
   }
@@ -735,7 +857,7 @@ function unloadPreviewPage(node) {
     placeholder.textContent = "미리보기 준비 중…";
     image.replaceWith(placeholder);
   }
-  state.thumbnailCache.delete(`${node.dataset.documentId}:${node.dataset.pageIndex}:preview`);
+  dropCachedImage(`${node.dataset.documentId}:${node.dataset.pageIndex}:preview`);
   delete node.dataset.loaded;
 }
 
@@ -817,6 +939,8 @@ function showPreview(docId, pageIndex, origin = "원본 미리보기") {
 }
 
 function renderResult() {
+  state.resultThumbnailObserver?.disconnect();
+  state.resultThumbnailObserver = lazyImageObserver(refs.resultList);
   refs.pageCount.textContent = `${state.order.length}쪽`;
   refs.resultEmpty.hidden = state.order.length > 0;
   refs.resultList.hidden = state.order.length === 0;
@@ -831,15 +955,9 @@ function renderResult() {
     item.draggable = true;
     item.dataset.index = index;
     item.dataset.key = refKey(ref);
+    item.dataset.documentId = ref.document_id;
+    item.dataset.pageIndex = String(ref.page_index);
     item.innerHTML = `<span class="result-image-placeholder"></span><div class="result-label"><strong>${escapeHtml(doc.name)}</strong><span>원본 ${ref.page_index + 1}쪽</span></div><span class="drag-handle" aria-hidden="true">⠿</span>`;
-    requestAnimationFrame(async () => {
-      try {
-        const src = await loadImage(ref.document_id, ref.page_index);
-        if (!item.isConnected) return;
-        const image = new Image(); image.className = "result-thumb"; image.alt = ""; image.src = src;
-        item.querySelector(".result-image-placeholder").replaceWith(image);
-      } catch (error) { toast(error.message, "error"); }
-    });
     item.addEventListener("click", () => {
       document.querySelectorAll(".result-item.active").forEach((node) => node.classList.remove("active"));
       item.classList.add("active");
@@ -874,6 +992,7 @@ function renderResult() {
       renderResult();
     });
     refs.resultList.append(item);
+    state.resultThumbnailObserver.observe(item);
   });
 }
 
@@ -912,7 +1031,9 @@ async function removeDocument(id) {
     state.documents = state.documents.filter((doc) => doc.id !== id);
     [...state.selected].filter((key) => key.startsWith(`${id}:`)).forEach((key) => state.selected.delete(key));
     state.order = state.order.filter((ref) => ref.document_id !== id);
-    state.thumbnailCache.forEach((_, key) => { if (key.startsWith(`${id}:`)) state.thumbnailCache.delete(key); });
+    [...state.thumbnailCache.keys()]
+      .filter((key) => key.startsWith(`${id}:`))
+      .forEach(dropCachedImage);
     if (state.active?.document_id === id) {
       state.active = null;
     }
