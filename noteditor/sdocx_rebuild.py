@@ -62,8 +62,14 @@ def _page_name(root: PurePosixPath, page_uuid: str) -> str:
 def _validate_match(result: MatchResult, source_count: int, target_count: int) -> None:
     source = [pair.source_index for pair in result.pairs if pair.source_index is not None]
     target = [pair.target_index for pair in result.pairs if pair.target_index is not None]
-    _require(source == list(range(source_count)), "쪽 매칭 결과가 원본 PDF의 모든 쪽을 순서대로 담지 않습니다.")
-    _require(target == list(range(target_count)), "쪽 매칭 결과가 대상 PDF의 모든 쪽을 순서대로 담지 않습니다.")
+    _require(
+        sorted(source) == list(range(source_count)),
+        "쪽 대응 계획은 원본 PDF의 모든 쪽을 한 번씩 담아야 합니다.",
+    )
+    _require(
+        sorted(target) == list(range(target_count)),
+        "쪽 대응 계획은 대상 PDF의 모든 쪽을 한 번씩 담아야 합니다.",
+    )
     _require(
         all(pair.source_index is not None or pair.target_index is not None for pair in result.pairs),
         "양쪽 쪽 번호가 모두 비어 있는 매칭 항목이 있습니다.",

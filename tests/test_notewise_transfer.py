@@ -16,10 +16,10 @@ from noteditor.notewise_ink import render_notewise_ink
 from noteditor.notewise_proto import NotewiseTransferError, iter_fields
 from noteditor.notewise_transfer import (
     _page_ids,
-    _validate_mapping,
     inspect_notewise_transfer,
     transfer_notewise_handwriting,
 )
+from noteditor.page_plan import PagePlan, PlanSlot
 
 
 def _varint(value: int) -> bytes:
@@ -319,9 +319,47 @@ class NotewiseTransferTests(unittest.TestCase):
             pdf_name = next(name for name in archive.namelist() if name.startswith("pdf/"))
             self.assertEqual(archive.read(pdf_name), self.target_pdf.read_bytes())
 
-    def test_rebuild_rejects_reordered_mapping(self):
-        with self.assertRaisesRegex(NotewiseTransferError, "순서가 유지"):
-            _validate_mapping([1, None, 0], 2)
+    def test_confirmed_plan_can_reorder_target_pages(self):
+        source, origin_pdf = self._multipage_source()
+        plan = PagePlan(2, 2, (
+            PlanSlot(0, 1, confirmed=True, manual=True),
+            PlanSlot(1, 0, confirmed=True, manual=True),
+        ))
+        output = self.root / "reordered.notewise"
+
+        result = transfer_notewise_handwriting(
+            source, origin_pdf, output, plan_override=plan
+        )
+
+        self.assertEqual(result["page_count"], 2)
+        with ZipFile(output) as archive:
+            pdf_name = next(name for name in archive.namelist() if name.startswith("pdf/"))
+            with pymupdf.open(stream=archive.read(pdf_name), filetype="pdf") as background:
+                self.assertIn("p2", background[0].get_text())
+                self.assertIn("same text", background[1].get_text())
+
+    def test_source_only_annotated_page_is_preserved_with_its_old_background(self):
+        source, origin_pdf = self._multipage_source()
+        one_page_target = self.root / "one-page.pdf"
+        _make_pdf(one_page_target, "same text", pages=1)
+        output = self.root / "source-only.notewise"
+
+        result = transfer_notewise_handwriting(source, one_page_target, output)
+
+        self.assertEqual(result["source_only_count"], 1)
+        self.assertEqual(result["page_count"], 2)
+        with ZipFile(output) as archive:
+            page_ids = _page_ids(archive.read("note"))
+            self.assertEqual(len(page_ids), 2)
+            decoded = [base64.b64decode(archive.read(f"page/{page_id}")) for page_id in page_ids]
+            self.assertTrue(all(
+                any(number == 4 for number, _wire, _value in iter_fields(page))
+                for page in decoded
+            ))
+            pdf_name = next(name for name in archive.namelist() if name.startswith("pdf/"))
+            with pymupdf.open(stream=archive.read(pdf_name), filetype="pdf") as background:
+                self.assertEqual(background.page_count, 2)
+                self.assertIn("p2", background[1].get_text())
 
 
 if __name__ == "__main__":

@@ -4,9 +4,9 @@
 필기 객체는 페이지 메시지 안에 그대로 두고, 배경 PDF와 그것을 가리키는 참조(페이지 ID, PDF
 id, 쪽 번호, 정렬 키)만 다시 쓴다.
 
-쪽을 더하거나 지우면 페이지 ID가 새로 필요하므로 SDOCX 쪽과 달리 아카이브를 다시 만든다.
-반대로 **기존 쪽의 순서 변경은 명시적으로 거부한다** — 순서가 바뀌면 어느 필기가 어느 쪽의
-것이었는지 확신할 수 없고, 조용히 틀린 결과보다 거절이 낫다.
+쪽을 더하거나 지우거나 사용자가 확인한 순서로 바꾸면 페이지 ID가 새로 필요하므로 SDOCX 쪽과
+달리 아카이브를 다시 만든다. 자동 매칭은 여전히 원본 순서를 보존하고, 수동 재정렬은 공통
+``PagePlan`` 검증을 통과한 경우에만 적용한다.
 """
 from __future__ import annotations
 
@@ -27,9 +27,11 @@ from .alignment import Alignment, render_comparison
 from .notewise_ink import render_notewise_ink
 from .notewise_proto import NotewiseTransferError, encode_field, iter_fields
 from .page_match import MatchResult
+from .page_plan import PagePlan
 from .transfer_plan import (
     TransferInspection,
     build_background_pdf,
+    build_planned_background_pdf,
     open_pdf,
     plan_transfer,
 )
@@ -287,6 +289,36 @@ def _background_bytes(
         )
 
 
+def _planned_background_bytes(
+    embedded_pdf: bytes,
+    target: Path,
+    plan: PagePlan,
+    alignment: Alignment | None,
+) -> bytes:
+    if alignment is None and all(
+        slot.target_index == output_index
+        for output_index, slot in enumerate(plan.slots)
+    ):
+        # 행 추가·대상 재정렬이 없으면 사용자가 고른 PDF 바이트를 그대로 보존한다.
+        return target.read_bytes()
+    source_document = open_pdf(
+        embedded_pdf, "Notewise 내장 PDF", error=NotewiseTransferError
+    )
+    try:
+        target_document = open_pdf(target, "대상 PDF", error=NotewiseTransferError)
+    except Exception:
+        source_document.close()
+        raise
+    with source_document, target_document:
+        return build_planned_background_pdf(
+            source_document,
+            target_document,
+            plan,
+            alignment,
+            error=NotewiseTransferError,
+        )
+
+
 def _reference_index(mapping: list[int | None]) -> int:
     """새로 끼어든 쪽이 크기를 빌려 쓸 원본 쪽. 짝이 있는 첫 쪽을 기준으로 삼는다."""
     return next((index for index in mapping if index is not None), 0)
@@ -302,18 +334,6 @@ def _copy_info(info: ZipInfo) -> ZipInfo:
     copied.create_system = info.create_system
     copied.flag_bits = info.flag_bits & ~0x1
     return copied
-
-
-def _validate_mapping(mapping: list[int | None], source_page_count: int) -> None:
-    selected = [index for index in mapping if index is not None]
-    if any(index < 0 or index >= source_page_count for index in selected):
-        raise NotewiseTransferError("페이지 매핑이 원본 Notewise 범위를 벗어났습니다.")
-    if len(set(selected)) != len(selected):
-        raise NotewiseTransferError("같은 원본 Notewise 페이지를 두 번 사용할 수 없습니다.")
-    if selected != sorted(selected):
-        raise NotewiseTransferError(
-            "Notewise는 기존 페이지 순서가 유지되고 페이지가 추가·삭제된 경우만 지원합니다."
-        )
 
 
 def _validate_archive_structure(
@@ -392,6 +412,7 @@ def transfer_notewise_handwriting(
     output_notewise: str | Path,
     *,
     match_override: MatchResult | None = None,
+    plan_override: PagePlan | None = None,
 ) -> dict:
     source = Path(source_notewise).expanduser().resolve()
     target = Path(target_pdf).expanduser().resolve()
@@ -403,11 +424,9 @@ def transfer_notewise_handwriting(
 
     inspection = inspect_notewise_transfer(source, target)
     match = match_override or inspection.match
-    mapping = [None] * inspection.page_count
-    for pair in match.pairs:
-        if pair.target_index is not None:
-            mapping[pair.target_index] = pair.source_index
-    _validate_mapping(mapping, inspection.source_page_count)
+    plan = plan_override or PagePlan.from_match(
+        match, inspection.source_page_count, inspection.page_count
+    )
 
     output.parent.mkdir(parents=True, exist_ok=True)
     fd, temp_name = tempfile.mkstemp(
@@ -418,8 +437,8 @@ def transfer_notewise_handwriting(
     try:
         with _archive_context(source) as (archive, _members, pdf_name, source_page_names):
             source_pages = [archive.read(name) for name in source_page_names]
-            target_payload = _background_bytes(
-                archive.read(pdf_name), target, mapping, inspection.alignment
+            target_payload = _planned_background_bytes(
+                archive.read(pdf_name), target, plan, inspection.alignment
             )
             blank_template = next(
                 (payload for payload in source_pages if _page_stroke_count(payload) == 0),
@@ -430,7 +449,8 @@ def transfer_notewise_handwriting(
             note_id = secrets.token_urlsafe(18)
             new_pdf_id = secrets.token_urlsafe(18)
             relation_id = secrets.token_urlsafe(18)
-            for target_index, source_index in enumerate(mapping):
+            for output_index, slot in enumerate(plan.slots):
+                source_index = slot.source_index
                 page_id = secrets.token_urlsafe(18)
                 if source_index is None:
                     payload = _patch_page(
@@ -438,7 +458,7 @@ def transfer_notewise_handwriting(
                         page_id,
                         new_pdf_id,
                         relation_id,
-                        target_index,
+                        output_index,
                         blank=True,
                     )
                 else:
@@ -447,7 +467,7 @@ def transfer_notewise_handwriting(
                         page_id,
                         new_pdf_id,
                         relation_id,
-                        target_index,
+                        output_index,
                     )
                 output_page_ids.append(page_id)
                 output_pages.append((f"page/{page_id}", payload))
@@ -483,7 +503,7 @@ def transfer_notewise_handwriting(
                         output_info.filename = f"pdf/{new_pdf_id}"
                     result.writestr(output_info, payload)
         with _archive_context(temporary) as (archive, _members, pdf_name, page_names):
-            if len(page_names) != inspection.page_count:
+            if len(page_names) != len(plan.slots):
                 raise NotewiseTransferError("저장된 Notewise의 페이지 수가 달라졌습니다.")
             _validate_archive_structure(archive, pdf_name, page_names, target_payload)
         os.replace(temporary, output)
@@ -492,11 +512,12 @@ def transfer_notewise_handwriting(
 
     return {
         "path": str(output),
-        "page_count": inspection.page_count,
+        "page_count": len(plan.slots),
         "annotated_page_count": inspection.annotated_page_count,
         "stroke_count": inspection.stroke_cache_count,
         "mode": inspection.mode,
-        "new_page_count": sum(index is None for index in mapping),
+        "new_page_count": sum(slot.source_index is None for slot in plan.slots),
+        "source_only_count": sum(slot.target_index is None for slot in plan.slots),
     }
 
 

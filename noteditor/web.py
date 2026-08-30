@@ -30,6 +30,7 @@ from .handwriting_transfer import (
     with_output_suffix,
 )
 from .page_match import match_from_target_mapping
+from .page_plan import PagePlan
 
 SESSION_COOKIE = "noteditor_session"
 # Uptime pings arrive without a cookie, so giving them a session would mint a new
@@ -134,6 +135,8 @@ class ExportRequest(BaseModel):
 class HandwritingExportRequest(BaseModel):
     suggested_name: str = "필기-이전.sdocx"
     target_mapping: list[int | None] | None = None
+    page_plan: list[dict] | None = None
+    allow_unconfirmed: bool = False
 
 
 class ClientErrorRequest(BaseModel):
@@ -412,6 +415,28 @@ async def reset_handwriting(request: Request):
 
 def _export_handwriting(api: ComposerApi, payload: HandwritingExportRequest, output: Path) -> dict:
     inspection = api._inspection()
+    if payload.page_plan is not None:
+        plan = PagePlan.from_payload(
+            inspection.source_page_count,
+            inspection.page_count,
+            payload.page_plan,
+            inspection.match,
+        )
+        if plan.unconfirmed and not payload.allow_unconfirmed:
+            raise ValueError(
+                f"확인하지 않은 쪽 대응이 {len(plan.unconfirmed)}개 남아 있습니다."
+            )
+        result = transfer_handwriting(
+            api._handwriting_source,
+            api._handwriting_target,
+            output,
+            plan_override=plan,
+        )
+        if plan.unconfirmed:
+            result.setdefault("warnings", []).append(
+                f"확인하지 않은 쪽 대응 {len(plan.unconfirmed)}개를 사용자 승인으로 저장했습니다."
+            )
+        return result
     if payload.target_mapping is not None and inspection.mode == "rebuild":
         match = match_from_target_mapping(
             inspection.source_page_count,
@@ -450,7 +475,12 @@ async def export_handwriting(request: Request, payload: HandwritingExportRequest
         output,
         media_type="application/octet-stream",
         filename=filename,
-        headers={"X-NotEditor-Page-Count": str(result.get("page_count", 0))},
+        headers={
+            "X-NotEditor-Page-Count": str(result.get("page_count", 0)),
+            "X-NotEditor-Warnings": quote(
+                json.dumps(result.get("warnings", []), ensure_ascii=False)
+            ),
+        },
         background=BackgroundTask(output.unlink, missing_ok=True),
     )
 

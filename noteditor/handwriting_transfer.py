@@ -63,9 +63,16 @@ def transfer_handwriting(
     output: str | Path,
     *,
     match_override=None,
+    plan_override=None,
 ) -> dict:
     transfer = transfer_notewise_handwriting if _is_notewise(source) else transfer_sdocx_handwriting
-    return transfer(source, target_pdf, output, match_override=match_override)
+    return transfer(
+        source,
+        target_pdf,
+        output,
+        match_override=match_override,
+        plan_override=plan_override,
+    )
 
 
 def output_suffix(source: str | Path) -> str:

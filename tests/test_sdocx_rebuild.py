@@ -145,6 +145,45 @@ class RebuildHandwritingTests(unittest.TestCase):
             labels = [document[index].get_text().strip() for index in range(document.page_count)]
             self.assertEqual(labels, ["A", "KEEP", "NEW", "C"])
 
+    def test_rebuild_accepts_confirmed_target_reorder_and_preserves_source_only_ink(self):
+        match = MatchResult(
+            pairs=(
+                PagePair(3, 2),
+                PagePair(0, 0),
+                PagePair(1, None),
+                PagePair(2, None),
+                PagePair(None, 1),
+            )
+        )
+        output = self.root / "reordered.sdocx"
+        result = rebuild_handwriting(
+            self.source_sdocx,
+            self.target_pdf,
+            output,
+            match,
+            uuid_factory=lambda: NEW_UUID,
+            hash_factory=lambda size: b"N" * size,
+        )
+
+        self.assertEqual(result["page_count"], 4)
+        self.assertEqual(result["preserved_source_only_count"], 1)
+        self.assertEqual(result["dropped_blank_count"], 1)
+        with ZipFile(output) as archive:
+            order = read_page_order(archive.read("pageIdInfo.dat"))
+            self.assertEqual(
+                [entry.uuid for entry in order.entries],
+                [UUIDS[3], UUIDS[0], UUIDS[2], NEW_UUID, UUIDS[4]],
+            )
+            self.assertEqual(read_page(archive.read(f"{UUIDS[3]}.page")).pdf.page_index, 0)
+            self.assertEqual(read_page(archive.read(f"{UUIDS[0]}.page")).pdf.page_index, 1)
+            self.assertEqual(read_page(archive.read(f"{UUIDS[2]}.page")).pdf.page_index, 2)
+            self.assertEqual(read_page(archive.read(f"{NEW_UUID}.page")).pdf.page_index, 3)
+            embedded = archive.read("media/0@source.pdf")
+
+        with pymupdf.open(stream=embedded, filetype="pdf") as document:
+            labels = [document[index].get_text().strip() for index in range(document.page_count)]
+            self.assertEqual(labels, ["C", "A", "KEEP", "NEW"])
+
 
 if __name__ == "__main__":
     unittest.main()

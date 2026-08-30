@@ -16,6 +16,7 @@ from collections.abc import Callable, Sequence
 
 from .alignment import Alignment, estimate_alignment, place_page
 from .page_match import MatchResult, match_pages
+from .page_plan import PagePlan
 
 
 class HandwritingTransferError(RuntimeError):
@@ -37,6 +38,11 @@ class TransferInspection:
     match: MatchResult | None = None
 
     def as_dict(self) -> dict:
+        plan = None
+        if self.match is not None and self.source_page_count is not None:
+            plan = PagePlan.from_match(
+                self.match, self.source_page_count, self.page_count
+            ).as_dict()
         return {
             "source_name": self.source_name,
             "target_name": self.target_name,
@@ -49,6 +55,7 @@ class TransferInspection:
             "mode": self.mode,
             "alignment": self.alignment.as_dict() if self.alignment else None,
             "match": self.match.as_dict() if self.match else None,
+            "plan": plan,
         }
 
 
@@ -133,6 +140,67 @@ def build_background_pdf(
         suffix = "…" if len(mismatches) > 8 else ""
         raise error(
             f"정렬한 배경의 {shown}{suffix}쪽 크기가 원본 캔버스와 달라 저장하지 않았습니다."
+        )
+    return payload
+
+
+def build_planned_background_pdf(
+    source_document,
+    target_document,
+    plan: PagePlan,
+    alignment: Alignment | None,
+    *,
+    reference_index: int = 0,
+    error: type[Exception] = HandwritingTransferError,
+) -> bytes:
+    """행 계획 순서로 옛 전용·새 전용·대응 쪽을 모두 담은 배경 PDF를 만든다."""
+    import pymupdf
+
+    source_geometry = geometry(source_document)
+    expected: list[tuple[float, float, int]] = []
+    with pymupdf.open() as document:
+        for slot in plan.slots:
+            if slot.target_index is None:
+                assert slot.source_index is not None
+                document.insert_pdf(
+                    source_document,
+                    from_page=slot.source_index,
+                    to_page=slot.source_index,
+                )
+                expected.append(source_geometry[slot.source_index])
+                continue
+
+            source_index = reference_index if slot.source_index is None else slot.source_index
+            reference = source_document[source_index]
+            target_page = target_document[slot.target_index]
+            expected.append(source_geometry[source_index])
+            if alignment is not None:
+                place_page(document, reference, target_document, slot.target_index, alignment)
+                continue
+            target_size = (
+                round(float(target_page.rect.width), 3),
+                round(float(target_page.rect.height), 3),
+                int(target_page.rotation),
+            )
+            if geometry_mismatches([source_geometry[source_index]], [target_size]):
+                raise error(
+                    f"새 PDF {slot.target_index + 1}쪽의 크기가 대응할 원본 캔버스와 달라 "
+                    "본문 정렬 없이 재조립할 수 없습니다."
+                )
+            document.insert_pdf(
+                target_document,
+                from_page=slot.target_index,
+                to_page=slot.target_index,
+            )
+        built = geometry(document)
+        payload = document.tobytes(garbage=4, deflate=True)
+
+    mismatches = geometry_mismatches(expected, built)
+    if mismatches:
+        shown = ", ".join(map(str, mismatches[:8]))
+        suffix = "…" if len(mismatches) > 8 else ""
+        raise error(
+            f"행 계획으로 만든 배경의 {shown}{suffix}쪽 크기가 원본 캔버스와 달라 저장하지 않았습니다."
         )
     return payload
 

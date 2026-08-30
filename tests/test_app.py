@@ -13,6 +13,7 @@ import pymupdf
 
 from noteditor.app import ComposerApi, run
 from noteditor.engine import ComposerSession
+from noteditor.page_match import MatchResult, PagePair
 
 
 class FakeWindow:
@@ -327,6 +328,48 @@ class ComposerApiTests(unittest.TestCase):
         self.assertTrue(args[1].samefile(target))
         self.assertEqual(args[2], output.resolve())
         self.assertEqual(kwargs, {"match_override": manual})
+
+    def test_page_plan_requires_confirmation_then_forwards_the_validated_plan(self):
+        source = self.root / "annotated.sdocx"
+        target = self.root / "target.pdf"
+        output = self.root / "target-필기.sdocx"
+        source.write_bytes(b"zip")
+        target.write_bytes(b"%PDF")
+        automatic = MatchResult((PagePair(0, 0, 0.1, 0.9), PagePair(1, 1, 0.8, 0.01)))
+        inspection = SimpleNamespace(
+            mode="rebuild",
+            source_page_count=2,
+            page_count=2,
+            match=automatic,
+            as_dict=lambda: {"mode": "rebuild"},
+        )
+        payload = [
+            {"source_index": 0, "target_index": 1, "confirmed": True},
+            {"source_index": 1, "target_index": 0, "confirmed": False},
+        ]
+        self.api._handwriting_source = source
+        self.api._handwriting_target = target
+        self.api._bind_window(FakeWindow([str(output), str(output)]))
+        with patch.dict(sys.modules, {"webview": self.webview}), \
+                patch("noteditor.app.inspect_transfer", return_value=inspection), \
+                patch("noteditor.app.transfer_handwriting",
+                      return_value={"path": str(output)}) as transfer:
+            rejected = self.api.save_handwriting_transfer("target-필기.sdocx", payload)
+            saved = self.api.save_handwriting_transfer(
+                "target-필기.sdocx", payload, allow_unconfirmed=True
+            )
+
+        self.assertFalse(rejected["ok"])
+        self.assertIn("확인하지 않은", rejected["error"])
+        self.assertTrue(saved["ok"])
+        plan = transfer.call_args.kwargs["plan_override"]
+        self.assertEqual(
+            [(slot.source_index, slot.target_index) for slot in plan.slots],
+            [(0, 1), (1, 0)],
+        )
+        self.assertEqual(saved["result"]["warnings"], [
+            "확인하지 않은 쪽 대응 1개를 사용자 승인으로 저장했습니다."
+        ])
 
 
 if __name__ == "__main__":

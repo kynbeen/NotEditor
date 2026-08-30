@@ -27,6 +27,7 @@ from PIL import Image
 
 from .alignment import Alignment, build_aligned_pdf, render_comparison
 from .page_match import MatchResult
+from .page_plan import PagePlan
 from .sdocx_ink import render_ink_png
 from .sdocx_note import read_page_order
 from .sdocx_page import read_page
@@ -608,6 +609,7 @@ def transfer_handwriting(
     output_sdocx: str | Path,
     *,
     match_override: MatchResult | None = None,
+    plan_override: PagePlan | None = None,
 ) -> dict:
     source = Path(source_sdocx).expanduser().resolve()
     target = Path(target_pdf).expanduser().resolve()
@@ -619,8 +621,11 @@ def transfer_handwriting(
         raise SdocxTransferError("원본 파일을 덮어쓸 수 없습니다. 새 파일명으로 저장하세요.")
     output.parent.mkdir(parents=True, exist_ok=True)
 
-    if inspection.mode == "rebuild" or match_override is not None:
-        selected_match = match_override or inspection.match
+    if inspection.mode == "rebuild" or match_override is not None or plan_override is not None:
+        selected_match = (
+            plan_override.to_match_result() if plan_override is not None
+            else match_override or inspection.match
+        )
         if selected_match is None:
             raise SdocxTransferError("쪽 재조립에 필요한 매칭 결과가 없습니다.")
         from .sdocx_rebuild import rebuild_handwriting
