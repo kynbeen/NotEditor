@@ -33,6 +33,6 @@
 
 ## 모듈: Goodnotes와 Flexcil 지원 가능성 조사 (goodnotes-flexcil-research)
 
-- [ ] Goodnotes와 Flexcil의 공식 내보내기·가져오기 형식, 편집 가능한 펜 데이터와 페이지 대응 정보,
+- [x] Goodnotes와 Flexcil의 공식 내보내기·가져오기 형식, 편집 가능한 펜 데이터와 페이지 대응 정보,
   배경 교체·재정렬 및 알 수 없는 데이터 보존 가능성을 조사한다. 형식별 판정과 필요한 실제 샘플을
   문서로 남기고, 평탄화된 PDF만 가능한 경우 지원 불가로 구분한다.
