@@ -99,28 +99,26 @@ class StaticUiContractTests(unittest.TestCase):
         self.assertIn('class="panel-header-actions"', self.html)
         self.assertIn(".panel-header { height: 73px", self.css)
 
-    def test_alignment_preview_overlays_backgrounds_and_actual_ink(self):
-        self.assertIn('id="handwritingPreview"', self.html)
-        self.assertIn('id="alignBefore"', self.html)
-        self.assertIn('id="alignAfter"', self.html)
-        self.assertIn('id="alignInk"', self.html)
-        self.assertIn('id="alignBlend"', self.html)
-        self.assertIn('callApi("handwriting_preview"', self.js)
-        self.assertIn("refs.alignInk.src = response.ink", self.js)
-        self.assertIn("refs.alignAfter.style.opacity", self.js)
-        self.assertIn(".align-stage img { position: absolute", self.css)
-        self.assertIn('refs.alignStage.addEventListener("wheel"', self.js)
-        self.assertIn("event.deltaY > 0 ? 1 : -1", self.js)
-        self.assertIn("{ passive: false }", self.js)
-        self.assertIn("휠, 쪽 번호, 오른쪽 스크롤바로 이동할 수 있습니다", self.html)
+    def test_alignment_review_is_continuous_side_by_side_and_shows_actual_ink(self):
+        self.assertIn('id="handwritingReview"', self.html)
+        self.assertIn('id="handwritingReviewRows"', self.html)
+        self.assertIn('id="reviewInkToggle"', self.html)
+        self.assertIn("옛 문서 · 필기 원본", self.html)
+        self.assertIn("새 PDF · 드래그하여 순서 수정", self.html)
+        self.assertIn('"handwriting_preview", targetIndex, sourceIndex', self.js)
+        self.assertIn("sourcePage.querySelector(\".review-ink\").src = response.ink", self.js)
+        self.assertIn("targetPage.querySelector(\".review-ink\").src = response.ink", self.js)
+        self.assertIn(".review-page img { position: absolute", self.css)
+        self.assertIn(".page-review.hide-ink img.review-ink", self.css)
+        self.assertNotIn('addEventListener("wheel"', self.js)
+        self.assertIn("화면은 자유롭게 계속 스크롤할 수 있습니다", self.html)
 
-    def test_alignment_preview_has_loading_jump_and_drag_scroll_controls(self):
-        self.assertIn('id="alignLoading"', self.html)
-        self.assertIn('id="alignPageInput"', self.html)
-        self.assertIn('id="alignPageScrubber"', self.html)
-        self.assertIn("function jumpToAlignPage", self.js)
-        self.assertIn('refs.alignPageScrubber.addEventListener("input"', self.js)
-        self.assertIn("writing-mode: vertical-lr", self.css)
+    def test_alignment_review_lazy_loads_without_blocking_scroll(self):
+        self.assertIn("new IntersectionObserver", self.js)
+        self.assertIn('rootMargin: "600px 0px"', self.js)
+        self.assertIn("queuePreviewRequest", self.js)
+        self.assertIn("보이면 미리보기를 불러옵니다", self.js)
+        self.assertNotIn("alignPageScrubber", self.js)
 
     def test_alignment_card_reports_scale_and_warnings(self):
         self.assertIn("본문 기준으로", self.js)
@@ -128,12 +126,16 @@ class StaticUiContractTests(unittest.TestCase):
         self.assertIn("폭 기준으로 맞췄습니다", self.js)
         self.assertIn("잘립니다", self.js)
 
-    def test_rebuild_match_table_supports_manual_source_selection(self):
-        self.assertIn('id="handwritingMatchEditor"', self.html)
-        self.assertIn('id="handwritingMatchRows"', self.html)
-        self.assertIn("function validateMatchMapping", self.js)
-        self.assertIn("state.handwriting.matchMapping", self.js)
-        self.assertIn("같은 구판 쪽을 두 번 선택할 수 없습니다", self.js)
+    def test_page_review_supports_confirmation_and_target_drag_reordering(self):
+        self.assertIn('id="handwritingReview"', self.html)
+        self.assertIn("function shiftedTargetPlan", self.js)
+        self.assertIn('target.addEventListener("dragstart"', self.js)
+        self.assertIn("기존 대응 관계가 달라집니다", self.js)
+        self.assertIn("변경된 행은 다시 확인해야 합니다", self.js)
+        self.assertIn('className = "review-confirm"', self.js)
+        self.assertIn("확인하지 않은 쪽 대응", self.js)
+        self.assertIn("page_plan: pagePlan", self.js)
+        self.assertIn("allow_unconfirmed: allowUnconfirmed", self.js)
 
     def test_web_ui_is_installable_as_a_pwa(self):
         self.assertIn('rel="manifest" href="manifest.webmanifest"', self.html)

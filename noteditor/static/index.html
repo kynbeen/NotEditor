@@ -142,52 +142,23 @@
           </div>
         </div>
 
-        <section id="handwritingMatchEditor" class="match-editor" hidden>
-          <div class="match-editor-head">
+        <section id="handwritingReview" class="page-review" hidden>
+          <div class="page-review-head">
             <div>
-              <strong>쪽 매칭 확인</strong>
-              <small>새 PDF 각 쪽에 옮길 구판 필기를 선택하세요. 같은 구판 쪽을 두 번 쓰거나 순서를 뒤집을 수 없습니다.</small>
+              <strong>쪽 정렬 확인</strong>
+              <small>왼쪽 원본 필기는 고정되어 있습니다. 오른쪽 새 PDF 쪽을 끌어 순서를 바꾸고, 표시된 행을 확인하세요. 화면은 자유롭게 계속 스크롤할 수 있습니다.</small>
             </div>
-            <span id="handwritingMatchSummary"></span>
+            <div class="page-review-tools">
+              <label class="ink-toggle"><input id="reviewInkToggle" type="checkbox" checked /> 필기 보기</label>
+              <span id="handwritingReviewSummary"></span>
+            </div>
           </div>
-          <div id="handwritingMatchRows" class="match-rows"></div>
-          <p id="handwritingMatchError" class="match-error" hidden></p>
+          <div class="page-review-columns" aria-hidden="true">
+            <span>옛 문서 · 필기 원본</span>
+            <span>새 PDF · 드래그하여 순서 수정</span>
+          </div>
+          <div id="handwritingReviewRows" class="page-review-rows"></div>
         </section>
-
-        <div id="handwritingPreview" class="align-preview" hidden>
-          <div class="align-preview-head">
-            <div class="align-preview-copy">
-              <strong>정렬 확인</strong>
-              <small>실제 필기를 옛 배경·새 배경 위에 겹쳐 봅니다. 휠, 쪽 번호, 오른쪽 스크롤바로 이동할 수 있습니다.</small>
-            </div>
-            <div class="align-pager">
-              <button id="alignPrevPage" class="text-button" type="button" aria-label="이전 쪽">‹</button>
-              <label class="align-page-jump" aria-label="미리보기 쪽 번호">
-                <input id="alignPageInput" type="number" min="1" max="1" value="1" inputmode="numeric" />
-                <span id="alignPageTotal">/ 1</span>
-              </label>
-              <button id="alignNextPage" class="text-button" type="button" aria-label="다음 쪽">›</button>
-            </div>
-          </div>
-          <div class="align-stage-row">
-            <div id="alignStage" class="align-stage">
-              <img id="alignBefore" alt="필기가 얹혀 있던 원본 배경" />
-              <img id="alignAfter" alt="옮긴 뒤의 새 배경" />
-              <img id="alignInk" alt="옮길 실제 필기" />
-              <div id="alignLoading" class="align-loading" hidden>
-                <div class="loader"></div>
-                <span>미리보기를 불러오는 중…</span>
-              </div>
-              <span id="alignInkStatus" class="align-ink-status"></span>
-            </div>
-            <input id="alignPageScrubber" class="align-page-scrubber" type="range" min="1" max="1" value="1" aria-label="미리보기 쪽 빠르게 이동" />
-          </div>
-          <label class="align-slider">
-            <span>옛 배경</span>
-            <input id="alignBlend" type="range" min="0" max="100" value="50" />
-            <span>새 배경</span>
-          </label>
-        </div>
 
         <div class="handwriting-notice">
           <strong>원본은 수정하지 않습니다.</strong>

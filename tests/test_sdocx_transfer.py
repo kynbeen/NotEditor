@@ -5,6 +5,7 @@ import struct
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile
 
 import pymupdf
@@ -188,6 +189,24 @@ class SdocxTransferTests(unittest.TestCase):
             self.assertEqual(left[0].rect.height, ink_layer[0].rect.height)
         with self.assertRaises(SdocxTransferError):
             preview_transfer(self.source_sdocx, self.target_pdf, 99)
+
+    def test_preview_honors_manual_source_override_even_for_equal_documents(self):
+        before, after, _ink, _count = preview_transfer(
+            self.source_sdocx, self.target_pdf, 0
+        )
+        with patch(
+            "noteditor.sdocx_transfer.render_comparison",
+            return_value=(before, after),
+        ) as compare:
+            preview_transfer(
+                self.source_sdocx,
+                self.target_pdf,
+                1,
+                source_index_override=0,
+            )
+
+        self.assertEqual(compare.call_args.args[3], 0)
+        self.assertEqual(compare.call_args.kwargs["target_page_index"], 1)
 
     def test_transfer_keeps_samsung_footer_and_untouched_bytes(self):
         output = self.root / "result.sdocx"

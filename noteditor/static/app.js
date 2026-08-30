@@ -22,15 +22,12 @@ const state = {
     : "web",
   handwriting: {
     source_name: null, source_format: null, target_name: null,
-    ready: false, inspection: null, matchMapping: null,
+    ready: false, inspection: null, plan: [],
     analysis: { state: "waiting", stage: "waiting", message: "두 파일을 선택해 주세요.", error: null },
   },
-  alignPreview: { index: 0, pageCount: 0, loading: false, strokeCount: null },
-  alignWheelLocked: false,
+  reviewObserver: null,
 };
 
-let alignRequestSequence = 0;
-let alignScrubTimer = 0;
 let handwritingPollTimer = 0;
 
 const $ = (selector) => document.querySelector(selector);
@@ -55,17 +52,10 @@ const refs = {
   resetHandwriting: $("#resetHandwritingButton"), saveHandwriting: $("#saveHandwritingButton"),
   handwritingOutputName: $("#handwritingOutputName"), handwritingOutputSuffix: $("#handwritingOutputSuffix"),
   resetDocuments: $("#resetDocumentsButton"),
-  handwritingPreview: $("#handwritingPreview"), alignStage: $("#alignStage"),
-  alignBefore: $("#alignBefore"),
-  alignAfter: $("#alignAfter"), alignInk: $("#alignInk"), alignBlend: $("#alignBlend"),
-  alignPageInput: $("#alignPageInput"), alignPageTotal: $("#alignPageTotal"),
-  alignPageScrubber: $("#alignPageScrubber"), alignLoading: $("#alignLoading"),
-  alignInkStatus: $("#alignInkStatus"),
-  alignPrevPage: $("#alignPrevPage"), alignNextPage: $("#alignNextPage"),
-  handwritingMatchEditor: $("#handwritingMatchEditor"),
-  handwritingMatchRows: $("#handwritingMatchRows"),
-  handwritingMatchSummary: $("#handwritingMatchSummary"),
-  handwritingMatchError: $("#handwritingMatchError"),
+  handwritingReview: $("#handwritingReview"),
+  handwritingReviewRows: $("#handwritingReviewRows"),
+  handwritingReviewSummary: $("#handwritingReviewSummary"),
+  reviewInkToggle: $("#reviewInkToggle"),
   webPdfInput: $("#webPdfInput"), webHandwritingInput: $("#webHandwritingInput"),
   webTargetPdfInput: $("#webTargetPdfInput"),
 };
@@ -206,8 +196,8 @@ const webApi = {
   handwriting_preview: (pageIndex, sourceIndex) => fetchJson(`/api/handwriting/preview?page_index=${pageIndex}&source_index=${sourceIndex}`),
   reset_handwriting_transfer: () => fetchJson("/api/handwriting/reset", { method: "POST" }),
   reset_documents: () => fetchJson("/api/documents/reset", { method: "POST" }),
-  save_handwriting_transfer: (suggestedName, targetMapping) => downloadWebResult("/api/handwriting/export", {
-    suggested_name: suggestedName, target_mapping: targetMapping,
+  save_handwriting_transfer: (suggestedName, pagePlan, allowUnconfirmed = false) => downloadWebResult("/api/handwriting/export", {
+    suggested_name: suggestedName, page_plan: pagePlan, allow_unconfirmed: allowUnconfirmed,
   }),
 };
 
@@ -285,7 +275,7 @@ function showTool(tool) {
   refs.handwriting.setAttribute("aria-selected", String(!merge));
   if (!merge) {
     renderHandwritingStatus();
-    if (state.handwriting.ready) loadAlignPreview(state.alignPreview.index);
+    if (state.handwriting.ready) renderPageReview();
   }
 }
 
@@ -355,71 +345,248 @@ function renderHandwritingStatus(error = "") {
   detail.textContent = "쪽이 추가·삭제됐으면 공통 쪽을 자동으로 찾고, 크기나 여백이 달라지면 본문을 기준으로 자동 정렬합니다.";
 }
 
-function initialMatchMapping(info) {
-  const mapping = Array(info.page_count).fill(null);
-  (info.match?.pairs || []).forEach((pair) => {
-    if (pair.target_index !== null) mapping[pair.target_index] = pair.source_index;
-  });
-  return mapping;
+function clonePagePlan(plan) {
+  return (plan?.slots || []).map((slot) => ({
+    source_index: slot.source_index,
+    target_index: slot.target_index,
+    confirmed: Boolean(slot.confirmed),
+    manual: Boolean(slot.manual),
+  }));
 }
 
-function validateMatchMapping(mapping, sourceCount) {
-  const chosen = mapping.filter((value) => value !== null);
-  if (chosen.some((value) => !Number.isInteger(value) || value < 0 || value >= sourceCount)) {
-    return "원본 쪽 번호가 범위를 벗어났습니다.";
-  }
-  if (new Set(chosen).size !== chosen.length) return "같은 구판 쪽을 두 번 선택할 수 없습니다.";
-  if (chosen.some((value, index) => index > 0 && value <= chosen[index - 1])) {
-    return "구판 쪽의 순서를 뒤집을 수 없습니다.";
-  }
-  return "";
+function reviewBadge(slot) {
+  if (slot.source_index === null) return "새 쪽";
+  if (slot.target_index === null) return "원본에만 있음";
+  if (slot.manual) return "수동 정렬";
+  return slot.confirmed ? "자동 매칭" : "확인 필요";
 }
 
-function renderMatchEditor() {
-  const info = state.handwriting.inspection;
-  const visible = info?.mode === "rebuild" && info.match;
-  refs.handwritingMatchEditor.hidden = !visible;
-  refs.handwritingMatchRows.replaceChildren();
-  if (!visible) return;
-  const mapping = state.handwriting.matchMapping || initialMatchMapping(info);
-  state.handwriting.matchMapping = mapping;
-  const pairByTarget = new Map(info.match.pairs
-    .filter((pair) => pair.target_index !== null)
-    .map((pair) => [pair.target_index, pair]));
+function renderReviewSummary() {
+  const plan = state.handwriting.plan;
+  const unconfirmed = plan.filter((slot) => !slot.confirmed).length;
+  const matched = plan.filter((slot) => slot.source_index !== null && slot.target_index !== null).length;
+  refs.handwritingReviewSummary.textContent = unconfirmed
+    ? `${matched}쪽 연결 · ${unconfirmed}개 확인 필요`
+    : `${matched}쪽 연결 · 모두 확인됨`;
+  refs.saveHandwriting.disabled = !state.bridgeReady || !state.handwriting.ready;
+}
 
-  mapping.forEach((sourceIndex, targetIndex) => {
-    const pair = pairByTarget.get(targetIndex);
-    const row = document.createElement("label");
-    row.className = `match-row${pair?.confident === false ? " uncertain" : ""}`;
-    const select = document.createElement("select");
-    select.dataset.targetIndex = String(targetIndex);
-    const fresh = document.createElement("option");
-    fresh.value = "";
-    fresh.textContent = "새 쪽 — 옮길 필기 없음";
-    select.append(fresh);
-    for (let source = 0; source < info.source_page_count; source += 1) {
-      const option = document.createElement("option");
-      option.value = String(source);
-      option.textContent = `구판 ${source + 1}쪽`;
-      select.append(option);
+function setReviewRowState(row, slot) {
+  row.classList.toggle("needs-confirmation", !slot.confirmed);
+  row.classList.toggle("confirmed", slot.confirmed);
+  const button = row.querySelector(".review-confirm");
+  if (!button) return;
+  button.textContent = slot.confirmed ? "확인됨" : "이 대응 확인";
+  button.classList.toggle("done", slot.confirmed);
+}
+
+function makeReviewPage(emptyMessage, alt) {
+  const page = document.createElement("div");
+  page.className = `review-page${emptyMessage ? " empty" : " loading"}`;
+  page.innerHTML = emptyMessage
+    ? `<div class="review-placeholder">${emptyMessage}</div>`
+    : `<img class="review-background" alt="${alt}" /><img class="review-ink" alt="필기 레이어" /><div class="review-placeholder"><div class="loader"></div><span>보이면 미리보기를 불러옵니다…</span></div>`;
+  return page;
+}
+
+function describeChangedPages(before, after) {
+  const changedTargets = new Set();
+  const changedSources = new Set();
+  const beforeTargetSource = new Map(before.filter((slot) => slot.target_index !== null)
+    .map((slot) => [slot.target_index, slot.source_index]));
+  const beforeSourceTarget = new Map(before.filter((slot) => slot.source_index !== null)
+    .map((slot) => [slot.source_index, slot.target_index]));
+  after.forEach((slot, index) => {
+    const prior = before[index];
+    if (slot.target_index !== null && (
+      beforeTargetSource.get(slot.target_index) !== slot.source_index
+      || prior?.target_index !== slot.target_index
+    )) changedTargets.add(slot.target_index + 1);
+    if (slot.source_index !== null && beforeSourceTarget.get(slot.source_index) !== slot.target_index) {
+      changedSources.add(slot.source_index + 1);
     }
-    select.value = sourceIndex === null ? "" : String(sourceIndex);
-    select.addEventListener("change", () => {
-      mapping[targetIndex] = select.value === "" ? null : Number(select.value);
-      renderMatchEditor();
-      loadAlignPreview(targetIndex);
-    });
-    const badge = pair?.confident === false ? "확인 필요" : (sourceIndex === null ? "새 쪽" : "자동 매칭");
-    row.innerHTML = `<span><strong>새 PDF ${targetIndex + 1}쪽</strong><small>${badge}</small></span>`;
-    row.append(select);
-    refs.handwritingMatchRows.append(row);
   });
-  const error = validateMatchMapping(mapping, info.source_page_count);
-  refs.handwritingMatchError.hidden = !error;
-  refs.handwritingMatchError.textContent = error;
-  refs.saveHandwriting.disabled = Boolean(error) || !state.bridgeReady;
-  const matched = mapping.filter((value) => value !== null).length;
-  refs.handwritingMatchSummary.textContent = `${matched}쪽 연결 · ${mapping.length - matched}쪽 새로 추가`;
+  return {
+    targetPages: [...changedTargets].sort((a, b) => a - b),
+    sourcePages: [...changedSources].sort((a, b) => a - b),
+  };
+}
+
+function shiftedTargetPlan(from, to) {
+  const before = state.handwriting.plan;
+  const targets = before.map((slot) => slot.target_index);
+  const [moved] = targets.splice(from, 1);
+  targets.splice(to, 0, moved);
+  const priorByPair = new Map(before.map((slot) => [
+    `${slot.source_index}:${slot.target_index}`, slot,
+  ]));
+  return before.map((prior, index) => {
+    const target = targets[index];
+    const same = priorByPair.get(`${prior.source_index}:${target}`);
+    return {
+      source_index: prior.source_index,
+      target_index: target,
+      confirmed: same ? same.confirmed : false,
+      manual: same ? same.manual : true,
+    };
+  }).filter((slot) => slot.source_index !== null || slot.target_index !== null);
+}
+
+function moveReviewTarget(from, to) {
+  if (!Number.isInteger(from) || !Number.isInteger(to) || from === to) return;
+  const before = state.handwriting.plan;
+  if (!before[from] || before[from].target_index === null) return;
+  const next = shiftedTargetPlan(from, Math.max(0, Math.min(to, before.length - 1)));
+  const changed = describeChangedPages(before, next);
+  const details = [
+    changed.targetPages.length ? `새 PDF ${changed.targetPages.join(", ")}쪽` : "",
+    changed.sourcePages.length ? `원본 ${changed.sourcePages.join(", ")}쪽` : "",
+  ].filter(Boolean).join("과 ");
+  if (details && !window.confirm(
+    `${details}의 기존 대응 관계가 달라집니다. 변경된 행은 다시 확인해야 합니다. 계속할까요?`,
+  )) return;
+  state.handwriting.plan = next;
+  renderPageReview();
+}
+
+async function loadReviewRow(row, slotIndex) {
+  if (row.dataset.loaded === "true") return;
+  row.dataset.loaded = "true";
+  const slot = state.handwriting.plan[slotIndex];
+  if (!slot) return;
+  const targetIndex = slot.target_index === null ? 0 : slot.target_index;
+  const sourceIndex = slot.source_index === null ? -1 : slot.source_index;
+  try {
+    const response = await queuePreviewRequest(() => callApi(
+      "handwriting_preview", targetIndex, sourceIndex,
+    ));
+    if (!response.ok) throw new Error(response.error);
+    const sourcePage = row.querySelector(".source-cell .review-page");
+    const targetPage = row.querySelector(".target-cell .review-page");
+    const decodes = [];
+    if (slot.source_index !== null) {
+      sourcePage.querySelector(".review-background").src = response.before;
+      sourcePage.querySelector(".review-ink").src = response.ink;
+      decodes.push(...sourcePage.querySelectorAll("img"));
+      sourcePage.classList.remove("loading");
+      sourcePage.classList.add("loaded");
+    }
+    if (slot.target_index !== null) {
+      targetPage.querySelector(".review-background").src = response.after;
+      targetPage.querySelector(".review-ink").src = response.ink;
+      decodes.push(...targetPage.querySelectorAll("img"));
+      targetPage.classList.remove("loading");
+      targetPage.classList.add("loaded");
+    }
+    await Promise.allSettled(decodes.map((image) => image.decode()));
+    const inkLabel = row.querySelector(".review-ink-count");
+    if (inkLabel) {
+      inkLabel.textContent = response.stroke_count
+        ? `필기 ${response.stroke_count}획`
+        : "필기 없음";
+    }
+  } catch (error) {
+    row.dataset.loaded = "false";
+    row.querySelectorAll(".review-page:not(.empty)").forEach((page) => {
+      page.classList.remove("loading");
+      page.classList.add("error");
+      const placeholder = page.querySelector(".review-placeholder");
+      placeholder.textContent = "미리보기 실패 · 눌러서 다시 시도";
+      placeholder.onclick = () => loadReviewRow(row, slotIndex);
+    });
+    reportClientError(error);
+  }
+}
+
+function renderPageReview() {
+  const visible = state.handwriting.ready && state.handwriting.plan.length > 0;
+  refs.handwritingReview.hidden = !visible;
+  refs.handwritingReviewRows.replaceChildren();
+  state.reviewObserver?.disconnect();
+  if (!visible) return;
+  state.reviewObserver = new IntersectionObserver((entries) => {
+    entries.forEach((entry) => {
+      if (!entry.isIntersecting) return;
+      state.reviewObserver.unobserve(entry.target);
+      loadReviewRow(entry.target, Number(entry.target.dataset.slotIndex));
+    });
+  }, { root: null, rootMargin: "600px 0px" });
+
+  state.handwriting.plan.forEach((slot, index) => {
+    const row = document.createElement("article");
+    row.className = "review-row";
+    row.dataset.slotIndex = String(index);
+    const source = document.createElement("div");
+    source.className = "review-cell source-cell";
+    source.append(makeReviewPage(
+      slot.source_index === null ? "새 PDF에만 있는 쪽" : "",
+      slot.source_index === null ? "" : `원본 ${slot.source_index + 1}쪽`,
+    ));
+    const sourceMeta = document.createElement("div");
+    sourceMeta.className = "review-meta";
+    sourceMeta.innerHTML = slot.source_index === null
+      ? `<span>대응할 원본 없음</span>`
+      : `<span class="review-meta-copy"><strong>원본 ${slot.source_index + 1}쪽</strong><span class="review-ink-count"></span></span>`;
+    source.append(sourceMeta);
+
+    const target = document.createElement("div");
+    target.className = "review-cell target-cell";
+    target.draggable = slot.target_index !== null;
+    target.append(makeReviewPage(
+      slot.target_index === null ? "새 PDF에서 빠진 쪽 · 원본 필기와 배경을 보존" : "",
+      slot.target_index === null ? "" : `새 PDF ${slot.target_index + 1}쪽`,
+    ));
+    const targetMeta = document.createElement("div");
+    targetMeta.className = "review-meta";
+    targetMeta.innerHTML = `<span class="review-meta-copy">${
+      slot.target_index === null
+        ? "<strong>새 PDF 쪽 없음</strong>"
+        : `<span class="review-drag-handle" aria-hidden="true">⠿</span><strong>새 PDF ${slot.target_index + 1}쪽</strong>`
+    }<span class="review-badge${slot.manual ? " manual" : ""}">${reviewBadge(slot)}</span></span>`;
+    const confirm = document.createElement("button");
+    confirm.type = "button";
+    confirm.className = "review-confirm";
+    confirm.addEventListener("click", () => {
+      slot.confirmed = true;
+      setReviewRowState(row, slot);
+      renderReviewSummary();
+    });
+    targetMeta.append(confirm);
+    target.append(targetMeta);
+
+    if (slot.target_index !== null) {
+      target.addEventListener("dragstart", (event) => {
+        target.classList.add("dragging");
+        event.dataTransfer.effectAllowed = "move";
+        event.dataTransfer.setData("text/plain", String(index));
+      });
+      target.addEventListener("dragend", () => {
+        target.classList.remove("dragging");
+        document.querySelectorAll(".review-row.drop-before, .review-row.drop-after")
+          .forEach((node) => node.classList.remove("drop-before", "drop-after"));
+      });
+    }
+    row.addEventListener("dragover", (event) => {
+      event.preventDefault();
+      const before = event.clientY < row.getBoundingClientRect().top + row.offsetHeight / 2;
+      row.classList.toggle("drop-before", before);
+      row.classList.toggle("drop-after", !before);
+    });
+    row.addEventListener("dragleave", () => row.classList.remove("drop-before", "drop-after"));
+    row.addEventListener("drop", (event) => {
+      event.preventDefault();
+      const from = Number(event.dataTransfer.getData("text/plain"));
+      let to = index + (row.classList.contains("drop-after") ? 1 : 0);
+      row.classList.remove("drop-before", "drop-after");
+      if (from < to) to -= 1;
+      moveReviewTarget(from, to);
+    });
+    row.append(source, target);
+    setReviewRowState(row, slot);
+    refs.handwritingReviewRows.append(row);
+    state.reviewObserver.observe(row);
+  });
+  renderReviewSummary();
 }
 
 function alignmentWarnings(fit) {
@@ -477,7 +644,9 @@ function applyHandwritingResponse(response) {
     target_name: response.target_name || null,
     ready: Boolean(response.ready),
     inspection: response.inspection || null,
-    matchMapping: selectionChanged ? null : previous.matchMapping,
+    plan: (selectionChanged || becameReady || !previous.plan?.length)
+      ? clonePagePlan(response.inspection?.plan)
+      : previous.plan,
     analysis: response.analysis || {
       state: response.ready ? "ready" : "waiting",
       stage: response.ready ? "ready" : "waiting",
@@ -488,18 +657,7 @@ function applyHandwritingResponse(response) {
   if (selectionChanged) updateHandwritingOutputName(!state.handwritingOutputNameDirty);
   else updateHandwritingOutputName(false);
   renderHandwritingStatus();
-  renderMatchEditor();
-  alignRequestSequence += 1;
-  if (selectionChanged || becameReady) {
-    state.alignPreview = {
-      index: 0,
-      pageCount: state.handwriting.inspection?.page_count || 0,
-      loading: false,
-      strokeCount: null,
-    };
-  }
-  if (state.handwriting.ready && (selectionChanged || becameReady)) loadAlignPreview(0);
-  else if (!state.handwriting.ready) refs.handwritingPreview.hidden = true;
+  renderPageReview();
   scheduleHandwritingPoll();
   return true;
 }
@@ -529,77 +687,6 @@ async function retryHandwritingAnalysis() {
   } finally {
     refs.retryHandwriting.disabled = false;
   }
-}
-
-function renderAlignPreviewState() {
-  const preview = state.alignPreview;
-  const pageCount = Math.max(1, preview.pageCount || 1);
-  refs.handwritingPreview.hidden = !state.handwriting.ready;
-  if (document.activeElement !== refs.alignPageInput) {
-    refs.alignPageInput.value = String(preview.index + 1);
-  }
-  refs.alignPageInput.max = String(pageCount);
-  refs.alignPageTotal.textContent = `/ ${pageCount}`;
-  refs.alignPageScrubber.max = String(pageCount);
-  refs.alignPageScrubber.value = String(preview.index + 1);
-  refs.alignPageScrubber.disabled = pageCount <= 1;
-  refs.alignPrevPage.disabled = preview.index <= 0;
-  refs.alignNextPage.disabled = preview.index >= preview.pageCount - 1;
-  refs.alignLoading.hidden = !preview.loading;
-  refs.alignStage.classList.toggle("loading", preview.loading);
-  refs.alignInkStatus.textContent = preview.strokeCount === null
-    ? ""
-    : (preview.strokeCount ? `실제 필기 ${preview.strokeCount}획` : "이 쪽에는 필기 없음");
-}
-
-async function loadAlignPreview(index) {
-  if (!state.handwriting.ready) { refs.handwritingPreview.hidden = true; return; }
-  const requestedIndex = Math.max(0, Math.min(
-    Number.isFinite(Number(index)) ? Math.trunc(Number(index)) : 0,
-    Math.max(0, state.alignPreview.pageCount - 1),
-  ));
-  const requestId = ++alignRequestSequence;
-  state.alignPreview.index = requestedIndex;
-  state.alignPreview.loading = true;
-  state.alignPreview.strokeCount = null;
-  renderAlignPreviewState();
-  try {
-    const sourceIndex = state.handwriting.matchMapping?.[requestedIndex];
-    const response = await callApi("handwriting_preview", requestedIndex, sourceIndex ?? -1);
-    if (!response.ok) throw new Error(response.error);
-    if (requestId !== alignRequestSequence) return;
-    refs.alignBefore.src = response.before;
-    refs.alignAfter.src = response.after;
-    refs.alignInk.src = response.ink;
-    await Promise.allSettled([
-      refs.alignBefore.decode(),
-      refs.alignAfter.decode(),
-      refs.alignInk.decode(),
-    ]);
-    if (requestId !== alignRequestSequence) return;
-    state.alignPreview.index = response.index;
-    state.alignPreview.pageCount = response.page_count;
-    state.alignPreview.strokeCount = response.stroke_count;
-  } catch (error) {
-    if (requestId !== alignRequestSequence) return;
-    toast(error.message, "error");
-    reportClientError(error);
-  } finally {
-    if (requestId === alignRequestSequence) {
-      state.alignPreview.loading = false;
-      renderAlignPreviewState();
-    }
-  }
-}
-
-function jumpToAlignPage() {
-  const requested = Number.parseInt(refs.alignPageInput.value, 10);
-  const page = Math.max(1, Math.min(
-    Number.isFinite(requested) ? requested : state.alignPreview.index + 1,
-    Math.max(1, state.alignPreview.pageCount),
-  ));
-  refs.alignPageInput.value = String(page);
-  loadAlignPreview(page - 1);
 }
 
 async function chooseHandwriting(kind) {
@@ -655,11 +742,16 @@ async function saveHandwritingTransfer() {
   const base = (state.handwriting.target_name || "새-문서.pdf").replace(/\.pdf$/i, "");
   const outputExtension = state.handwriting.source_format === "notewise" ? ".notewise" : ".sdocx";
   const requestedName = withoutKnownExtension(refs.handwritingOutputName.value.trim()) || `${base}-필기`;
+  const unconfirmed = state.handwriting.plan.filter((slot) => !slot.confirmed).length;
+  if (unconfirmed && !window.confirm(
+    `확인하지 않은 쪽 대응이 ${unconfirmed}개 남아 있습니다. 그대로 필기를 옮길까요?`,
+  )) return;
   setBusy(true, "필기와 형광펜을 새 PDF로 옮기는 중…");
   try {
     const response = await callApi("save_handwriting_transfer",
       `${requestedName}${outputExtension}`,
-      state.handwriting.inspection?.mode === "rebuild" ? state.handwriting.matchMapping : null,
+      state.handwriting.plan,
+      unconfirmed > 0,
     );
     if (!response.ok) throw new Error(response.error);
     if (response.cancelled) return;
@@ -1192,43 +1284,9 @@ refs.mergeOutputName.addEventListener("input", () => { state.mergeOutputNameDirt
 refs.handwritingOutputName.addEventListener("input", () => { state.handwritingOutputNameDirty = true; });
 refs.mergeTab.addEventListener("click", () => showTool("merge"));
 refs.handwriting.addEventListener("click", () => showTool("handwriting"));
-refs.alignBlend.addEventListener("input", () => {
-  refs.alignAfter.style.opacity = String(Number(refs.alignBlend.value) / 100);
+refs.reviewInkToggle.addEventListener("change", () => {
+  refs.handwritingReview.classList.toggle("hide-ink", !refs.reviewInkToggle.checked);
 });
-refs.alignPrevPage.addEventListener("click", () => loadAlignPreview(state.alignPreview.index - 1));
-refs.alignNextPage.addEventListener("click", () => loadAlignPreview(state.alignPreview.index + 1));
-refs.alignPageInput.addEventListener("change", jumpToAlignPage);
-refs.alignPageInput.addEventListener("keydown", (event) => {
-  if (event.key !== "Enter") return;
-  event.preventDefault();
-  jumpToAlignPage();
-  refs.alignPageInput.select();
-});
-refs.alignPageScrubber.addEventListener("input", () => {
-  const page = Number(refs.alignPageScrubber.value);
-  refs.alignPageInput.value = String(page);
-  clearTimeout(alignScrubTimer);
-  alignScrubTimer = setTimeout(() => loadAlignPreview(page - 1), 90);
-});
-refs.alignPageScrubber.addEventListener("change", () => {
-  clearTimeout(alignScrubTimer);
-  loadAlignPreview(Number(refs.alignPageScrubber.value) - 1);
-});
-refs.alignStage.addEventListener("wheel", (event) => {
-  if (!state.handwriting.ready || Math.abs(event.deltaY) < 8) return;
-  const direction = event.deltaY > 0 ? 1 : -1;
-  const next = Math.max(0, Math.min(
-    state.alignPreview.index + direction,
-    state.alignPreview.pageCount - 1,
-  ));
-  if (next === state.alignPreview.index) return;
-  event.preventDefault();
-  if (state.alignPreview.loading || state.alignWheelLocked) return;
-  state.alignWheelLocked = true;
-  loadAlignPreview(next).finally(() => {
-    setTimeout(() => { state.alignWheelLocked = false; }, 180);
-  });
-}, { passive: false });
 refs.chooseHandwritingSource.addEventListener("click", () => chooseHandwriting("source"));
 refs.chooseHandwritingTarget.addEventListener("click", () => chooseHandwriting("target"));
 refs.retryHandwriting.addEventListener("click", retryHandwritingAnalysis);

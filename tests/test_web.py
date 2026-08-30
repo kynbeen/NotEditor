@@ -11,7 +11,16 @@ from urllib.parse import unquote
 
 from fastapi.testclient import TestClient
 
-from noteditor.web import SESSION_COOKIE, app, health, health_head, store
+from noteditor.page_match import MatchResult, PagePair
+from noteditor.web import (
+    SESSION_COOKIE,
+    HandwritingExportRequest,
+    _export_handwriting,
+    app,
+    health,
+    health_head,
+    store,
+)
 from tests.test_notewise_transfer import _make_notewise, _make_pdf as make_notewise_pdf
 from tests.test_sdocx_transfer import make_pdf, make_sdocx
 
@@ -133,6 +142,47 @@ class WebAppTests(unittest.TestCase):
         body = exported.json()
         self.assertFalse(body["ok"])
         self.assertIn("선택", body["error"])
+
+    def test_web_page_plan_requires_explicit_unconfirmed_approval(self):
+        inspection = SimpleNamespace(
+            source_page_count=2,
+            page_count=2,
+            match=MatchResult((
+                PagePair(0, 0, 0.1, 0.9),
+                PagePair(1, 1, 0.7, 0.01),
+            )),
+        )
+        api = SimpleNamespace(
+            _inspection=lambda: inspection,
+            _handwriting_source=self.root / "source.sdocx",
+            _handwriting_target=self.root / "target.pdf",
+        )
+        plan = [
+            {"source_index": 0, "target_index": 1, "confirmed": True},
+            {"source_index": 1, "target_index": 0, "confirmed": False},
+        ]
+        output = self.root / "planned.sdocx"
+        with patch("noteditor.web.transfer_handwriting", return_value={}) as transfer:
+            with self.assertRaisesRegex(ValueError, "확인하지 않은"):
+                _export_handwriting(
+                    api,
+                    HandwritingExportRequest(page_plan=plan),
+                    output,
+                )
+            result = _export_handwriting(
+                api,
+                HandwritingExportRequest(page_plan=plan, allow_unconfirmed=True),
+                output,
+            )
+
+        validated = transfer.call_args.kwargs["plan_override"]
+        self.assertEqual(
+            [(slot.source_index, slot.target_index) for slot in validated.slots],
+            [(0, 1), (1, 0)],
+        )
+        self.assertEqual(result["warnings"], [
+            "확인하지 않은 쪽 대응 1개를 사용자 승인으로 저장했습니다."
+        ])
 
     def test_analysis_failure_keeps_web_uploads_and_retry_uses_the_same_files(self):
         source = self.root / "retry.sdocx"

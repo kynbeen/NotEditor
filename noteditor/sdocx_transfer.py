@@ -514,17 +514,16 @@ def preview_transfer(
         raise SdocxTransferError(f"{inspection.page_count}쪽 문서에 없는 쪽 번호입니다: {page_index + 1}")
 
     source_index: int | None = page_index
-    if inspection.mode == "rebuild" and inspection.match is not None:
-        if source_index_override == -2:
-            pair = next(
-                (pair for pair in inspection.match.pairs if pair.target_index == page_index),
-                None,
-            )
-            if pair is None:
-                raise SdocxTransferError(f"대상 {page_index + 1}쪽의 원본 매칭을 찾을 수 없습니다.")
-            source_index = pair.source_index
-        else:
-            source_index = None if source_index_override == -1 else source_index_override
+    if source_index_override != -2:
+        source_index = None if source_index_override == -1 else source_index_override
+    elif inspection.mode == "rebuild" and inspection.match is not None:
+        pair = next(
+            (pair for pair in inspection.match.pairs if pair.target_index == page_index),
+            None,
+        )
+        if pair is None:
+            raise SdocxTransferError(f"대상 {page_index + 1}쪽의 원본 매칭을 찾을 수 없습니다.")
+        source_index = pair.source_index
 
     archive, members, _media_info_name, _media_info, _pdf_entry, embedded_name = _archive_context(source)
     try:
@@ -561,7 +560,7 @@ def preview_transfer(
         raise
     try:
         with source_document, target_document:
-            if inspection.mode == "rebuild" and inspection.match is not None:
+            if inspection.mode == "rebuild" or source_index != page_index:
                 if source_index is None:
                     page = target_document[page_index]
                     rect = page.rect
