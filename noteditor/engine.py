@@ -384,6 +384,11 @@ class ComposerSession:
                 object_stream_mode=pikepdf.ObjectStreamMode.preserve,
                 normalize_content=False,
                 recompress_flate=False,
+                # qpdf otherwise seeds /ID once per process. summary.ai
+                # reproduces a saved merge in a separate process and compares
+                # bytes, so the same inputs and page order must cross that
+                # process boundary deterministically.
+                deterministic_id=True,
             )
             destination.close()
 

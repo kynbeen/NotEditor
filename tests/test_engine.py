@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import tempfile
+import subprocess
+import sys
 import threading
 import time
 import unittest
@@ -97,6 +99,29 @@ class ComposerEngineTests(unittest.TestCase):
         with pikepdf.Pdf.open(output) as combined:
             self.assertIn("/AcroForm", combined.Root)
             self.assertEqual(str(combined.docinfo["/Producer"]), "PDF Page Composer (pikepdf/qpdf)")
+
+    def test_saved_bytes_are_deterministic_across_processes(self):
+        source_path = self.root / "deterministic.pdf"
+        make_source(source_path, ["ONE", "TWO"])
+        script = (
+            "import hashlib,sys; from noteditor.engine import ComposerSession; "
+            "s=ComposerSession(); d=s.add_files([sys.argv[1]])[0]; "
+            "s.build_pdf([{'document_id':d['id'],'page_index':0},"
+            "{'document_id':d['id'],'page_index':1}],sys.argv[2]); s.close(); "
+            "print(hashlib.sha256(open(sys.argv[2],'rb').read()).hexdigest())"
+        )
+        hashes = []
+        for index in range(2):
+            output = self.root / f"deterministic-{index}.pdf"
+            done = subprocess.run(
+                [sys.executable, "-c", script, str(source_path), str(output)],
+                cwd=Path(__file__).parents[1],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            hashes.append(done.stdout.strip())
+        self.assertEqual(hashes[0], hashes[1])
 
     def test_duplicate_page_is_rejected(self):
         path = self.root / "one.pdf"

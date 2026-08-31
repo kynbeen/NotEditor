@@ -6,6 +6,7 @@ const state = {
   order: [],
   orderDirty: false,
   mergeOutputNameDirty: false,
+  mergePlan: null,
   handwritingOutputNameDirty: false,
   active: null,
   thumbnailCache: new Map(),
@@ -56,6 +57,10 @@ const refs = {
   handwritingReviewRows: $("#handwritingReviewRows"),
   handwritingReviewSummary: $("#handwritingReviewSummary"),
   reviewInkToggle: $("#reviewInkToggle"),
+  reviewReorderDialog: $("#reviewReorderDialog"),
+  reviewReorderMessage: $("#reviewReorderMessage"),
+  reviewReorderCancel: $("#reviewReorderCancel"),
+  reviewReorderContinue: $("#reviewReorderContinue"),
   webPdfInput: $("#webPdfInput"), webHandwritingInput: $("#webHandwritingInput"),
   webTargetPdfInput: $("#webTargetPdfInput"),
 };
@@ -179,6 +184,7 @@ async function downloadWebResult(endpoint, payload) {
 
 const webApi = {
   health: () => fetchJson("/api/health"),
+  startup_plan: async () => ({ ok: true, plan: null }),
   log_client_error: (message) => fetchJson("/api/client-error", {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ message }),
   }),
@@ -251,9 +257,31 @@ async function initializeBridge() {
     const response = await callApi("health");
     if (!response?.ok) throw new Error(response?.error || "앱 응답이 올바르지 않습니다.");
     setBridgeState(true, false);
+    const startup = await callApi("startup_plan");
+    if (!startup?.ok) throw new Error(startup?.error || "합치기 시작 계획을 열 수 없습니다.");
+    if (startup.plan) applyStartupPlan(startup.plan);
   } catch (error) {
     console.error(error);
+    setBridgeState(false, true);
+    toast(error.message, "error");
+    reportClientError(error);
   }
+}
+
+function applyStartupPlan(plan) {
+  state.mergePlan = plan;
+  state.documents = plan.sources || [];
+  state.order = (plan.order || []).map((item) => ({ ...item }));
+  state.selected = new Set(state.order.map(refKey));
+  state.orderDirty = true;
+  state.mergeOutputNameDirty = true;
+  refs.mergeOutputName.value = withoutKnownExtension(plan.output_name || "merged.pdf");
+  refs.mergeOutputName.title = `summary.ai 지정 저장 경로: ${plan.output_path}`;
+  if (plan.title) document.title = `NotEditor — ${plan.title}`;
+  render();
+  const first = state.order[0];
+  if (first) showPreview(first.document_id, first.page_index, "인계 계획 미리보기");
+  toast("summary.ai 합치기 계획을 불러왔습니다. 쪽 선택과 순서를 확인해 주세요.", "success");
 }
 
 async function reportClientError(value) {
@@ -447,7 +475,26 @@ function shiftedTargetPlan(from, to) {
   }).filter((slot) => slot.source_index !== null || slot.target_index !== null);
 }
 
-function moveReviewTarget(from, to) {
+function confirmReviewReorder(message) {
+  refs.reviewReorderMessage.textContent = message;
+  refs.reviewReorderDialog.showModal();
+  return new Promise((resolve) => {
+    const finish = (accepted) => {
+      refs.reviewReorderDialog.removeEventListener("close", onClose);
+      refs.reviewReorderDialog.removeEventListener("cancel", onCancel);
+      resolve(accepted);
+    };
+    const onClose = () => finish(refs.reviewReorderDialog.returnValue === "continue");
+    const onCancel = (event) => {
+      event.preventDefault();
+      refs.reviewReorderDialog.close("cancel");
+    };
+    refs.reviewReorderDialog.addEventListener("close", onClose);
+    refs.reviewReorderDialog.addEventListener("cancel", onCancel);
+  });
+}
+
+async function moveReviewTarget(from, to) {
   if (!Number.isInteger(from) || !Number.isInteger(to) || from === to) return;
   const before = state.handwriting.plan;
   if (!before[from] || before[from].target_index === null) return;
@@ -461,7 +508,7 @@ function moveReviewTarget(from, to) {
     changed.targetPages.length ? `새 PDF ${changed.targetPages.join(", ")}쪽` : "",
     changed.sourcePages.length ? `원본 ${changed.sourcePages.join(", ")}쪽` : "",
   ].filter(Boolean).join("과 ");
-  if (details && !window.confirm(
+  if (details && !await confirmReviewReorder(
     `${relationshipCount}개 대응이 달라집니다 (${details}). 변경된 행은 다시 확인해야 합니다. 계속할까요?`,
   )) return;
   state.handwriting.plan = next;
@@ -598,7 +645,7 @@ function renderPageReview() {
       let to = index + (row.classList.contains("drop-after") ? 1 : 0);
       row.classList.remove("drop-before", "drop-after");
       if (from < to) to -= 1;
-      moveReviewTarget(from, to);
+      void moveReviewTarget(from, to);
     });
     row.append(source, target);
     setReviewRowState(row, slot);
@@ -1237,10 +1284,10 @@ function renderSummary() {
   refs.selectionSummary.textContent = !state.bridgeReady
     ? (state.bridgeFailed ? "바로가기로 다시 실행해 주세요" : "앱 연결 중…")
     : (state.documents.length
-      ? `${state.documents.length}개 문서에서 ${state.order.length}쪽 선택`
+      ? `${state.mergePlan?.title ? `${state.mergePlan.title} · ` : ""}${state.documents.length}개 문서에서 ${state.order.length}쪽 선택`
       : "PDF를 추가해 시작하세요");
   refs.save.disabled = !state.bridgeReady || state.order.length === 0;
-  refs.mergeOutputName.disabled = state.documents.length === 0;
+  refs.mergeOutputName.disabled = Boolean(state.mergePlan) || state.documents.length === 0;
   refs.resetDocuments.disabled = !state.bridgeReady || state.documents.length === 0;
 }
 

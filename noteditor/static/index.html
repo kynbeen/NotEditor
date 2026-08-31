@@ -187,6 +187,16 @@
     <div id="busyOverlay" class="busy-overlay" role="status" aria-live="polite" hidden>
       <div class="busy-card"><div class="loader"></div><strong id="busyText">처리 중…</strong></div>
     </div>
+    <dialog id="reviewReorderDialog" class="confirm-dialog" aria-labelledby="reviewReorderTitle">
+      <form method="dialog">
+        <strong id="reviewReorderTitle">쪽 대응을 변경할까요?</strong>
+        <p id="reviewReorderMessage"></p>
+        <div class="confirm-dialog-actions">
+          <button id="reviewReorderCancel" class="button secondary" type="submit" value="cancel">취소</button>
+          <button id="reviewReorderContinue" class="button primary" type="submit" value="continue">계속 변경</button>
+        </div>
+      </form>
+    </dialog>
     <div id="toastRegion" class="toast-region" aria-live="polite"></div>
 
     <script src="app.js"></script>

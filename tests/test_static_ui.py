@@ -61,6 +61,13 @@ class StaticUiContractTests(unittest.TestCase):
         self.assertIn("NotEditor 연결을 확인할 수 없습니다", self.js)
         self.assertIn('runtime: window.location.hash === "#desktop"', self.js)
 
+    def test_summary_ai_startup_plan_populates_the_desktop_merge_ui(self):
+        self.assertIn("startup_plan: async () => ({ ok: true, plan: null })", self.js)
+        self.assertIn('callApi("startup_plan")', self.js)
+        self.assertIn("function applyStartupPlan(plan)", self.js)
+        self.assertIn("state.selected = new Set(state.order.map(refKey))", self.js)
+        self.assertIn("Boolean(state.mergePlan)", self.js)
+
     def test_merge_and_handwriting_are_peer_tabs(self):
         self.assertIn('id="handwritingButton"', self.html)
         self.assertIn('id="mergeTabButton"', self.html)
@@ -120,6 +127,13 @@ class StaticUiContractTests(unittest.TestCase):
         self.assertIn("보이면 미리보기를 불러옵니다", self.js)
         self.assertNotIn("alignPageScrubber", self.js)
 
+    def test_desktop_alignment_review_fits_three_page_pairs_in_the_workspace(self):
+        self.assertIn(
+            ".review-page { position: relative; height: clamp(118px, 13vw, 132px)",
+            self.css,
+        )
+        self.assertIn(".review-page { height: min(78vw, 360px); }", self.css)
+
     def test_alignment_card_reports_scale_and_warnings(self):
         self.assertIn("본문 기준으로", self.js)
         self.assertIn("본문 오차 최대", self.js)
@@ -132,6 +146,9 @@ class StaticUiContractTests(unittest.TestCase):
         self.assertIn('target.addEventListener("dragstart"', self.js)
         self.assertIn("개 대응이 달라집니다", self.js)
         self.assertIn("변경된 행은 다시 확인해야 합니다", self.js)
+        self.assertIn('id="reviewReorderDialog"', self.html)
+        self.assertIn("await confirmReviewReorder(", self.js)
+        self.assertIn("계속 변경", self.html)
         self.assertIn('className = "review-confirm"', self.js)
         self.assertIn("확인하지 않은 쪽 대응", self.js)
         self.assertIn("unconfirmedPages", self.js)

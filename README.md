@@ -52,6 +52,36 @@ Python 3.12 이상이 필요하며, 전용 `venv` 생성·의존성 설치·아�
 `F11`로 테두리 없는 전체화면을 켜거나 끌 수 있습니다. 문서 선택과 저장은 기존처럼 로컬 네이티브
 대화상자와 Python 브리지를 사용합니다.
 
+## 로컬 웹 앱 실행
+
+Windows 설치 후 `NotEditor 로컬 웹` 바로가기를 실행하면 배포 서버 대신 사용자 PC 안에서만
+NotEditor 웹 서버가 시작됩니다. Edge 또는 Chrome의 독립 앱 모드 창이 열리며, 배포 웹앱과 같은
+브라우저 파일 업로드·다운로드 흐름을 사용합니다. 서버는 `http://127.0.0.1:8765`에만 열리므로
+같은 네트워크의 다른 기기에서는 접근할 수 없습니다.
+
+소스 체크아웃에서는 다음 명령으로 같은 실행기를 확인할 수 있습니다.
+
+```powershell
+.\venv\Scripts\python.exe -m noteditor.local_web
+```
+
+기존 `NotEditor` 바로가기는 pywebview 데스크톱 앱을 계속 열며, 브라우저에서 설치한 원격 PWA도
+변경되지 않습니다. 로컬 웹 전용 포트를 다른 프로그램이 사용 중이면
+`%LOCALAPPDATA%\NotEditor\local-web.log`에 진단 내용을 남기고 실행을 중단합니다.
+
+## summary.ai 합치기 인계
+
+summary.ai는 여러 원본 PDF의 합치기 방법을 기록해 두었다가 원본이 바뀌면 NotEditor를 해당
+문서·쪽 선택·순서가 채워진 상태로 다시 열 수 있습니다.
+
+```powershell
+.\venv\Scripts\pythonw.exe -m noteditor --open-plan C:\path\to\handoff.json
+```
+
+인계 계획은 workspace의 계약 판 1을 따릅니다. 사용자가 확인·수정해 저장하면 계획의
+`output_path`에 PDF를 먼저 기록하고 바로 옆에 `<결과>.merge.json` 사이드카를 남깁니다. 일반
+실행과 웹 실행은 이 옵션을 사용하지 않으며 기존 저장 흐름을 그대로 유지합니다.
+
 ## 웹앱 실행
 
 Docker가 있으면 다음 명령만 실행합니다.

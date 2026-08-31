@@ -26,10 +26,12 @@ Source: "..\dist\NotEditor\*"; DestDir: "{app}"; Flags: ignoreversion recursesub
 
 [Icons]
 Name: "{autoprograms}\NotEditor"; Filename: "{app}\NotEditor.exe"
+Name: "{autoprograms}\NotEditor 로컬 웹"; Filename: "{app}\NotEditorLocalWeb.exe"
 Name: "{autodesktop}\NotEditor"; Filename: "{app}\NotEditor.exe"; Tasks: desktopicon
+Name: "{autodesktop}\NotEditor 로컬 웹"; Filename: "{app}\NotEditorLocalWeb.exe"; Tasks: desktopicon
 
 [Tasks]
-Name: "desktopicon"; Description: "바탕화면 바로가기 만들기"; GroupDescription: "추가 바로가기:"; Flags: checkedonce
+Name: "desktopicon"; Description: "두 실행 방식의 바탕화면 바로가기 만들기"; GroupDescription: "추가 바로가기:"; Flags: checkedonce
 
 [Run]
 Filename: "{app}\NotEditor.exe"; Description: "NotEditor 실행"; Flags: nowait postinstall skipifsilent

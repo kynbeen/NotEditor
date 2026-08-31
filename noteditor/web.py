@@ -268,7 +268,12 @@ def _remove_upload(api: ComposerApi, path: Path | None) -> None:
 async def health() -> dict:
     # 동기 엔드포인트는 Starlette 작업 스레드를 거친다. 미리보기·쪽 매칭이 그 풀을
     # 점유한 순간에도 Render의 짧은 헬스체크가 기다리지 않도록 이벤트 루프에서 바로 답한다.
-    return {"ok": True, "version": __version__, "runtime": "web"}
+    return {
+        "ok": True,
+        "version": __version__,
+        "runtime": "web",
+        "instance": os.environ.get("NOTEDITOR_INSTANCE", "web"),
+    }
 
 
 @app.head("/api/health")

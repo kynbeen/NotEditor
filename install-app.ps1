@@ -10,21 +10,35 @@ if (-not (Test-Path -LiteralPath $Pyw)) {
 & (Join-Path $Root "venv\Scripts\python.exe") -m noteditor.make_icon
 
 $shell = New-Object -ComObject WScript.Shell
-$targets = @(
-    (Join-Path ([Environment]::GetFolderPath("Programs")) "NotEditor.lnk"),
-    (Join-Path ([Environment]::GetFolderPath("Desktop")) "NotEditor.lnk")
+$definitions = @(
+    @{
+        Name = "NotEditor.lnk"
+        Arguments = "-m noteditor"
+        Description = "PDF 문서 합치기와 필기 옮기기 데스크톱 앱"
+    },
+    @{
+        Name = "NotEditor 로컬 웹.lnk"
+        Arguments = "-m noteditor.local_web"
+        Description = "로컬 PC에서 실행되는 NotEditor 웹 앱"
+    }
 )
 
-foreach ($target in $targets) {
-    $shortcut = $shell.CreateShortcut($target)
-    $shortcut.TargetPath = $Pyw
-    $shortcut.Arguments = "-m noteditor"
-    $shortcut.WorkingDirectory = $Root
-    $shortcut.IconLocation = "$Icon,0"
-    $shortcut.WindowStyle = 1
-    $shortcut.Description = "PDF 문서 합치기와 Samsung Notes 필기 옮기기"
-    $shortcut.Save()
-    Write-Host "바로가기 생성: $target"
+foreach ($definition in $definitions) {
+    foreach ($folder in @(
+        [Environment]::GetFolderPath("Programs"),
+        [Environment]::GetFolderPath("Desktop")
+    )) {
+        $target = Join-Path $folder $definition.Name
+        $shortcut = $shell.CreateShortcut($target)
+        $shortcut.TargetPath = $Pyw
+        $shortcut.Arguments = $definition.Arguments
+        $shortcut.WorkingDirectory = $Root
+        $shortcut.IconLocation = "$Icon,0"
+        $shortcut.WindowStyle = 1
+        $shortcut.Description = $definition.Description
+        $shortcut.Save()
+        Write-Host "바로가기 생성: $target"
+    }
 }
 
-Write-Host "설치 완료. 시작 메뉴 또는 바탕화면의 'NotEditor'로 실행하세요." -ForegroundColor Green
+Write-Host "설치 완료. 'NotEditor' 또는 'NotEditor 로컬 웹'으로 실행하세요." -ForegroundColor Green

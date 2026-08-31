@@ -14,6 +14,15 @@ import pikepdf  # noqa: F401
 
 from . import __version__
 from .engine import ComposerSession, PdfComposerError
+from .merge_handoff import (
+    CONTRACT_VERSION,
+    MergePlan,
+    load_merge_plan,
+    parts_from_order,
+    paths_refer_to_same_file,
+    sidecar_path,
+    write_sidecar,
+)
 from .page_plan import PagePlan
 from .ranges import PageRangeError, parse_page_ranges
 from .handwriting_transfer import (
@@ -51,7 +60,7 @@ def _png_data_uri(payload: bytes) -> str:
     return "data:image/png;base64," + base64.b64encode(payload).decode("ascii")
 
 
-def configure_windows_app_identity() -> None:
+def configure_windows_app_identity(app_id: str = APP_USER_MODEL_ID) -> None:
     """Python 프로세스가 아니라 독립 앱으로 작업표시줄에 그룹화되게 한다."""
     import os
 
@@ -63,7 +72,7 @@ def configure_windows_app_identity() -> None:
         set_app_id = ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID
         set_app_id.argtypes = [ctypes.c_wchar_p]
         set_app_id.restype = ctypes.c_long
-        result = set_app_id(APP_USER_MODEL_ID)
+        result = set_app_id(app_id)
         if result != 0:
             logging.getLogger("noteditor").warning(
                 "Failed to set AppUserModelID: HRESULT=%s", result
@@ -77,11 +86,22 @@ def configure_windows_app_identity() -> None:
 class ComposerApi:
     """Small JSON-friendly bridge exposed to the embedded web UI."""
 
-    def __init__(self, session: ComposerSession | None = None) -> None:
+    def __init__(
+        self,
+        session: ComposerSession | None = None,
+        startup_plan_path: str | Path | None = None,
+        preloaded_startup_plan: MergePlan | None = None,
+    ) -> None:
         # pywebview exposes every public attribute on js_api. Keep native and
         # stateful Python objects private or its serializer walks the complete
         # WinForms/WebView2 object graph and eventually recurses forever.
         self._session = session or ComposerSession()
+        self._startup_plan_path = (
+            Path(startup_plan_path).expanduser().resolve() if startup_plan_path else None
+        )
+        self._startup_plan = preloaded_startup_plan
+        self._startup_plan_result: dict | None = None
+        self._merge_output_path: Path | None = None
         self._window: Any | None = None
         self._closed = False
         self._handwriting_source: Path | None = None
@@ -113,6 +133,58 @@ class ComposerApi:
 
     def health(self) -> dict:
         return self._ok(version=__version__)
+
+    def startup_plan(self) -> dict:
+        """Load a summary.ai handoff once and map paths to this session's IDs."""
+        try:
+            if self._startup_plan_path is None:
+                return self._ok(plan=None)
+            if self._startup_plan_result is not None:
+                return self._ok(plan=self._startup_plan_result)
+            if self._session.sources:
+                raise PdfComposerError("시작 계획은 빈 문서 작업공간에만 적용할 수 있습니다.")
+
+            plan = self._startup_plan or load_merge_plan(self._startup_plan_path)
+            unique_paths = list(dict.fromkeys(part.path for part in plan.parts))
+            self._session.add_files(unique_paths)
+            sources = self._session.sources
+            source_by_path = {
+                os.path.normcase(str(source.path.resolve())): source for source in sources
+            }
+            order: list[dict] = []
+            for part in plan.parts:
+                source = source_by_path.get(os.path.normcase(str(part.path.resolve())))
+                if source is None:
+                    raise PdfComposerError(f"시작 계획의 PDF를 등록하지 못했습니다: {part.path.name}")
+                indices = (
+                    parse_page_ranges(part.pages, source.page_count)
+                    if part.pages
+                    else list(range(source.page_count))
+                )
+                order.extend(
+                    {"document_id": source.id, "page_index": index} for index in indices
+                )
+            if len({(item["document_id"], item["page_index"]) for item in order}) != len(order):
+                raise PdfComposerError("합치기 계획에 같은 페이지가 두 번 들어 있습니다.")
+            # Contract v1 cannot describe arbitrary interleaving or reverse order.
+            parts_from_order(order, sources)
+
+            result = {
+                "version": CONTRACT_VERSION,
+                "title": plan.title,
+                "output_path": str(plan.output_path),
+                "output_name": plan.output_path.name,
+                "sources": [source.as_dict() for source in sources],
+                "order": order,
+            }
+            self._startup_plan = plan
+            self._merge_output_path = plan.output_path
+            self._startup_plan_result = result
+            return self._ok(plan=result)
+        except Exception as exc:
+            if self._startup_plan_result is None and self._session.sources:
+                self._session.clear_sources()
+            return self._error(exc)
 
     def log_client_error(self, message: str) -> dict:
         logging.getLogger("noteditor").error("UI error: %s", message)
@@ -486,6 +558,24 @@ class ComposerApi:
 
     def save_result(self, order: list[dict], suggested_name: str = "조합된 문서.pdf") -> dict:
         try:
+            if self._merge_output_path is not None:
+                output_path = self._merge_output_path
+                for source in self._session.sources:
+                    if paths_refer_to_same_file(source.path, output_path):
+                        raise PdfComposerError("합치기 결과가 원본 PDF를 덮어쓸 수 없습니다.")
+                sidecar_parts = parts_from_order(order, self._session.sources)
+                # A prior failed/retried save must never leave a stale completion
+                # marker beside a newly written or failed PDF.
+                sidecar_path(output_path).unlink(missing_ok=True)
+                result = self._session.build_pdf(order, output_path)
+                sidecar = write_sidecar(
+                    result["path"],
+                    parts=sidecar_parts,
+                    noteditor_version=__version__,
+                )
+                result["sidecar"] = str(sidecar)
+                return self._ok(cancelled=False, result=result)
+
             if self._window is None:
                 raise PdfComposerError("앱 창이 아직 준비되지 않았습니다.")
             import webview
@@ -517,14 +607,21 @@ class ComposerApi:
         self._session.close()
 
 
-def run(debug: bool = False) -> None:
+def run(debug: bool = False, open_plan: str | Path | None = None) -> None:
     configure_windows_app_identity()
     import webview
 
-    api = ComposerApi()
+    startup = load_merge_plan(open_plan) if open_plan else None
+    api = ComposerApi(
+        startup_plan_path=open_plan,
+        preloaded_startup_plan=startup,
+    )
     static_file = Path(__file__).with_name("static") / "index.html"
+    window_title = "NotEditor"
+    if startup and startup.title:
+        window_title += f" — {startup.title}"
     window = webview.create_window(
-        "NotEditor",
+        window_title,
         str(static_file.resolve()) + "#desktop",
         js_api=api,
         width=1440,

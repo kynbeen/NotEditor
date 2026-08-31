@@ -24,19 +24,33 @@ Write-Host "[3/4] 앱 아이콘을 만드는 중..." -ForegroundColor Cyan
 
 Write-Host "[4/4] 시작 메뉴와 바탕화면에 바로가기를 만드는 중..." -ForegroundColor Cyan
 $Shell = New-Object -ComObject WScript.Shell
-$ShortcutTargets = @(
-    (Join-Path ([Environment]::GetFolderPath("Programs")) "NotEditor.lnk"),
-    (Join-Path ([Environment]::GetFolderPath("Desktop")) "NotEditor.lnk")
+$ShortcutDefinitions = @(
+    @{
+        Name = "NotEditor.lnk"
+        Arguments = "-m noteditor"
+        Description = "PDF 문서 합치기와 필기 옮기기 데스크톱 앱"
+    },
+    @{
+        Name = "NotEditor 로컬 웹.lnk"
+        Arguments = "-m noteditor.local_web"
+        Description = "로컬 PC에서 실행되는 NotEditor 웹 앱"
+    }
 )
-foreach ($ShortcutPath in $ShortcutTargets) {
-    $Shortcut = $Shell.CreateShortcut($ShortcutPath)
-    $Shortcut.TargetPath = $PythonWindowPath
-    $Shortcut.Arguments = "-m noteditor"
-    $Shortcut.WorkingDirectory = $InstallRoot
-    $Shortcut.IconLocation = "$IconPath,0"
-    $Shortcut.WindowStyle = 1
-    $Shortcut.Description = "PDF 문서 합치기와 Samsung Notes 필기 옮기기"
-    $Shortcut.Save()
+foreach ($Definition in $ShortcutDefinitions) {
+    foreach ($Folder in @(
+        [Environment]::GetFolderPath("Programs"),
+        [Environment]::GetFolderPath("Desktop")
+    )) {
+        $ShortcutPath = Join-Path $Folder $Definition.Name
+        $Shortcut = $Shell.CreateShortcut($ShortcutPath)
+        $Shortcut.TargetPath = $PythonWindowPath
+        $Shortcut.Arguments = $Definition.Arguments
+        $Shortcut.WorkingDirectory = $InstallRoot
+        $Shortcut.IconLocation = "$IconPath,0"
+        $Shortcut.WindowStyle = 1
+        $Shortcut.Description = $Definition.Description
+        $Shortcut.Save()
+    }
 }
 
-Write-Host "NotEditor 설치가 끝났습니다. 바탕화면의 NotEditor를 실행하세요." -ForegroundColor Green
+Write-Host "NotEditor 설치가 끝났습니다. 데스크톱 앱 또는 'NotEditor 로컬 웹'을 실행하세요." -ForegroundColor Green

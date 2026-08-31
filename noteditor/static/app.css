@@ -189,6 +189,12 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent-2); 
 .toast { max-width: 390px; padding: 12px 15px; border: 1px solid var(--line-strong); border-radius: 11px; color: var(--text); background: #1b233b; box-shadow: var(--shadow); font-size: 11px; line-height: 1.45; animation: toast-in .2s ease-out; }
 .toast.error { border-color: rgba(255,113,139,.38); }
 .toast.success { border-color: rgba(86,211,165,.38); }
+.confirm-dialog { width: min(430px, calc(100vw - 32px)); padding: 0; border: 1px solid var(--line-strong); border-radius: 15px; color: var(--text); background: #151c31; box-shadow: var(--shadow); }
+.confirm-dialog::backdrop { background: rgba(3,5,12,.72); backdrop-filter: blur(7px); }
+.confirm-dialog form { padding: 22px; }
+.confirm-dialog strong { display: block; font-size: 15px; }
+.confirm-dialog p { margin: 10px 0 20px; color: var(--muted); font-size: 11px; line-height: 1.65; }
+.confirm-dialog-actions { display: flex; justify-content: flex-end; gap: 9px; }
 
 .handwriting-workspace { height: calc(100vh - 92px); min-height: 0; overflow: auto; padding: 12px; }
 .handwriting-shell { width: min(980px, 100%); min-height: calc(100vh - 116px); margin: 0 auto; padding: 28px; overflow: hidden; border: 1px solid var(--line); border-radius: 17px; background: var(--panel); box-shadow: inset 0 1px 0 rgba(255,255,255,.025); }
@@ -237,7 +243,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent-2); 
 .review-cell { min-width: 0; position: relative; }
 .review-cell.target-cell[draggable="true"] { cursor: grab; }
 .review-cell.target-cell.dragging { cursor: grabbing; opacity: .48; }
-.review-page { position: relative; height: clamp(180px, 24vw, 230px); overflow: hidden; border: 1px solid rgba(255,255,255,.08); border-radius: 9px; background: #0d1526; }
+.review-page { position: relative; height: clamp(118px, 13vw, 132px); overflow: hidden; border: 1px solid rgba(255,255,255,.08); border-radius: 9px; background: #0d1526; }
 .review-page img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
 .review-page img.review-ink { z-index: 2; pointer-events: none; }
 .page-review.hide-ink img.review-ink { display: none; }

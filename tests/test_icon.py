@@ -5,6 +5,7 @@ from pathlib import Path
 from PIL import Image
 
 from noteditor.app import APP_USER_MODEL_ID
+from noteditor.local_web import LOCAL_WEB_APP_USER_MODEL_ID
 from noteditor.make_icon import build_icon, build_pwa_icons
 
 
@@ -20,6 +21,7 @@ class DesktopIconTests(unittest.TestCase):
 
     def test_windows_app_identity_is_stable(self):
         self.assertEqual(APP_USER_MODEL_ID, "NotEditor.Desktop")
+        self.assertEqual(LOCAL_WEB_APP_USER_MODEL_ID, "NotEditor.LocalWeb")
 
     def test_pwa_icons_include_required_install_sizes(self):
         with tempfile.TemporaryDirectory() as temporary:
