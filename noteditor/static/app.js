@@ -29,6 +29,8 @@ const state = {
   },
   reviewObserver: null,
   sourceReviewObserver: null,
+  sourceReviewChanged: [],      // 달라진 행의 인덱스. 위/아래 버튼이 이 목록을 돈다
+  sourceReviewCursor: -1,
 };
 
 let handwritingPollTimer = 0;
@@ -69,6 +71,9 @@ const refs = {
   sourceReviewSummary: $("#sourceReviewSummary"),
   sourceReviewMessage: $("#sourceReviewMessage"),
   sourceReviewSkip: $("#sourceReviewSkip"), sourceReviewApply: $("#sourceReviewApply"),
+  sourceReviewPrev: $("#sourceReviewPrev"), sourceReviewNext: $("#sourceReviewNext"),
+  sourceReviewPosition: $("#sourceReviewPosition"),
+  sourceReviewRangeNote: $("#sourceReviewRangeNote"),
 };
 
 const pageKey = (docId, index) => `${docId}:${index}`;
@@ -280,12 +285,18 @@ function applyStartupPlan(plan) {
   state.documents = plan.sources || [];
   state.order = (plan.order || []).map((item) => ({ ...item }));
   state.selected = new Set(state.order.map(refKey));
-  state.orderDirty = true;
+  // 계획이 문서·쪽 순서 그대로면 사용자가 순서를 손댄 것이 아니다. 무조건 dirty 로 두면
+  // 그 뒤 선택을 바꿀 때마다 새 쪽이 결과 목록 맨 끝으로 밀린다(빈 계획이 특히 그렇다).
+  state.orderDirty = state.order.map(refKey).join(" ")
+    !== defaultOrder().map(refKey).join(" ");
   state.mergeOutputNameDirty = true;
   refs.mergeOutputName.value = withoutKnownExtension(plan.output_name || "merged.pdf");
   refs.mergeOutputName.title = `summary.ai 지정 저장 경로: ${plan.output_path}`;
   refs.mergeWorkspace.classList.toggle("review-mode", plan.mode === "review");
   refs.sourceReview.hidden = plan.mode !== "review";
+  // summary.ai 인계 창은 그 한 가지 일만 한다. 필기 옮기기로 새어 나가면 인계를 끝내지
+  // 않은 채 창이 남고, summary.ai 는 결과를 영영 기다린다.
+  lockToMergeTool();
   if (plan.mode === "review") {
     refs.add.hidden = true;
     refs.resetDocuments.hidden = true;
@@ -293,6 +304,10 @@ function applyStartupPlan(plan) {
     refs.save.hidden = true;
     refs.sourceReviewApply.textContent = plan.origin === "merged" ? "합쳐서 갱신" : "전체 갱신";
     renderSourceReview();
+  } else {
+    // 인계 합치기는 여기서 파일을 내려받는 것이 아니라 summary.ai 로 돌아가는 일이다.
+    refs.save.textContent = "저장하고 summary.ai로 돌아가기";
+    refs.save.title = `저장한 뒤 summary.ai 창으로 돌아가고 이 창은 닫습니다: ${plan.output_path}`;
   }
   if (plan.title) document.title = `NotEditor — ${plan.title}`;
   render();
@@ -357,17 +372,50 @@ function sourceReviewCell(kind, pageRef, emptyMessage) {
   return cell;
 }
 
+// 합쳐서 만든 자료는 "어느 쪽이 바뀌었나"보다 **고른 범위가 흔들렸나**가 중요하다.
+// 앞에 쪽이 하나 끼면 `30-50` 이 통째로 밀린다 — 범위 안과 바로 옆을 따로 강조한다.
+function recordedRangeIndex() {
+  const map = new Map();
+  (state.mergePlan?.recorded_ranges || []).forEach((entry) => {
+    map.set(entry.document_id, {
+      pages: new Set(entry.page_indexes || []),
+      text: entry.pages || "전체",
+    });
+  });
+  return map;
+}
+
+function recordedImpact(pair, ranges) {
+  if (state.mergePlan?.origin !== "merged") return null;
+  if (!pair.target_ref) {
+    return { level: "inside", label: "합칠 때 고른 쪽이 현재 파일에 없습니다" };
+  }
+  const entry = ranges.get(pair.target_ref.document_id);
+  if (!entry || !entry.pages.size) return null;
+  const index = pair.target_ref.page_index;
+  if (entry.pages.has(index)) {
+    return { level: "inside", label: `고른 범위(${entry.text}) 안에서 바뀜` };
+  }
+  if (entry.pages.has(index - 1) || entry.pages.has(index + 1)) {
+    return { level: "adjacent", label: `고른 범위(${entry.text}) 바로 옆에서 바뀜` };
+  }
+  return null;
+}
+
 function renderSourceReview() {
   const comparison = state.sourceReview;
   refs.sourceReviewRows.replaceChildren();
   state.sourceReviewObserver?.disconnect();
-  if (!comparison) return;
+  state.sourceReviewChanged = [];
+  state.sourceReviewCursor = -1;
+  if (!comparison) { updateSourceReviewJump(); return; }
   refs.sourceReviewSummary.textContent = [
     `동일 ${comparison.matched_count - comparison.uncertain_count}쪽`,
     `확인 필요 ${comparison.uncertain_count}쌍`,
     `현재 전용 ${comparison.target_only_count}쪽`,
     `사용본 전용 ${comparison.source_only_count}쪽`,
   ].join(" · ");
+  // 페이지 전체가 스크롤되므로 관찰 기준은 뷰포트다(root: null).
   state.sourceReviewObserver = new IntersectionObserver((entries) => {
     entries.forEach((entry) => {
       if (!entry.isIntersecting) return;
@@ -375,7 +423,9 @@ function renderSourceReview() {
       const pair = comparison.pairs[Number(entry.target.dataset.pairIndex)];
       if (pair) void loadSourceReviewRow(entry.target, pair);
     });
-  }, { root: refs.sourceReviewRows, rootMargin: "500px 0px" });
+  }, { root: null, rootMargin: "500px 0px" });
+  const ranges = recordedRangeIndex();
+  let impacted = 0;
   comparison.pairs.forEach((pair, index) => {
     const status = sourceReviewStatus(pair);
     const row = document.createElement("article");
@@ -388,9 +438,55 @@ function renderSourceReview() {
     badge.textContent = status.label;
     target.querySelector(".review-meta").append(badge);
     row.append(source, target);
+    if (!status.same) {
+      state.sourceReviewChanged.push(index);
+      const impact = recordedImpact(pair, ranges);
+      if (impact) {
+        impacted += 1;
+        row.classList.add("range-impact", impact.level);
+        const mark = document.createElement("span");
+        mark.className = `review-badge range-badge ${impact.level}`;
+        mark.textContent = impact.label;
+        target.querySelector(".review-meta").append(mark);
+      }
+    }
     refs.sourceReviewRows.append(row);
     state.sourceReviewObserver.observe(row);
   });
+  refs.sourceReviewRangeNote.hidden = state.mergePlan?.origin !== "merged";
+  refs.sourceReviewRangeNote.textContent = impacted
+    ? `합칠 때 고른 범위와 겹치거나 맞닿은 변경이 ${impacted}곳 있습니다. `
+      + "쪽 번호가 밀렸을 수 있으니 아래에서 결과에 넣을 쪽을 다시 확인하세요."
+    : "합칠 때 고른 범위 안팎에서는 바뀐 쪽이 없습니다. 그래도 눈으로 확인해 주세요.";
+  updateSourceReviewJump();
+}
+
+// 달라진 쪽으로 바로 이동. 대조 목록이 길어질수록 손으로 찾는 것이 제일 오래 걸린다.
+function updateSourceReviewJump() {
+  const total = state.sourceReviewChanged.length;
+  refs.sourceReviewPrev.disabled = total === 0;
+  refs.sourceReviewNext.disabled = total === 0;
+  refs.sourceReviewPosition.textContent = total === 0
+    ? "다른 쪽 없음"
+    : `다른 쪽 ${state.sourceReviewCursor < 0 ? "—" : state.sourceReviewCursor + 1}/${total}`;
+}
+
+function jumpToChangedPage(step) {
+  const total = state.sourceReviewChanged.length;
+  if (!total) return;
+  const next = state.sourceReviewCursor < 0
+    ? (step > 0 ? 0 : total - 1)
+    : (state.sourceReviewCursor + step + total) % total;
+  state.sourceReviewCursor = next;
+  const pairIndex = state.sourceReviewChanged[next];
+  const row = refs.sourceReviewRows.querySelector(`[data-pair-index="${pairIndex}"]`);
+  if (row) {
+    refs.sourceReviewRows.querySelectorAll(".review-row.focused")
+      .forEach((node) => node.classList.remove("focused"));
+    row.classList.add("focused");
+    row.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+  updateSourceReviewJump();
 }
 
 async function finishSourceReview(decision) {
@@ -404,9 +500,9 @@ async function finishSourceReview(decision) {
     if (!response.ok) throw new Error(response.error);
     refs.sourceReviewMessage.classList.add("success");
     refs.sourceReviewMessage.textContent = decision === "skip"
-      ? "현재 수집함 버전을 확인 처리했습니다. summary.ai로 돌아가세요."
+      ? "현재 수집함 버전을 확인 처리했습니다. summary.ai로 돌아갑니다."
       : "갱신 결정을 전달했습니다. summary.ai가 결과를 반영합니다.";
-    toast(refs.sourceReviewMessage.textContent, "success");
+    await returnToSummaryAi(refs.sourceReviewMessage.textContent);
   } catch (error) {
     refs.sourceReviewMessage.classList.add("error");
     refs.sourceReviewMessage.textContent = error.message;
@@ -421,6 +517,34 @@ async function reportClientError(value) {
     const api = requireApi();
     if (typeof api.log_client_error === "function") await api.log_client_error(message);
   } catch (_) { /* Logging must never hide the original UI error. */ }
+}
+
+// summary.ai 인계 세션에서는 도구 전환을 막는다. 탭을 지우지 않고 비활성으로 두어,
+// 왜 못 쓰는지 그 자리에서 읽을 수 있게 한다.
+function lockToMergeTool() {
+  showTool("merge");
+  refs.handwriting.disabled = true;
+  refs.handwriting.classList.add("locked");
+  refs.handwriting.title = "summary.ai에서 넘어온 작업 중에는 필기 옮기기를 쓸 수 없습니다.";
+}
+
+function isHandoffSession() { return !!state.mergePlan; }
+
+// 인계가 끝나면 summary.ai 로 돌아간다. summary.ai 는 결과 파일을 2초마다 지켜보다
+// 자기 창을 앞으로 가져오므로, 여기서는 그 시간을 조금 주고 이 창을 닫는다.
+async function returnToSummaryAi(message) {
+  if (!isHandoffSession()) return;
+  toast(message, "success");
+  if (state.runtime !== "desktop") return;
+  setBusy(true, "summary.ai로 돌아가는 중…");
+  await new Promise((resolve) => setTimeout(resolve, 1200));
+  try {
+    const response = await callApi("close_window");
+    if (!response?.ok) throw new Error(response?.error || "창을 닫지 못했습니다.");
+  } catch (error) {
+    setBusy(false);
+    toast(`${error.message} 이 창은 직접 닫아 주세요.`, "error");
+  }
 }
 
 function showTool(tool) {
@@ -976,10 +1100,27 @@ function syncOrder() {
   state.order = state.order.filter((ref) => valid.has(refKey(ref)));
   if (!state.orderDirty) {
     state.order = defaultOrder();
-  } else {
-    const present = new Set(state.order.map(refKey));
-    defaultOrder().forEach((ref) => { if (!present.has(refKey(ref))) state.order.push(ref); });
+    return;
   }
+  const present = new Set(state.order.map(refKey));
+  defaultOrder().forEach((ref) => {
+    if (present.has(refKey(ref))) return;
+    insertNearOwnBlock(ref);
+  });
+}
+
+// 새로 고른 쪽은 **같은 문서의 기존 구간 안**에 쪽 번호 순서대로 끼워 넣는다.
+// 끝에 붙이면 `A…B…A` 가 되어 합치기 인계 규격(문서당 한 구간, 오름차순)으로 기록할 수
+// 없고, 저장할 때 "한 구간으로 모은 뒤 다시 저장하세요" 로 막힌다. 범위를 한 번 정한
+// 뒤 다른 문서를 만지고 돌아와 그 범위를 넓히면 바로 이 상태가 됐다.
+function insertNearOwnBlock(ref) {
+  const positions = [];
+  state.order.forEach((item, index) => {
+    if (item.document_id === ref.document_id) positions.push(index);
+  });
+  if (!positions.length) { state.order.push(ref); return; }
+  const at = positions.find((index) => state.order[index].page_index > ref.page_index);
+  state.order.splice(at === undefined ? positions[positions.length - 1] + 1 : at, 0, ref);
 }
 
 function formatRanges(indices) {
@@ -1468,15 +1609,20 @@ async function saveResult() {
   const fallback = firstDoc ? `${withoutKnownExtension(firstDoc.name)}-편집본` : "조합된 문서";
   const suggestion = `${withoutKnownExtension(refs.mergeOutputName.value.trim()) || fallback}.pdf`;
   setBusy(true, "원본 품질로 PDF를 저장하는 중…");
+  let saved = null;
   try {
     const response = await callApi("save_result", state.order, suggestion);
     if (!response.ok) throw new Error(response.error);
-    if (response.cancelled) return;
-    const warnings = response.result.warnings || [];
-    toast(`${response.result.page_count}쪽을 저장했습니다.\n${response.result.path}`, "success");
-    warnings.forEach((warning) => toast(warning));
+    if (!response.cancelled) saved = response.result;
   } catch (error) { toast(error.message, "error"); }
   finally { setBusy(false); }
+  if (!saved) return;
+  (saved.warnings || []).forEach((warning) => toast(warning));
+  if (isHandoffSession()) {
+    await returnToSummaryAi(`${saved.page_count}쪽을 합쳤습니다. summary.ai로 돌아갑니다.`);
+    return;
+  }
+  toast(`${saved.page_count}쪽을 저장했습니다.\n${saved.path}`, "success");
 }
 
 refs.add.addEventListener("click", addPdfs);
@@ -1487,6 +1633,8 @@ refs.sourceReviewApply.addEventListener("click", () => {
   void finishSourceReview(decision);
 });
 refs.sourceReviewSkip.addEventListener("click", () => { void finishSourceReview("skip"); });
+refs.sourceReviewPrev.addEventListener("click", () => jumpToChangedPage(-1));
+refs.sourceReviewNext.addEventListener("click", () => jumpToChangedPage(1));
 refs.mergeOutputName.addEventListener("input", () => { state.mergeOutputNameDirty = true; });
 refs.handwritingOutputName.addEventListener("input", () => { state.handwritingOutputNameDirty = true; });
 refs.mergeTab.addEventListener("click", () => showTool("merge"));
