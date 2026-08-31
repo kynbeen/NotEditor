@@ -34,10 +34,10 @@ function grab(name) {
   }
   throw new Error("함수 끝을 찾지 못했습니다: " + name);
 }
-const state = { documents: [], selected: new Set(), order: [], orderDirty: false };
+const state = { documents: [], selected: new Set(), order: [] };
 const pageKey = (id, i) => `${id}:${i}`;
 const refKey = (r) => `${r.document_id}:${r.page_index}`;
-const body = ["defaultOrder", "syncOrder", "insertNearOwnBlock"].map(grab).join("\n");
+const body = ["defaultOrder", "syncOrder"].map(grab).join("\n");
 const api = new Function("state", "pageKey", "refKey",
   body + "\nreturn { defaultOrder, syncOrder };")(state, pageKey, refKey);
 
@@ -45,7 +45,6 @@ const scenario = JSON.parse(process.argv[2]);
 state.documents = scenario.documents.map((doc) => ({
   id: doc.id, pages: Array.from({ length: doc.page_count }, (_, i) => ({ index: i })),
 }));
-state.orderDirty = !!scenario.order_dirty;
 for (const step of scenario.steps) {
   const doc = state.documents.find((d) => d.id === step.document);
   if (step.action === "select_all") {

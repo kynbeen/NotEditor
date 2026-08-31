@@ -14,7 +14,6 @@ const state = {
   thumbnailCacheBytes: 0,
   imageInflight: new Map(),
   sourceThumbnailObserver: null,
-  resultThumbnailObserver: null,
   previewObserver: null,
   previewScrollFrame: 0,
   bridgeReady: false,
@@ -39,9 +38,8 @@ const $ = (selector) => document.querySelector(selector);
 const refs = {
   add: $("#addPdfButton"), emptyAdd: $("#emptyAddButton"), save: $("#saveButton"),
   mergeOutputName: $("#mergeOutputName"),
-  resetOrder: $("#resetOrderButton"), sourceEmpty: $("#sourceEmpty"),
+  sourceEmpty: $("#sourceEmpty"), sourceHeading: $("#sourceHeading"),
   documentList: $("#documentList"), documentCount: $("#documentCount"),
-  resultEmpty: $("#resultEmpty"), resultList: $("#resultList"), pageCount: $("#pageCount"),
   selectionSummary: $("#selectionSummary"), previewEmpty: $("#previewEmpty"),
   previewStage: $("#previewStage"), previewPages: $("#previewPages"),
   previewEyebrow: $("#previewEyebrow"), previewHeading: $("#previewHeading"),
@@ -297,11 +295,14 @@ function applyStartupPlan(plan) {
   // summary.ai 인계 창은 그 한 가지 일만 한다. 필기 옮기기로 새어 나가면 인계를 끝내지
   // 않은 채 창이 남고, summary.ai 는 결과를 영영 기다린다.
   lockToMergeTool();
+  // 인계 결과 경로는 summary.ai가 정한다. 편집할 수 없는 파일명 칸을 숨겨 긴 복귀 버튼이
+  // 눌리거나 여러 줄로 접히지 않게 공간을 돌려준다.
+  refs.mergeOutputName.parentElement.hidden = true;
   if (plan.mode === "review") {
     refs.add.hidden = true;
     refs.resetDocuments.hidden = true;
-    refs.mergeOutputName.parentElement.hidden = true;
     refs.save.hidden = true;
+    refs.sourceHeading.textContent = "수집함 PDF 쪽 선택";
     refs.sourceReviewApply.textContent = plan.origin === "merged" ? "합쳐서 갱신" : "전체 갱신";
     renderSourceReview();
   } else {
@@ -359,6 +360,9 @@ async function loadSourceReviewRow(row, pair) {
 function sourceReviewCell(kind, pageRef, emptyMessage) {
   const cell = document.createElement("div");
   cell.className = `review-cell ${kind}-cell`;
+  if (kind === "target" && pageRef) {
+    cell.dataset.key = pageKey(pageRef.document_id, pageRef.page_index);
+  }
   const page = makeReviewPage(pageRef ? "" : emptyMessage, pageRef ? `${pageRef.document_name} ${pageRef.page_index + 1}쪽` : "");
   const ink = page.querySelector(".review-ink");
   if (ink) ink.hidden = true;
@@ -370,6 +374,17 @@ function sourceReviewCell(kind, pageRef, emptyMessage) {
     : `<span>${escapeHtml(emptyMessage)}</span>`;
   cell.append(meta);
   return cell;
+}
+
+// 오른쪽 쪽 선택과 왼쪽 비교 미리보기는 같은 현재 수집함 쪽을 가리킨다.
+// 선택에서 뺀 쪽은 비교 자체는 계속 볼 수 있게 두되, 현재 수집함 미리보기만 어둡게 표시한다.
+function updateSourceReviewSelection(onlyKey = null) {
+  refs.sourceReviewRows.querySelectorAll(".target-cell[data-key]").forEach((cell) => {
+    if (onlyKey && cell.dataset.key !== onlyKey) return;
+    const selected = state.selected.has(cell.dataset.key);
+    cell.classList.toggle("excluded", !selected);
+    cell.title = selected ? "결과에 포함할 현재 수집함 쪽" : "결과에서 제외한 현재 수집함 쪽";
+  });
 }
 
 // 합쳐서 만든 자료는 "어느 쪽이 바뀌었나"보다 **고른 범위가 흔들렸나**가 중요하다.
@@ -415,7 +430,7 @@ function renderSourceReview() {
     `현재 전용 ${comparison.target_only_count}쪽`,
     `사용본 전용 ${comparison.source_only_count}쪽`,
   ].join(" · ");
-  // 페이지 전체가 스크롤되므로 관찰 기준은 뷰포트다(root: null).
+  // 비교 칸이 독립적으로 스크롤되므로 그 칸을 기준으로 필요한 미리보기만 읽는다.
   state.sourceReviewObserver = new IntersectionObserver((entries) => {
     entries.forEach((entry) => {
       if (!entry.isIntersecting) return;
@@ -423,7 +438,7 @@ function renderSourceReview() {
       const pair = comparison.pairs[Number(entry.target.dataset.pairIndex)];
       if (pair) void loadSourceReviewRow(entry.target, pair);
     });
-  }, { root: null, rootMargin: "500px 0px" });
+  }, { root: refs.sourceReview, rootMargin: "600px 0px" });
   const ranges = recordedRangeIndex();
   let impacted = 0;
   comparison.pairs.forEach((pair, index) => {
@@ -453,6 +468,7 @@ function renderSourceReview() {
     refs.sourceReviewRows.append(row);
     state.sourceReviewObserver.observe(row);
   });
+  updateSourceReviewSelection();
   refs.sourceReviewRangeNote.hidden = state.mergePlan?.origin !== "merged";
   refs.sourceReviewRangeNote.textContent = impacted
     ? `합칠 때 고른 범위와 겹치거나 맞닿은 변경이 ${impacted}곳 있습니다. `
@@ -500,7 +516,7 @@ async function finishSourceReview(decision) {
     if (!response.ok) throw new Error(response.error);
     refs.sourceReviewMessage.classList.add("success");
     refs.sourceReviewMessage.textContent = decision === "skip"
-      ? "현재 수집함 버전을 확인 처리했습니다. summary.ai로 돌아갑니다."
+      ? "파일은 유지하고 현재 수집함 버전을 원본 최신으로 확인했습니다. summary.ai로 돌아갑니다."
       : "갱신 결정을 전달했습니다. summary.ai가 결과를 반영합니다.";
     await returnToSummaryAi(refs.sourceReviewMessage.textContent);
   } catch (error) {
@@ -1096,31 +1112,8 @@ function defaultOrder() {
 }
 
 function syncOrder() {
-  const valid = new Set(defaultOrder().map(refKey));
-  state.order = state.order.filter((ref) => valid.has(refKey(ref)));
-  if (!state.orderDirty) {
-    state.order = defaultOrder();
-    return;
-  }
-  const present = new Set(state.order.map(refKey));
-  defaultOrder().forEach((ref) => {
-    if (present.has(refKey(ref))) return;
-    insertNearOwnBlock(ref);
-  });
-}
-
-// 새로 고른 쪽은 **같은 문서의 기존 구간 안**에 쪽 번호 순서대로 끼워 넣는다.
-// 끝에 붙이면 `A…B…A` 가 되어 합치기 인계 규격(문서당 한 구간, 오름차순)으로 기록할 수
-// 없고, 저장할 때 "한 구간으로 모은 뒤 다시 저장하세요" 로 막힌다. 범위를 한 번 정한
-// 뒤 다른 문서를 만지고 돌아와 그 범위를 넓히면 바로 이 상태가 됐다.
-function insertNearOwnBlock(ref) {
-  const positions = [];
-  state.order.forEach((item, index) => {
-    if (item.document_id === ref.document_id) positions.push(index);
-  });
-  if (!positions.length) { state.order.push(ref); return; }
-  const at = positions.find((index) => state.order[index].page_index > ref.page_index);
-  state.order.splice(at === undefined ? positions[positions.length - 1] + 1 : at, 0, ref);
+  // 수동 순서변경은 제거했다. 문서를 추가한 순서, 각 PDF의 원래 쪽 순서가 곧 결과 순서다.
+  state.order = defaultOrder();
 }
 
 function formatRanges(indices) {
@@ -1222,14 +1215,13 @@ function showInlineImageError(node, placeholder, retry) {
 async function loadThumbnailNode(node) {
   if (!node?.isConnected || node.dataset.imageLoaded === "true" || node.dataset.imageLoading === "true") return;
   node.dataset.imageLoading = "true";
-  const placeholder = node.querySelector(".image-placeholder, .result-image-placeholder");
+  const placeholder = node.querySelector(".image-placeholder");
   try {
     const pageIndex = Number(node.dataset.pageIndex);
     const src = await loadImage(node.dataset.documentId, pageIndex, "thumbnail");
     if (!node.isConnected) return;
     const image = new Image();
-    image.className = node.classList.contains("result-item") ? "result-thumb" : "";
-    image.alt = node.classList.contains("result-item") ? "" : `${pageIndex + 1}쪽`;
+    image.alt = `${pageIndex + 1}쪽`;
     image.src = src;
     placeholder?.replaceWith(image);
     node.dataset.imageLoaded = "true";
@@ -1306,7 +1298,7 @@ function setDocumentSelection(doc, indices) {
   syncOrder();
   updateDocumentSelectionUi(doc);
   updatePreviewSelection();
-  renderResult();
+  updateSourceReviewSelection();
   renderSummary();
 }
 
@@ -1347,8 +1339,8 @@ function togglePage(doc, page, tile) {
   tile.classList.toggle("selected", state.selected.has(key));
   updateDocumentSelectionUi(doc);
   updatePreviewSelection(key);
+  updateSourceReviewSelection(key);
   showPreview(doc.id, page.index, "원본 미리보기");
-  renderResult();
   renderSummary();
 }
 
@@ -1367,9 +1359,6 @@ function setActivePreview(docId, pageIndex, origin = "전체 페이지 미리보
   refs.previewMeta.textContent = `${doc.name} · ${pageIndex + 1}쪽`;
   refs.previewPages.querySelectorAll(".preview-page.active").forEach((node) => node.classList.remove("active"));
   previewNode(docId, pageIndex)?.classList.add("active");
-  document.querySelectorAll(".result-item").forEach((node) => {
-    node.classList.toggle("active", node.dataset.key === pageKey(docId, pageIndex));
-  });
 }
 
 async function loadPreviewPage(node) {
@@ -1494,64 +1483,6 @@ function showPreview(docId, pageIndex, origin = "원본 미리보기") {
   node.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
-function renderResult() {
-  state.resultThumbnailObserver?.disconnect();
-  state.resultThumbnailObserver = lazyImageObserver(refs.resultList);
-  refs.pageCount.textContent = `${state.order.length}쪽`;
-  refs.resultEmpty.hidden = state.order.length > 0;
-  refs.resultList.hidden = state.order.length === 0;
-  refs.resultList.replaceChildren();
-  refs.resetOrder.disabled = !state.orderDirty || state.order.length < 2;
-
-  state.order.forEach((ref, index) => {
-    const doc = documentById(ref.document_id);
-    if (!doc) return;
-    const item = document.createElement("li");
-    item.className = `result-item${state.active?.document_id === ref.document_id && state.active?.page_index === ref.page_index ? " active" : ""}`;
-    item.draggable = true;
-    item.dataset.index = index;
-    item.dataset.key = refKey(ref);
-    item.dataset.documentId = ref.document_id;
-    item.dataset.pageIndex = String(ref.page_index);
-    item.innerHTML = `<span class="result-image-placeholder"></span><div class="result-label"><strong>${escapeHtml(doc.name)}</strong><span>원본 ${ref.page_index + 1}쪽</span></div><span class="drag-handle" aria-hidden="true">⠿</span>`;
-    item.addEventListener("click", () => {
-      document.querySelectorAll(".result-item.active").forEach((node) => node.classList.remove("active"));
-      item.classList.add("active");
-      showPreview(ref.document_id, ref.page_index, "결과 미리보기");
-    });
-    item.addEventListener("dragstart", (event) => {
-      item.classList.add("dragging");
-      event.dataTransfer.effectAllowed = "move";
-      event.dataTransfer.setData("text/plain", `${index}`);
-    });
-    item.addEventListener("dragend", () => {
-      item.classList.remove("dragging");
-      document.querySelectorAll(".drop-before, .drop-after").forEach((node) => node.classList.remove("drop-before", "drop-after"));
-    });
-    item.addEventListener("dragover", (event) => {
-      event.preventDefault();
-      const before = event.offsetY < item.offsetHeight / 2;
-      item.classList.toggle("drop-before", before);
-      item.classList.toggle("drop-after", !before);
-    });
-    item.addEventListener("dragleave", () => item.classList.remove("drop-before", "drop-after"));
-    item.addEventListener("drop", (event) => {
-      event.preventDefault();
-      const from = Number(event.dataTransfer.getData("text/plain"));
-      let to = index + (item.classList.contains("drop-after") ? 1 : 0);
-      item.classList.remove("drop-before", "drop-after");
-      if (!Number.isInteger(from) || from < 0 || from >= state.order.length) return;
-      const [moved] = state.order.splice(from, 1);
-      if (from < to) to -= 1;
-      state.order.splice(Math.max(0, Math.min(to, state.order.length)), 0, moved);
-      state.orderDirty = true;
-      renderResult();
-    });
-    refs.resultList.append(item);
-    state.resultThumbnailObserver.observe(item);
-  });
-}
-
 function renderSummary() {
   refs.selectionSummary.textContent = !state.bridgeReady
     ? (state.bridgeFailed ? "바로가기로 다시 실행해 주세요" : "앱 연결 중…")
@@ -1563,7 +1494,7 @@ function renderSummary() {
   refs.resetDocuments.disabled = !state.bridgeReady || state.documents.length === 0 || state.mergePlan?.mode === "review";
 }
 
-function render() { renderDocuments(); renderPreviewPages(); renderResult(); renderSummary(); }
+function render() { renderDocuments(); renderPreviewPages(); renderSummary(); }
 
 async function addPdfs() {
   setBusy(true, "PDF를 확인하는 중…");
@@ -1648,7 +1579,6 @@ refs.retryHandwriting.addEventListener("click", retryHandwritingAnalysis);
 refs.resetHandwriting.addEventListener("click", resetHandwritingTransfer);
 refs.resetDocuments.addEventListener("click", resetDocuments);
 refs.saveHandwriting.addEventListener("click", saveHandwritingTransfer);
-refs.resetOrder.addEventListener("click", () => { state.orderDirty = false; state.order = defaultOrder(); renderResult(); });
 refs.previewStage.addEventListener("scroll", () => {
   if (state.previewScrollFrame) return;
   state.previewScrollFrame = requestAnimationFrame(updatePreviewFromScroll);

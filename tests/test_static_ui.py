@@ -13,10 +13,10 @@ class StaticUiContractTests(unittest.TestCase):
         cls.manifest = json.loads((static / "manifest.webmanifest").read_text(encoding="utf-8"))
         cls.service_worker = (static / "sw.js").read_text(encoding="utf-8")
 
-    def test_has_three_column_source_preview_result_layout(self):
+    def test_merge_workspace_has_source_and_preview_without_a_reorder_panel(self):
         self.assertIn("source-panel", self.html)
         self.assertIn("preview-panel", self.html)
-        self.assertIn("result-panel", self.html)
+        self.assertNotIn("result-panel", self.html)
         self.assertIn("grid-template-columns", self.css)
 
     def test_selected_pages_are_bright_and_unselected_pages_dimmed(self):
@@ -39,7 +39,6 @@ class StaticUiContractTests(unittest.TestCase):
         self.assertIn("state.imageInflight.has(key)", self.js)
         self.assertIn("CLIENT_IMAGE_CACHE_BYTES", self.js)
         self.assertIn("lazyImageObserver(refs.documentList)", self.js)
-        self.assertIn("lazyImageObserver(refs.resultList)", self.js)
         self.assertIn("[502, 503, 504].includes", self.js)
         self.assertIn("미리보기를 불러오지 못했습니다 · 다시 시도", self.js)
         self.assertIn(".image-load-error", self.css)
@@ -49,9 +48,10 @@ class StaticUiContractTests(unittest.TestCase):
         self.assertNotIn("renderDocuments()", toggle_body)
         self.assertIn("updateDocumentSelectionUi(doc)", toggle_body)
 
-    def test_result_pages_are_draggable_and_resettable(self):
-        self.assertIn("item.draggable = true", self.js)
-        self.assertIn("resetOrderButton", self.html)
+    def test_merge_order_is_fixed_to_document_and_page_order(self):
+        self.assertNotIn("item.draggable = true", self.js)
+        self.assertNotIn("resetOrderButton", self.html)
+        self.assertNotIn('class="drag-handle"', self.html)
         self.assertIn("state.order = defaultOrder()", self.js)
 
     def test_file_buttons_wait_for_runtime_connection(self):
@@ -79,16 +79,27 @@ class StaticUiContractTests(unittest.TestCase):
         self.assertIn('plan.origin === "merged" ? "합쳐서 갱신" : "전체 갱신"', self.js)
         self.assertIn("넘어가기", self.html)
         self.assertIn(".workspace.review-mode", self.css)
+        self.assertIn("수집함 PDF 쪽 선택", self.js)
 
-    def test_page_comparison_is_tall_enough_to_read_and_scrolls_with_the_window(self):
-        """좁은 칸에 밀어 넣으면 한 번에 한두 쪽밖에 안 보여 비교가 되지 않았다."""
-        self.assertIn("overflow-y: auto;", self.css)                 # 창 전체가 스크롤된다
-        self.assertIn(".workspace.review-mode { height: auto;", self.css)
-        self.assertIn(".source-review .page-review-rows { min-height: 0; flex: none; "
-                      "overflow: visible;", self.css)
-        self.assertIn(".source-review .review-page { height: clamp(160px", self.css)
+    def test_source_review_uses_a_large_left_comparison_and_right_page_picker(self):
+        self.assertIn("grid-template-columns: minmax(650px, 2.7fr) minmax(300px, .8fr)", self.css)
+        self.assertIn(".workspace.review-mode .source-panel { grid-column: 2", self.css)
+        self.assertIn(".workspace.review-mode .preview-panel { display: none; }", self.css)
+        self.assertIn(".source-review .page-review-rows { min-height: 0; flex: 1; overflow-y: auto;", self.css)
+        self.assertIn(".source-review .review-page { height: clamp(360px", self.css)
         self.assertIn("position: sticky; top: 0; z-index: 30;", self.css)   # 도구 막대 고정
-        self.assertIn('{ root: null, rootMargin: "500px 0px" }', self.js)
+        self.assertIn('{ root: refs.sourceReview, rootMargin: "600px 0px" }', self.js)
+
+    def test_excluded_picker_pages_dim_the_current_inbox_review_preview(self):
+        self.assertIn('cell.dataset.key = pageKey(pageRef.document_id, pageRef.page_index)', self.js)
+        self.assertIn("function updateSourceReviewSelection(onlyKey = null)", self.js)
+        self.assertIn('cell.classList.toggle("excluded", !selected)', self.js)
+        self.assertIn("updateSourceReviewSelection(key)", self.js)
+        self.assertIn(".source-review .review-cell.target-cell.excluded .review-page", self.css)
+
+    def test_source_review_skip_explains_that_it_keeps_the_file_and_accepts_the_source(self):
+        self.assertIn("파일은 유지하고 현재 수집함 버전을 원본 최신으로 확인합니다", self.html)
+        self.assertIn("파일은 유지하고 현재 수집함 버전을 원본 최신으로 확인했습니다", self.js)
 
     def test_changed_pages_can_be_jumped_to_directly(self):
         self.assertIn('id="sourceReviewPrev"', self.html)
@@ -102,6 +113,9 @@ class StaticUiContractTests(unittest.TestCase):
         self.assertIn('entry.pages.has(index - 1) || entry.pages.has(index + 1)', self.js)
         self.assertIn('id="sourceReviewRangeNote"', self.html)
         self.assertIn(".review-row.range-impact.inside", self.css)
+        self.assertIn("#ff5070", self.css)
+        self.assertIn("#32d2c9", self.css)
+        self.assertIn("#a99cff", self.css)
         app = (Path(__file__).parents[1] / "noteditor" / "app.py").read_text(encoding="utf-8")
         self.assertIn('"recorded_ranges": recorded', app)
 
@@ -154,10 +168,9 @@ class StaticUiContractTests(unittest.TestCase):
             self.assertIn(message, (Path(__file__).parents[1] / "noteditor" / "app.py").read_text(encoding="utf-8"))
         self.assertIn('id="retryHandwritingButton"', self.html)
 
-    def test_result_content_starts_at_same_header_boundary(self):
-        self.assertNotIn('class="result-toolbar"', self.html)
-        self.assertIn('class="panel-header-actions"', self.html)
-        self.assertIn(".panel-header { height: 73px", self.css)
+    def test_buttons_keep_their_labels_on_one_line(self):
+        self.assertIn("button { color: inherit; white-space: nowrap; }", self.css)
+        self.assertIn("refs.mergeOutputName.parentElement.hidden = true", self.js)
 
     def test_alignment_review_is_continuous_side_by_side_and_shows_actual_ink(self):
         self.assertIn('id="handwritingReview"', self.html)

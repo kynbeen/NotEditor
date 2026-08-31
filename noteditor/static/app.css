@@ -32,7 +32,7 @@ body {
     var(--bg);
 }
 button, input { font: inherit; }
-button { color: inherit; }
+button { color: inherit; white-space: nowrap; }
 button:focus-visible, input:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 2px; }
 [hidden] { display: none !important; }
 .sr-only { position: absolute !important; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
@@ -72,7 +72,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent-2); 
 
 .button {
   min-height: 40px; border-radius: 11px; border: 1px solid transparent; padding: 0 17px;
-  cursor: pointer; font-weight: 650; font-size: 13px; transition: .16s ease;
+  flex: 0 0 auto; cursor: pointer; font-weight: 650; font-size: 13px; transition: .16s ease;
 }
 .button:hover:not(:disabled) { transform: translateY(-1px); }
 .button:active:not(:disabled) { transform: translateY(0); }
@@ -91,7 +91,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent-2); 
 .workspace {
   /* 창이 작아도 패널이 납작해지지 않게 바닥을 두고, 넘치면 화면이 스크롤된다. */
   height: calc(100vh - 92px); min-height: 780px;
-  display: grid; grid-template-columns: minmax(310px, 1.05fr) minmax(430px, 1.48fr) minmax(310px, .95fr);
+  display: grid; grid-template-columns: minmax(330px, .85fr) minmax(560px, 1.55fr);
   gap: 12px; padding: 12px;
 }
 .panel {
@@ -106,7 +106,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent-2); 
 .count-badge { min-width: 29px; padding: 4px 8px; border-radius: 999px; color: var(--muted); background: rgba(255,255,255,.055); font-size: 11px; font-weight: 700; text-align: center; }
 .count-badge.accent { color: #dcd7ff; background: var(--accent-soft); }
 
-.source-panel, .result-panel { display: flex; flex-direction: column; }
+.source-panel { display: flex; flex-direction: column; }
 .document-list { min-height: 0; flex: 1; padding: 12px; overflow: auto; scrollbar-gutter: stable; }
 .document-card { border: 1px solid var(--line); border-radius: 13px; overflow: hidden; background: rgba(255,255,255,.022); margin-bottom: 10px; }
 .document-card:last-child { margin-bottom: 0; }
@@ -169,24 +169,6 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent-2); 
 .preview-page-placeholder.error { animation: none; color: #9f3348; background: #fae9ed; cursor: pointer; }
 .preview-footer { display: flex; align-items: center; justify-content: center; gap: 7px; border-top: 1px solid var(--line); color: var(--muted-2); font-size: 10px; }
 .quality-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--success); box-shadow: 0 0 10px rgba(86,211,165,.55); }
-
-.text-button { padding: 4px; border: 0; color: var(--accent-2); background: none; cursor: pointer; font-size: 10px; white-space: nowrap; }
-.text-button:disabled { color: var(--muted-2); cursor: not-allowed; }
-.result-list { min-height: 0; flex: 1; margin: 0; padding: 11px; overflow: auto; list-style: none; counter-reset: result; }
-.result-item { counter-increment: result; display: grid; grid-template-columns: 19px 49px minmax(0, 1fr) 24px; align-items: center; gap: 8px; min-height: 68px; margin-bottom: 7px; padding: 7px; border: 1px solid var(--line); border-radius: 11px; background: rgba(255,255,255,.028); cursor: grab; transition: transform .15s, border-color .15s, background .15s; }
-.result-item::before { content: counter(result); color: var(--muted-2); font-size: 10px; font-weight: 750; text-align: center; }
-.result-item:hover, .result-item.active { border-color: rgba(169,156,255,.43); background: rgba(128,108,255,.075); }
-.result-item.dragging { opacity: .35; }
-.result-item.drop-before { box-shadow: 0 -2px 0 var(--accent); }
-.result-item.drop-after { box-shadow: 0 2px 0 var(--accent); }
-.result-thumb { width: 49px; height: 55px; object-fit: contain; border-radius: 4px; background: white; }
-.result-image-placeholder { width: 49px; height: 55px; border-radius: 4px; background: linear-gradient(110deg, #252d43 25%, #39425c 42%, #252d43 60%); background-size: 220% 100%; animation: shimmer 1.3s infinite; }
-.result-image-placeholder.image-load-error { display: grid; place-items: center; padding: 5px; color: #f3a6b5; background: rgba(255,113,139,.1); animation: none; font-size: 7px; line-height: 1.3; text-align: center; cursor: pointer; }
-.result-label { min-width: 0; }
-.result-label strong, .result-label span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.result-label strong { font-size: 11px; }
-.result-label span { margin-top: 4px; color: var(--muted); font-size: 9px; }
-.drag-handle { color: var(--muted-2); letter-spacing: -2px; font-size: 16px; }
 
 .loader { width: 26px; height: 26px; border: 2px solid rgba(169,156,255,.19); border-top-color: var(--accent-2); border-radius: 50%; animation: spin .72s linear infinite; }
 .busy-overlay { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; background: rgba(3,5,12,.66); backdrop-filter: blur(8px); }
@@ -268,32 +250,40 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent-2); 
 .review-confirm:hover { background: rgba(255,190,92,.16); }
 .review-confirm.done { color: #b7f4dd; border-color: rgba(86,211,165,.35); background: rgba(86,211,165,.08); }
 .review-drag-handle { color: var(--accent-2); font-size: 14px; letter-spacing: -2px; }
-/* 쪽 대조는 한 화면에 다 담으려 하지 않는다. 대조 구역은 내용만큼 길어지고 창 전체가
-   스크롤된다 — 좁은 칸에 밀어 넣으면 한 번에 한두 쪽밖에 안 보여 비교가 안 됐다. */
-.workspace.review-mode { height: auto; grid-template-rows: auto minmax(520px, 62vh); }
-.source-review {
-  min-width: 0; min-height: 0; grid-column: 1 / -1; margin: 0;
-  display: flex; flex-direction: column; overflow: visible; background: var(--panel);
+/* 원본 검토는 세 패널을 한 줄에 욱여넣지 않는다. 왼쪽은 큰 실제 페이지 비교, 오른쪽은
+   수집함 PDF 쪽 선택만 담당한다. 두 영역은 창 높이를 모두 쓰고 각각 내부에서 스크롤한다. */
+.workspace.review-mode {
+  height: calc(100vh - 92px); min-height: 588px;
+  grid-template-columns: minmax(650px, 2.7fr) minmax(300px, .8fr);
+  grid-template-rows: minmax(0, 1fr);
 }
-.source-review .page-review-columns { margin-top: 9px; position: sticky; top: 96px; z-index: 5; padding: 6px 0; background: var(--panel); }
-.source-review .page-review-rows { min-height: 0; flex: none; overflow: visible; padding-right: 4px; }
-/* 세 쪽이 한 화면에 들어가면서도 읽을 수 있는 높이. 기준은 창의 **세로** 길이다 —
-   가로(vw)로 재면 넓고 낮은 창에서 세 쪽이 화면 밖으로 밀린다. */
-.source-review .review-page { height: clamp(160px, 21vh, 300px); }
+.source-review {
+  min-width: 0; min-height: 0; grid-column: 1; grid-row: 1; margin: 0;
+  display: flex; flex-direction: column; overflow: hidden; background: var(--panel);
+}
+.workspace.review-mode .source-panel { grid-column: 2; grid-row: 1; }
+.workspace.review-mode .preview-panel { display: none; }
+.workspace.review-mode .thumbnail-grid { max-height: min(48vh, 460px); }
+.source-review .page-review-columns { flex: 0 0 auto; margin-top: 9px; padding: 6px 0; background: var(--panel); }
+.source-review .page-review-rows { min-height: 0; flex: 1; overflow-y: auto; padding: 2px 7px 2px 0; scrollbar-gutter: stable; }
+/* 한 쌍을 창 높이 대부분으로 키워 본문을 읽을 수 있게 한다. */
+.source-review .review-page { height: clamp(360px, 57vh, 650px); }
+.source-review .review-cell.target-cell .review-page { transition: opacity .18s, filter .18s; }
+.source-review .review-cell.target-cell.excluded .review-page { opacity: .27; filter: grayscale(1) brightness(.68); }
 .review-jump { display: flex; align-items: center; gap: 6px; }
 .review-jump-position { min-width: 92px; color: var(--muted); text-align: center; font-weight: 650; }
 .review-range-note { margin-top: 10px; padding: 9px 12px; border-left: 3px solid rgba(255,190,92,.7); border-radius: 3px 10px 10px 3px; color: #ffe4ae; background: rgba(255,190,92,.08); font-size: 10px; line-height: 1.5; }
 .review-range-note[hidden] { display: none; }
-.review-badge.range-badge { color: #ffd9a6; background: rgba(255,150,60,.18); }
-.review-badge.range-badge.adjacent { color: #ffe9c4; background: rgba(255,190,92,.12); }
-.source-review .review-row.range-impact.inside { border-color: rgba(255,132,60,.85); background: rgba(255,132,60,.1); box-shadow: inset 4px 0 0 rgba(255,132,60,.95); }
-.source-review .review-row.range-impact.adjacent { border-color: rgba(255,190,92,.7); box-shadow: inset 4px 0 0 rgba(255,190,92,.8); }
+.review-badge.range-badge { color: #ffd7de; background: rgba(255,80,112,.24); }
+.review-badge.range-badge.adjacent { color: #b9fffb; background: rgba(50,210,201,.20); }
+.source-review .review-row.range-impact.inside { border-color: rgba(255,80,112,.95); background: rgba(255,80,112,.15); box-shadow: inset 5px 0 0 #ff5070; }
+.source-review .review-row.range-impact.adjacent { border-color: rgba(50,210,201,.88); background: rgba(50,210,201,.11); box-shadow: inset 5px 0 0 #32d2c9; }
 .source-review .review-row { scroll-margin-top: 150px; }
 .source-review .review-row.focused { outline: 2px solid var(--accent-2); outline-offset: 3px; }
 .tool-tab:disabled, .tool-tab.locked { opacity: .42; cursor: not-allowed; }
 .tool-tab.locked:hover { color: var(--muted); background: transparent; }
 .source-review .review-row.same { border-color: rgba(86,211,165,.27); box-shadow: inset 3px 0 0 rgba(86,211,165,.55); }
-.source-review .review-row.different { border-color: rgba(255,190,92,.48); background: rgba(255,190,92,.055); box-shadow: inset 3px 0 0 rgba(255,190,92,.68); }
+.source-review .review-row.different { border-color: rgba(169,156,255,.70); background: rgba(128,108,255,.09); box-shadow: inset 4px 0 0 #a99cff; }
 .source-review-actions { display: flex; align-items: center; justify-content: flex-end; gap: 9px; padding-top: 11px; }
 .source-review-message { min-width: 0; margin-right: auto; color: var(--muted); font-size: 10px; }
 .source-review-message.success { color: #b7f4dd; }
@@ -336,6 +326,9 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent-2); 
   .tool-tabs { grid-column: 1 / -1; grid-row: 2; justify-self: stretch; }
   .tool-tab { flex: 1; }
   .workspace { height: auto; min-height: 0; grid-template-columns: 1fr; }
+  .workspace.review-mode { height: auto; grid-template-columns: 1fr; grid-template-rows: auto auto; }
+  .source-review { grid-column: 1; grid-row: 1; min-height: 72vh; }
+  .workspace.review-mode .source-panel { grid-column: 1; grid-row: 2; }
   .panel { min-height: 620px; }
   .handwriting-workspace { height: auto; }
 }
