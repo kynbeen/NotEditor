@@ -1,7 +1,11 @@
 # NotEditor
 
-NotEditor는 PDF 문서 합치기와 Samsung Notes·Notewise 필기 옮기기를 한 화면에서 제공하는 도구입니다.
+NotEditor는 PDF 문서 합치기와 Samsung Notes·Notewise·Goodnotes 6 필기 옮기기를 한 화면에서
+제공하는 도구입니다.
 Windows 데스크톱 앱과 Docker 기반 웹앱이 같은 PDF·필기 문서 처리 엔진을 사용합니다.
+
+> **처음 쓰시나요?** 설치부터 첫 사용까지 그대로 따라 할 수 있게 정리했습니다 →
+> **[설치와 첫 사용 안내](docs/설치와-첫-사용.md)**
 
 ## 기능
 
@@ -17,17 +21,37 @@ Windows 데스크톱 앱과 Docker 기반 웹앱이 같은 PDF·필기 문서 �
 
 - 필기·형광펜이 들어 있는 Samsung Notes `.sdocx`를 새 PDF 배경으로 이전
 - 필기가 들어 있는 Notewise `.notewise`를 새 PDF 배경으로 이전
+- 필기가 들어 있는 Goodnotes 6 `.goodnotes`를 새 PDF 배경으로 이전 (실험적, 아래 제한 참고)
 - 쪽 추가·삭제 시 본문 지문과 순서를 이용해 공통 쪽 자동 매칭
 - 페이지 크기나 여백 변경 시 본문 위치 기준 자동 정렬
 - 실제 필기를 원본·새 배경 위에 겹쳐 저장 전에 확인
 - 원본 SDOCX와 PDF를 수정하지 않고 새 `.sdocx`로 저장
 - 원본 Notewise와 PDF를 수정하지 않고 새 `.notewise`로 저장
+- 원본 Goodnotes 6 문서와 PDF를 수정하지 않고 새 `.goodnotes`로 저장
 
 ## 가장 쉬운 Windows 설치
 
-GitHub Releases에서 최신 `NotEditor-Setup-<버전>.exe`를 내려받아 실행합니다. 설치 프로그램은
-시작 메뉴와 선택적으로 바탕화면에 바로가기를 만듭니다. 현재 저장소가 비공개라서 Release 접근
-권한이 없는 사용자에게는 설치 파일을 별도로 전달해야 합니다.
+[**최신 릴리스**](https://github.com/kynbeen/NotEditor/releases/latest)에서
+`NotEditor-Setup-<버전>.exe`를 내려받아 실행합니다. Python을 따로 설치할 필요가 없고,
+설치 프로그램이 시작 메뉴와 바탕화면에 두 실행 방식의 바로가기를 만듭니다.
+
+서명 인증서가 없어 처음 실행할 때 SmartScreen의 「Windows의 PC 보호」 창이 뜹니다.
+**「추가 정보」 → [실행]** 으로 넘어갑니다. 화면 그대로의 안내는
+[설치와 첫 사용 안내](docs/설치와-첫-사용.md#파란-경고창이-떴어요)에 있습니다.
+
+### 명령 한 줄로 설치 (원터치)
+
+내려받기와 설치를 한 번에 끝냅니다. PowerShell에 붙여넣고 Enter를 누르면 됩니다.
+
+```powershell
+iwr https://raw.githubusercontent.com/kynbeen/NotEditor/main/install-online.ps1 -OutFile "$env:TEMP\NotEditor-install.ps1"; powershell -ExecutionPolicy Bypass -File "$env:TEMP\NotEditor-install.ps1"
+```
+
+[`install-online.ps1`](install-online.ps1)은 최신 릴리스 조회 → 설치 파일 내려받기 →
+실행, 이 세 가지만 합니다. 내려받은 파일 크기를 릴리스 정보와 대조한 뒤에만 실행하며,
+`-Wizard` 를 붙이면 설치 위치를 직접 고를 수 있습니다.
+
+### 소스에서 설치 (개발자용)
 
 소스 압축 파일을 받은 사용자는 PowerShell에서 아래 한 줄로 설치할 수도 있습니다.
 
@@ -268,6 +292,17 @@ NotEditor/                 Git 저장소 루트
   교체, 페이지 추가·삭제, 본문 기준 자동 정렬, 펜·형광펜 미리보기를 지원합니다. 기존 쪽의 순서
   변경은 잘못된 필기 매칭을 막기 위해 거부하며, 펜·형광펜 외 Notewise 객체의 미리보기 렌더링은
   후속 지원 범위입니다.
+- **Goodnotes 6 이전은 실험 기능입니다.** 공개되지 않은 `.goodnotes` 형식을 실제 내보내기
+  파일로 관찰해 구현했습니다. 필기 저널(`notes/`)은 **바이트 하나 바꾸지 않고** 옮기고 배경
+  첨부와 그것을 가리키는 사건 기록만 다시 씁니다 — 획을 다시 인코딩하면 앱에서 뭉개진 자국으로
+  열리는 것이 알려져 있기 때문입니다. 다음 경계를 알고 쓰세요.
+  - 저장 결과를 **Goodnotes 앱에서 다시 열어 확인한 적은 아직 없습니다**(개발 환경에 macOS·iPad가
+    없습니다). 중요한 노트는 원본을 반드시 따로 보관하세요.
+  - 검증에 쓴 실제 파일은 Goodnotes 6 Mac 내보내기(스키마 25) **한 쪽짜리 한 개**입니다.
+    여러 쪽 문서와 PDF를 가져와 만든 문서는 같은 코드 경로를 타지만 실제 파일로 확인하지
+    못했습니다.
+  - 펜·볼펜·연필·형광펜·마커는 미리보기에 그리고, 도형·이미지·글상자는 그리지 않습니다.
+    **그리지 않을 뿐 저장 결과에는 그대로 남습니다.**
 - 원본 파일은 읽기 전용으로 열며 사용자가 요청한 결과 외에는 영구 파일을 만들지 않습니다.
 
 제3자 코드 고지는 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)를 확인하세요.
