@@ -38,6 +38,12 @@ from .handwriting_transfer import (
 
 APP_USER_MODEL_ID = "NotEditor.Desktop"
 MISSING_HANDWRITING_MESSAGE = "필기 원본과 대상 PDF를 모두 선택하세요."
+# 저장 대화상자에 보여줄 형식 이름. 결과는 늘 원본과 같은 형식으로 나간다.
+HANDWRITING_SAVE_TYPES = {
+    ".sdocx": "Samsung Notes 문서 (*.sdocx)",
+    ".notewise": "Notewise 문서 (*.notewise)",
+    ".goodnotes": "Goodnotes 문서 (*.goodnotes)",
+}
 HANDWRITING_ANALYSIS_CONCURRENCY = max(
     1, int(os.environ.get("NOTEDITOR_ANALYSIS_CONCURRENCY", "1"))
 )
@@ -422,7 +428,7 @@ class ComposerApi:
             raise PdfComposerError(f"파일을 찾을 수 없습니다: {path.name}")
         if kind == "source":
             if path.suffix.lower() not in SUPPORTED_SUFFIXES:
-                raise PdfComposerError(".sdocx 또는 .notewise 파일을 선택하세요.")
+                raise PdfComposerError(".sdocx · .notewise · .goodnotes 파일을 선택하세요.")
             attribute = "_handwriting_source"
         elif kind == "target":
             if path.suffix.lower() != ".pdf":
@@ -495,7 +501,7 @@ class ComposerApi:
             selected = self._window.create_file_dialog(
                 webview.FileDialog.OPEN,
                 allow_multiple=False,
-                file_types=("필기 문서 (*.sdocx;*.notewise)",),
+                file_types=("필기 문서 (*.sdocx;*.notewise;*.goodnotes)",),
             )
             path = self._dialog_path(selected)
             if path is None:
@@ -549,8 +555,7 @@ class ComposerApi:
                 webview.FileDialog.SAVE,
                 save_filename=with_output_suffix(safe_name, self._handwriting_source)
                 if safe_name else f"필기-이전{suffix}",
-                file_types=(("Notewise 문서 (*.notewise)",) if suffix == ".notewise"
-                            else ("Samsung Notes 문서 (*.sdocx)",)),
+                file_types=(HANDWRITING_SAVE_TYPES.get(suffix, HANDWRITING_SAVE_TYPES[".sdocx"]),),
             )
             output = self._dialog_path(selected)
             if output is None:

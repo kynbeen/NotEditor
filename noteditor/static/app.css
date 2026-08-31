@@ -189,6 +189,8 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent-2); 
 .handwriting-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; }
 .handwriting-header h2 { margin: 5px 0 7px; font-size: 22px; letter-spacing: -.45px; }
 .handwriting-header p { max-width: 630px; margin: 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
+.handwriting-header p.transfer-experimental { margin-top: 9px; padding: 8px 11px; border-left: 3px solid rgba(255,190,92,.7); border-radius: 3px 10px 10px 3px; color: #ffe4ae; background: rgba(255,190,92,.08); font-size: 11px; }
+.handwriting-header p.transfer-experimental strong { color: #ffd489; }
 .handwriting-flow { display: grid; grid-template-columns: minmax(0,1fr) 30px minmax(0,1fr); align-items: center; gap: 10px; margin-top: 25px; }
 .transfer-file-card { min-width: 0; min-height: 92px; display: grid; grid-template-columns: 34px minmax(0,1fr) auto; align-items: center; gap: 12px; padding: 15px; border: 1px solid var(--line-strong); border-radius: 15px; color: var(--text); text-align: left; background: rgba(255,255,255,.027); cursor: pointer; transition: .16s ease; }
 .transfer-file-card:hover { transform: translateY(-1px); border-color: rgba(169,156,255,.54); background: rgba(128,108,255,.075); }

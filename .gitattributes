@@ -2,3 +2,4 @@
 # 체크아웃 때 반드시 CRLF 로 풀리게 못 박는다 (실제로 이 함정에 한 번 빠졌다).
 *.cmd text eol=crlf
 *.bat text eol=crlf
+*.goodnotes binary

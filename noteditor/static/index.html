@@ -117,9 +117,10 @@
       <section class="handwriting-shell">
         <div class="handwriting-header">
           <div>
-            <span class="eyebrow">SAMSUNG NOTES · NOTEWISE</span>
+            <span class="eyebrow">SAMSUNG NOTES · NOTEWISE · GOODNOTES 6</span>
             <h2>필기와 형광펜 옮기기</h2>
-            <p>Samsung Notes 또는 Notewise의 필기 데이터를 새 PDF의 같은 쪽·같은 자리로 옮깁니다. 추가·삭제된 쪽은 본문을 기준으로 자동 매칭하고, 배율이나 여백이 달라졌으면 본문에 맞춰 자동 정렬합니다.</p>
+            <p>Samsung Notes, Notewise 또는 Goodnotes 6의 필기 데이터를 새 PDF의 같은 쪽·같은 자리로 옮깁니다. 추가·삭제된 쪽은 본문을 기준으로 자동 매칭하고, 배율이나 여백이 달라졌으면 본문에 맞춰 자동 정렬합니다.</p>
+            <p class="transfer-experimental"><strong>Goodnotes 6는 실험 기능입니다.</strong> Goodnotes 6에서 내보낸 <code>.goodnotes</code> 파일만 지원하며, 저장 결과를 Goodnotes 앱에서 열어 확인한 적이 아직 없습니다. 원본 노트를 따로 보관한 뒤 사용하세요.</p>
           </div>
         </div>
 
@@ -128,7 +129,7 @@
             <span class="transfer-step">1</span>
             <span class="transfer-file-copy">
               <strong>필기 원본 문서</strong>
-              <small id="handwritingSourceName">.sdocx 또는 .notewise 파일 선택</small>
+              <small id="handwritingSourceName">.sdocx · .notewise · .goodnotes 파일 선택</small>
             </span>
             <span class="transfer-action">선택</span>
           </button>
@@ -191,7 +192,7 @@
     </main>
 
     <input id="webPdfInput" type="file" accept="application/pdf,.pdf" multiple hidden />
-    <input id="webHandwritingInput" type="file" accept=".sdocx,.notewise,application/zip" hidden />
+    <input id="webHandwritingInput" type="file" accept=".sdocx,.notewise,.goodnotes,application/zip" hidden />
     <input id="webTargetPdfInput" type="file" accept="application/pdf,.pdf" hidden />
 
     <div id="busyOverlay" class="busy-overlay" role="status" aria-live="polite" hidden>

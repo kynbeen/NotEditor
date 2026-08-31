@@ -9,6 +9,11 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 
+from .goodnotes_transfer import (
+    inspect_goodnotes_transfer,
+    preview_goodnotes_transfer,
+    transfer_goodnotes_handwriting,
+)
 from .notewise_transfer import (
     inspect_notewise_transfer,
     preview_notewise_transfer,
@@ -21,11 +26,30 @@ from .sdocx_transfer import (
 )
 from .transfer_plan import HandwritingTransferError, TransferInspection
 
-SUPPORTED_SUFFIXES = (".sdocx", ".notewise")
+# 확장자마다 (진단, 미리보기, 저장). SDOCX가 기본값이라 여기에는 넣지 않는다.
+_FORMATS = {
+    ".notewise": (
+        inspect_notewise_transfer,
+        preview_notewise_transfer,
+        transfer_notewise_handwriting,
+    ),
+    ".goodnotes": (
+        inspect_goodnotes_transfer,
+        preview_goodnotes_transfer,
+        transfer_goodnotes_handwriting,
+    ),
+}
+_SDOCX = (inspect_sdocx_transfer, preview_sdocx_transfer, transfer_sdocx_handwriting)
+
+SUPPORTED_SUFFIXES = (".sdocx", ".notewise", ".goodnotes")
 
 
-def _is_notewise(source: str | Path) -> bool:
-    return Path(source).suffix.lower() == ".notewise"
+def _suffix(source: str | Path) -> str:
+    return Path(source).suffix.lower()
+
+
+def _handlers(source: str | Path):
+    return _FORMATS.get(_suffix(source), _SDOCX)
 
 
 def inspect_transfer(
@@ -34,9 +58,8 @@ def inspect_transfer(
     *,
     progress: Callable[[str], None] | None = None,
 ) -> TransferInspection:
-    if _is_notewise(source):
-        return inspect_notewise_transfer(source, target_pdf, progress=progress)
-    return inspect_sdocx_transfer(source, target_pdf, progress=progress)
+    inspect, _preview, _transfer = _handlers(source)
+    return inspect(source, target_pdf, progress=progress)
 
 
 def preview_transfer(
@@ -47,7 +70,7 @@ def preview_transfer(
     *,
     source_index_override: int = -2,
 ) -> tuple[bytes, bytes, bytes, int]:
-    preview = preview_notewise_transfer if _is_notewise(source) else preview_sdocx_transfer
+    _inspect, preview, _transfer = _handlers(source)
     return preview(
         source,
         target_pdf,
@@ -65,7 +88,7 @@ def transfer_handwriting(
     match_override=None,
     plan_override=None,
 ) -> dict:
-    transfer = transfer_notewise_handwriting if _is_notewise(source) else transfer_sdocx_handwriting
+    _inspect, _preview, transfer = _handlers(source)
     return transfer(
         source,
         target_pdf,
@@ -77,7 +100,8 @@ def transfer_handwriting(
 
 def output_suffix(source: str | Path) -> str:
     """결과 파일은 원본과 같은 형식으로 저장한다."""
-    return ".notewise" if _is_notewise(source) else ".sdocx"
+    suffix = _suffix(source)
+    return suffix if suffix in SUPPORTED_SUFFIXES else ".sdocx"
 
 
 def with_output_suffix(name: str, source: str | Path) -> str:

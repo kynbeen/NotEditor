@@ -261,10 +261,24 @@ class StaticUiContractTests(unittest.TestCase):
         # 되돌릴 수 없는 동작이므로 확인을 한 번 받는다.
         self.assertIn("window.confirm", self.js)
 
+    def test_goodnotes_is_offered_but_marked_experimental(self):
+        """앱 왕복 검증 전까지는 고르기 전에 실험 기능임이 보여야 한다."""
+        self.assertIn(".goodnotes", self.html)
+        self.assertIn("Goodnotes 6는 실험 기능입니다", self.html)
+        self.assertIn("transfer-experimental", self.css)
+
+    def test_supported_goodnotes_version_is_named_on_screen(self):
+        """어느 버전이 되는지는 화면에서 바로 보여야 한다. 6에서만 확인했다."""
+        self.assertIn("GOODNOTES 6", self.html)
+
     def test_saved_handwriting_name_follows_the_source_format(self):
         """확장자를 파일명에서 추측하지 않고 서버가 알려준 형식으로 정한다."""
         self.assertIn("source_format: response.source_format", self.js)
-        self.assertIn('state.handwriting.source_format === "notewise"', self.js)
+        self.assertIn("handwritingOutputExtension()", self.js)
+        # 형식을 늘릴 때 두 군데를 따로 고치다 어긋나지 않도록 목록 하나만 본다.
+        self.assertIn(
+            'HANDWRITING_EXTENSIONS = ["sdocx", "notewise", "goodnotes"]', self.js
+        )
 
     def test_output_names_are_editable_without_letting_extensions_drift(self):
         self.assertIn('id="mergeOutputName"', self.html)

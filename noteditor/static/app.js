@@ -581,7 +581,7 @@ function showTool(tool) {
 function renderHandwritingStatus(error = "") {
   const status = state.handwriting;
   const analysis = status.analysis || {};
-  refs.handwritingSourceName.textContent = status.source_name || ".sdocx 또는 .notewise 파일 선택";
+  refs.handwritingSourceName.textContent = status.source_name || ".sdocx · .notewise · .goodnotes 파일 선택";
   refs.handwritingTargetName.textContent = status.target_name || ".pdf 파일 선택";
   refs.saveHandwriting.disabled = !state.bridgeReady || !status.ready;
   refs.retryHandwriting.hidden = analysis.state !== "error";
@@ -940,12 +940,20 @@ function alignmentWarnings(fit) {
   return warnings;
 }
 
+const HANDWRITING_EXTENSIONS = ["sdocx", "notewise", "goodnotes"];
+
 function withoutKnownExtension(name) {
-  return String(name || "").replace(/\.(pdf|sdocx|notewise)$/i, "");
+  return String(name || "").replace(/\.(pdf|sdocx|notewise|goodnotes)$/i, "");
+}
+
+// 결과는 늘 원본과 같은 형식으로 나간다. 빠뜨리면 Goodnotes를 옮겨도 .sdocx로 나간다.
+function handwritingOutputExtension() {
+  const format = state.handwriting.source_format;
+  return HANDWRITING_EXTENSIONS.includes(format) ? `.${format}` : ".sdocx";
 }
 
 function updateHandwritingOutputName(force = false) {
-  const extension = state.handwriting.source_format === "notewise" ? ".notewise" : ".sdocx";
+  const extension = handwritingOutputExtension();
   refs.handwritingOutputSuffix.textContent = extension;
   if (force || !state.handwritingOutputNameDirty) {
     const base = withoutKnownExtension(state.handwriting.target_name || "새-문서");
@@ -1077,7 +1085,7 @@ async function resetDocuments() {
 async function saveHandwritingTransfer() {
   if (!state.handwriting.ready) return;
   const base = (state.handwriting.target_name || "새-문서.pdf").replace(/\.pdf$/i, "");
-  const outputExtension = state.handwriting.source_format === "notewise" ? ".notewise" : ".sdocx";
+  const outputExtension = handwritingOutputExtension();
   const requestedName = withoutKnownExtension(refs.handwritingOutputName.value.trim()) || `${base}-필기`;
   const unconfirmedSlots = state.handwriting.plan.filter((slot) => !slot.confirmed);
   const unconfirmed = unconfirmedSlots.length;

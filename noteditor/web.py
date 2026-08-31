@@ -365,7 +365,7 @@ async def _set_handwriting_upload(request: Request, upload: UploadFile, kind: st
         suffix = Path(upload.filename or "").suffix.lower()
         if suffix not in SUPPORTED_SUFFIXES:
             return JSONResponse(
-                {"ok": False, "error": ".sdocx 또는 .notewise 파일을 선택하세요."},
+                {"ok": False, "error": ".sdocx · .notewise · .goodnotes 파일을 선택하세요."},
                 status_code=400,
             )
     else:

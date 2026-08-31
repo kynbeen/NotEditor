@@ -133,6 +133,48 @@ class WebAppTests(unittest.TestCase):
         self.assertEqual(exported.status_code, 200, exported.text)
         self.assertTrue(exported.content.startswith(b"PK"))
 
+    def test_upload_preview_and_export_goodnotes(self):
+        """Goodnotes도 같은 업로드·미리보기·저장 흐름을 그대로 탄다."""
+        from tests.test_goodnotes_transfer import FIXTURE, _make_pdf as make_goodnotes_pdf
+
+        target_pdf = self.root / "goodnotes-target.pdf"
+        make_goodnotes_pdf(target_pdf, "Slide", pages=1)
+
+        source = self.client.post(
+            "/api/handwriting/source",
+            files={
+                "file": (
+                    "mixed-pens.goodnotes",
+                    FIXTURE.read_bytes(),
+                    "application/zip",
+                )
+            },
+        )
+        self.assertEqual(source.status_code, 200, source.text)
+        self.assertEqual(source.json()["source_format"], "goodnotes")
+
+        target = self.client.post(
+            "/api/handwriting/target",
+            files={"file": ("goodnotes-target.pdf", target_pdf.read_bytes(), "application/pdf")},
+        )
+        self.assertEqual(target.status_code, 200, target.text)
+        status = self.wait_for_handwriting_analysis()
+        self.assertTrue(status["ready"], status)
+
+        preview = self.client.get("/api/handwriting/preview?page_index=0&source_index=0")
+        self.assertEqual(preview.status_code, 200, preview.text)
+        self.assertTrue(preview.json()["ink"].startswith("data:image/png;base64,"))
+
+        exported = self.client.post(
+            "/api/handwriting/export",
+            json={"suggested_name": "moved.goodnotes", "target_mapping": None},
+        )
+        self.assertEqual(exported.status_code, 200, exported.text)
+        self.assertTrue(exported.content.startswith(b"PK"))
+        self.assertIn(
+            ".goodnotes", unquote(exported.headers.get("content-disposition", ""))
+        )
+
     def test_export_without_a_source_answers_with_an_error_not_a_crash(self):
         """원본을 안 고른 채 저장을 누르면 400과 안내 문구가 나가야 한다."""
         exported = self.client.post(
