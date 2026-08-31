@@ -40,6 +40,26 @@
     </header>
 
     <main id="mergeWorkspace" class="workspace" role="tabpanel" aria-labelledby="mergeTabButton">
+      <section id="sourceReview" class="page-review source-review" hidden>
+        <div class="page-review-head">
+          <div>
+            <span class="eyebrow">SUMMARY.AI · SOURCE REVIEW</span>
+            <strong>실제 사용한 파일과 현재 수집함 파일</strong>
+            <small>왼쪽은 파이프라인이 실제 사용한 PDF입니다. 오른쪽에서 같은 쪽·새 쪽·빠진 쪽을 확인하고, 아래 문서 카드에서 갱신 결과에 넣을 쪽과 순서를 고르세요.</small>
+          </div>
+          <div class="page-review-tools"><span id="sourceReviewSummary"></span></div>
+        </div>
+        <div class="page-review-columns" aria-hidden="true">
+          <span>실제 사용한 파일</span>
+          <span>현재 수집함 파일</span>
+        </div>
+        <div id="sourceReviewRows" class="page-review-rows"></div>
+        <div class="source-review-actions">
+          <span id="sourceReviewMessage" class="source-review-message">확인한 뒤 갱신 방법을 선택하세요.</span>
+          <button id="sourceReviewSkip" class="button secondary" type="button">넘어가기</button>
+          <button id="sourceReviewApply" class="button primary" type="button">갱신</button>
+        </div>
+      </section>
       <section class="panel source-panel" aria-labelledby="sourceHeading">
         <div class="panel-header">
           <div>

@@ -7,6 +7,7 @@ const state = {
   orderDirty: false,
   mergeOutputNameDirty: false,
   mergePlan: null,
+  sourceReview: null,
   handwritingOutputNameDirty: false,
   active: null,
   thumbnailCache: new Map(),
@@ -27,6 +28,7 @@ const state = {
     analysis: { state: "waiting", stage: "waiting", message: "두 파일을 선택해 주세요.", error: null },
   },
   reviewObserver: null,
+  sourceReviewObserver: null,
 };
 
 let handwritingPollTimer = 0;
@@ -63,6 +65,10 @@ const refs = {
   reviewReorderContinue: $("#reviewReorderContinue"),
   webPdfInput: $("#webPdfInput"), webHandwritingInput: $("#webHandwritingInput"),
   webTargetPdfInput: $("#webTargetPdfInput"),
+  sourceReview: $("#sourceReview"), sourceReviewRows: $("#sourceReviewRows"),
+  sourceReviewSummary: $("#sourceReviewSummary"),
+  sourceReviewMessage: $("#sourceReviewMessage"),
+  sourceReviewSkip: $("#sourceReviewSkip"), sourceReviewApply: $("#sourceReviewApply"),
 };
 
 const pageKey = (docId, index) => `${docId}:${index}`;
@@ -270,6 +276,7 @@ async function initializeBridge() {
 
 function applyStartupPlan(plan) {
   state.mergePlan = plan;
+  state.sourceReview = plan.mode === "review" ? plan.comparison : null;
   state.documents = plan.sources || [];
   state.order = (plan.order || []).map((item) => ({ ...item }));
   state.selected = new Set(state.order.map(refKey));
@@ -277,11 +284,135 @@ function applyStartupPlan(plan) {
   state.mergeOutputNameDirty = true;
   refs.mergeOutputName.value = withoutKnownExtension(plan.output_name || "merged.pdf");
   refs.mergeOutputName.title = `summary.ai 지정 저장 경로: ${plan.output_path}`;
+  refs.mergeWorkspace.classList.toggle("review-mode", plan.mode === "review");
+  refs.sourceReview.hidden = plan.mode !== "review";
+  if (plan.mode === "review") {
+    refs.add.hidden = true;
+    refs.resetDocuments.hidden = true;
+    refs.mergeOutputName.parentElement.hidden = true;
+    refs.save.hidden = true;
+    refs.sourceReviewApply.textContent = plan.origin === "merged" ? "합쳐서 갱신" : "전체 갱신";
+    renderSourceReview();
+  }
   if (plan.title) document.title = `NotEditor — ${plan.title}`;
   render();
   const first = state.order[0];
   if (first) showPreview(first.document_id, first.page_index, "인계 계획 미리보기");
-  toast("summary.ai 합치기 계획을 불러왔습니다. 쪽 선택과 순서를 확인해 주세요.", "success");
+  toast(plan.mode === "review"
+    ? "실제 사용 파일과 현재 수집함 파일을 비교했습니다. 같은 쪽과 다른 쪽을 확인해 주세요."
+    : "summary.ai 합치기 계획을 불러왔습니다. 쪽 선택과 순서를 확인해 주세요.", "success");
+  if (plan.auto_choose) setTimeout(() => { void addPdfs(); }, 0);
+}
+
+function sourceReviewStatus(pair) {
+  if (!pair.source_ref) return { label: "현재 파일에 새로 생김", same: false };
+  if (!pair.target_ref) return { label: "현재 파일에서 빠짐", same: false };
+  if (pair.confident) return { label: "동일 쪽", same: true };
+  return { label: "내용 다름 · 확인 필요", same: false };
+}
+
+async function loadSourceReviewRow(row, pair) {
+  if (row.dataset.loaded === "true") return;
+  row.dataset.loaded = "true";
+  const requests = [];
+  for (const [name, pageRef] of [["source", pair.source_ref], ["target", pair.target_ref]]) {
+    if (!pageRef) continue;
+    requests.push(queuePreviewRequest(async () => {
+      const response = await callApi("page_image", pageRef.document_id, pageRef.page_index, "preview");
+      if (!response.ok) throw new Error(response.error);
+      const page = row.querySelector(`.${name}-cell .review-page`);
+      const image = page.querySelector(".review-background");
+      image.src = response.image;
+      page.classList.remove("loading");
+      page.classList.add("loaded");
+      await image.decode().catch(() => {});
+    }));
+  }
+  try { await Promise.all(requests); }
+  catch (error) {
+    row.dataset.loaded = "false";
+    row.querySelectorAll(".review-page:not(.empty)").forEach((page) => {
+      page.classList.remove("loading"); page.classList.add("error");
+      const placeholder = page.querySelector(".review-placeholder");
+      placeholder.textContent = "미리보기 실패 · 눌러서 다시 시도";
+      placeholder.onclick = () => loadSourceReviewRow(row, pair);
+    });
+    reportClientError(error);
+  }
+}
+
+function sourceReviewCell(kind, pageRef, emptyMessage) {
+  const cell = document.createElement("div");
+  cell.className = `review-cell ${kind}-cell`;
+  const page = makeReviewPage(pageRef ? "" : emptyMessage, pageRef ? `${pageRef.document_name} ${pageRef.page_index + 1}쪽` : "");
+  const ink = page.querySelector(".review-ink");
+  if (ink) ink.hidden = true;
+  cell.append(page);
+  const meta = document.createElement("div");
+  meta.className = "review-meta";
+  meta.innerHTML = pageRef
+    ? `<span class="review-meta-copy"><strong>${escapeHtml(pageRef.document_name)}</strong><span>${pageRef.page_index + 1}쪽</span></span>`
+    : `<span>${escapeHtml(emptyMessage)}</span>`;
+  cell.append(meta);
+  return cell;
+}
+
+function renderSourceReview() {
+  const comparison = state.sourceReview;
+  refs.sourceReviewRows.replaceChildren();
+  state.sourceReviewObserver?.disconnect();
+  if (!comparison) return;
+  refs.sourceReviewSummary.textContent = [
+    `동일 ${comparison.matched_count - comparison.uncertain_count}쪽`,
+    `확인 필요 ${comparison.uncertain_count}쌍`,
+    `현재 전용 ${comparison.target_only_count}쪽`,
+    `사용본 전용 ${comparison.source_only_count}쪽`,
+  ].join(" · ");
+  state.sourceReviewObserver = new IntersectionObserver((entries) => {
+    entries.forEach((entry) => {
+      if (!entry.isIntersecting) return;
+      state.sourceReviewObserver.unobserve(entry.target);
+      const pair = comparison.pairs[Number(entry.target.dataset.pairIndex)];
+      if (pair) void loadSourceReviewRow(entry.target, pair);
+    });
+  }, { root: refs.sourceReviewRows, rootMargin: "500px 0px" });
+  comparison.pairs.forEach((pair, index) => {
+    const status = sourceReviewStatus(pair);
+    const row = document.createElement("article");
+    row.className = `review-row ${status.same ? "same" : "different"}`;
+    row.dataset.pairIndex = String(index);
+    const source = sourceReviewCell("source", pair.source_ref, "현재 파일에서 빠진 사용본 쪽");
+    const target = sourceReviewCell("target", pair.target_ref, "사용본에 없던 새 쪽");
+    const badge = document.createElement("span");
+    badge.className = `review-badge${status.same ? " done" : ""}`;
+    badge.textContent = status.label;
+    target.querySelector(".review-meta").append(badge);
+    row.append(source, target);
+    refs.sourceReviewRows.append(row);
+    state.sourceReviewObserver.observe(row);
+  });
+}
+
+async function finishSourceReview(decision) {
+  if (!state.mergePlan || state.mergePlan.mode !== "review") return;
+  refs.sourceReviewMessage.className = "source-review-message";
+  refs.sourceReviewMessage.textContent = "summary.ai에 결정을 전달하는 중…";
+  refs.sourceReviewApply.disabled = true;
+  refs.sourceReviewSkip.disabled = true;
+  try {
+    const response = await callApi("finish_review", decision, state.order);
+    if (!response.ok) throw new Error(response.error);
+    refs.sourceReviewMessage.classList.add("success");
+    refs.sourceReviewMessage.textContent = decision === "skip"
+      ? "현재 수집함 버전을 확인 처리했습니다. summary.ai로 돌아가세요."
+      : "갱신 결정을 전달했습니다. summary.ai가 결과를 반영합니다.";
+    toast(refs.sourceReviewMessage.textContent, "success");
+  } catch (error) {
+    refs.sourceReviewMessage.classList.add("error");
+    refs.sourceReviewMessage.textContent = error.message;
+    refs.sourceReviewApply.disabled = false;
+    refs.sourceReviewSkip.disabled = false;
+  }
 }
 
 async function reportClientError(value) {
@@ -1286,9 +1417,9 @@ function renderSummary() {
     : (state.documents.length
       ? `${state.mergePlan?.title ? `${state.mergePlan.title} · ` : ""}${state.documents.length}개 문서에서 ${state.order.length}쪽 선택`
       : "PDF를 추가해 시작하세요");
-  refs.save.disabled = !state.bridgeReady || state.order.length === 0;
+  refs.save.disabled = !state.bridgeReady || state.order.length === 0 || state.mergePlan?.mode === "review";
   refs.mergeOutputName.disabled = Boolean(state.mergePlan) || state.documents.length === 0;
-  refs.resetDocuments.disabled = !state.bridgeReady || state.documents.length === 0;
+  refs.resetDocuments.disabled = !state.bridgeReady || state.documents.length === 0 || state.mergePlan?.mode === "review";
 }
 
 function render() { renderDocuments(); renderPreviewPages(); renderResult(); renderSummary(); }
@@ -1351,6 +1482,11 @@ async function saveResult() {
 refs.add.addEventListener("click", addPdfs);
 refs.emptyAdd.addEventListener("click", addPdfs);
 refs.save.addEventListener("click", saveResult);
+refs.sourceReviewApply.addEventListener("click", () => {
+  const decision = state.mergePlan?.origin === "merged" ? "merge" : "refresh";
+  void finishSourceReview(decision);
+});
+refs.sourceReviewSkip.addEventListener("click", () => { void finishSourceReview("skip"); });
 refs.mergeOutputName.addEventListener("input", () => { state.mergeOutputNameDirty = true; });
 refs.handwritingOutputName.addEventListener("input", () => { state.handwritingOutputNameDirty = true; });
 refs.mergeTab.addEventListener("click", () => showTool("merge"));

@@ -18,9 +18,11 @@ from .merge_handoff import (
     CONTRACT_VERSION,
     MergePlan,
     load_merge_plan,
+    path_is_within,
     parts_from_order,
     paths_refer_to_same_file,
     sidecar_path,
+    write_decision,
     write_sidecar,
 )
 from .page_plan import PagePlan
@@ -102,6 +104,10 @@ class ComposerApi:
         self._startup_plan = preloaded_startup_plan
         self._startup_plan_result: dict | None = None
         self._merge_output_path: Path | None = None
+        self._input_root: Path | None = None
+        self._review_plan: MergePlan | None = None
+        self._review_reference_id: str | None = None
+        self._contract_version = CONTRACT_VERSION
         self._window: Any | None = None
         self._closed = False
         self._handwriting_source: Path | None = None
@@ -145,12 +151,22 @@ class ComposerApi:
                 raise PdfComposerError("시작 계획은 빈 문서 작업공간에만 적용할 수 있습니다.")
 
             plan = self._startup_plan or load_merge_plan(self._startup_plan_path)
-            unique_paths = list(dict.fromkeys(part.path for part in plan.parts))
+            load_paths = [part.path for part in plan.parts]
+            if plan.reference_path is not None:
+                load_paths.insert(0, plan.reference_path)
+            unique_paths = list(dict.fromkeys(load_paths))
             self._session.add_files(unique_paths)
             sources = self._session.sources
             source_by_path = {
                 os.path.normcase(str(source.path.resolve())): source for source in sources
             }
+            reference = (
+                source_by_path.get(os.path.normcase(str(plan.reference_path.resolve())))
+                if plan.reference_path else None
+            )
+            if plan.reference_path and reference is None:
+                raise PdfComposerError("비교 기준 PDF를 등록하지 못했습니다.")
+            candidates = [source for source in sources if source is not reference]
             order: list[dict] = []
             for part in plan.parts:
                 source = source_by_path.get(os.path.normcase(str(part.path.resolve())))
@@ -166,25 +182,84 @@ class ComposerApi:
                 )
             if len({(item["document_id"], item["page_index"]) for item in order}) != len(order):
                 raise PdfComposerError("합치기 계획에 같은 페이지가 두 번 들어 있습니다.")
-            # Contract v1 cannot describe arbitrary interleaving or reverse order.
-            parts_from_order(order, sources)
+            if order:
+                # The sidecar schema cannot describe arbitrary interleaving or reverse order.
+                parts_from_order(order, candidates)
 
             result = {
-                "version": CONTRACT_VERSION,
+                "version": plan.version,
+                "mode": plan.mode,
                 "title": plan.title,
                 "output_path": str(plan.output_path),
                 "output_name": plan.output_path.name,
-                "sources": [source.as_dict() for source in sources],
+                "input_root": str(plan.input_root) if plan.input_root else None,
+                "sources": [source.as_dict() for source in candidates],
                 "order": order,
+                "auto_choose": plan.mode == "merge" and not candidates,
             }
+            if plan.mode == "review":
+                result["origin"] = plan.origin
+                result["comparison"] = self._compare_sources(reference, candidates)
             self._startup_plan = plan
             self._merge_output_path = plan.output_path
+            self._input_root = plan.input_root
+            self._review_plan = plan if plan.mode == "review" else None
+            self._review_reference_id = reference.id if reference else None
+            self._contract_version = plan.version
             self._startup_plan_result = result
             return self._ok(plan=result)
         except Exception as exc:
             if self._startup_plan_result is None and self._session.sources:
                 self._session.clear_sources()
             return self._error(exc)
+
+    @staticmethod
+    def _compare_sources(reference, candidates: list) -> dict:
+        if reference is None or not candidates:
+            raise PdfComposerError("쪽 비교에는 기준 PDF와 현재 PDF가 모두 필요합니다.")
+        import pymupdf
+
+        from .page_match import PageFingerprint, fingerprint, fingerprints, match_fingerprints
+
+        with pymupdf.open(reference.path) as document:
+            source_fingerprints = fingerprints(document)
+        target_fingerprints = []
+        target_refs = []
+        flat_index = 0
+        for candidate in candidates:
+            with pymupdf.open(candidate.path) as document:
+                for page_index in range(document.page_count):
+                    base = fingerprint(document[page_index])
+                    target_fingerprints.append(PageFingerprint(
+                        index=flat_index, cells=base.cells, aspect=base.aspect
+                    ))
+                    target_refs.append({
+                        "document_id": candidate.id,
+                        "document_name": candidate.name,
+                        "page_index": page_index,
+                    })
+                    flat_index += 1
+        matched = match_fingerprints(source_fingerprints, target_fingerprints)
+        pairs = []
+        for pair in matched.pairs:
+            item = pair.as_dict()
+            item["source_ref"] = (
+                {"document_id": reference.id, "document_name": reference.name,
+                 "page_index": pair.source_index}
+                if pair.source_index is not None else None
+            )
+            item["target_ref"] = (
+                target_refs[pair.target_index] if pair.target_index is not None else None
+            )
+            pairs.append(item)
+        return {
+            "reference": reference.as_dict(),
+            "pairs": pairs,
+            "matched_count": len(matched.matched_pairs),
+            "source_only_count": len(matched.source_only),
+            "target_only_count": len(matched.target_only),
+            "uncertain_count": len(matched.uncertain),
+        }
 
     def log_client_error(self, message: str) -> dict:
         logging.getLogger("noteditor").error("UI error: %s", message)
@@ -207,6 +282,7 @@ class ComposerApi:
 
             paths = self._window.create_file_dialog(
                 webview.FileDialog.OPEN,
+                directory=str(self._input_root or ""),
                 allow_multiple=True,
                 file_types=("PDF 문서 (*.pdf)",),
             )
@@ -515,10 +591,18 @@ class ComposerApi:
 
     def add_paths(self, paths: list[str]) -> dict:
         try:
-            added = self._session.add_files(paths)
+            resolved = [Path(path).expanduser().resolve() for path in paths]
+            if self._input_root is not None:
+                outside = [path for path in resolved if not path_is_within(path, self._input_root)]
+                if outside:
+                    raise PdfComposerError(
+                        f"summary.ai 수집함 밖의 PDF는 사용할 수 없습니다: {outside[0].name}"
+                    )
+            added = self._session.add_files(resolved)
             return self._ok(
                 added=added,
-                sources=[source.as_dict() for source in self._session.sources],
+                sources=[source.as_dict() for source in self._session.sources
+                         if source.id != self._review_reference_id],
             )
         except Exception as exc:
             return self._error(exc)
@@ -530,6 +614,8 @@ class ComposerApi:
         사라지면, 사용자는 하지도 않은 일을 당한다. 그래서 필기 옮기기 상태는 건드리지 않는다.
         """
         try:
+            if self._review_plan is not None:
+                raise PdfComposerError("원본 비교 중에는 현재 PDF 목록을 비울 수 없습니다.")
             cleared = self._session.clear_sources()
             return self._ok(sources=[], cleared=[str(path) for path in cleared])
         except Exception as exc:
@@ -537,6 +623,8 @@ class ComposerApi:
 
     def remove_document(self, document_id: str) -> dict:
         try:
+            if document_id == self._review_reference_id:
+                raise PdfComposerError("비교 기준 PDF는 제거할 수 없습니다.")
             self._session.remove_source(document_id)
             return self._ok()
         except Exception as exc:
@@ -572,6 +660,7 @@ class ComposerApi:
                     result["path"],
                     parts=sidecar_parts,
                     noteditor_version=__version__,
+                    version=self._contract_version,
                 )
                 result["sidecar"] = str(sidecar)
                 return self._ok(cancelled=False, result=result)
@@ -593,6 +682,37 @@ class ComposerApi:
             output_path = paths if isinstance(paths, str) else paths[0]
             result = self._session.build_pdf(order, output_path)
             return self._ok(cancelled=False, result=result)
+        except Exception as exc:
+            return self._error(exc)
+
+    def finish_review(self, decision: str, order: list[dict] | None = None) -> dict:
+        try:
+            plan = self._review_plan
+            if plan is None:
+                raise PdfComposerError("summary.ai 원본 비교 계획이 아닙니다.")
+            allowed = {"selected": {"refresh", "skip"}, "merged": {"merge", "skip"}}
+            if decision not in allowed.get(plan.origin, set()):
+                raise PdfComposerError(
+                    f"{plan.origin} 자료에서 허용하지 않는 갱신 결정입니다: {decision}"
+                )
+            if plan.decision_path is not None:
+                plan.decision_path.unlink(missing_ok=True)
+            if decision == "merge":
+                actual_order = order or []
+                candidates = [source for source in self._session.sources
+                              if source.id != self._review_reference_id]
+                sidecar_parts = parts_from_order(actual_order, candidates)
+                sidecar_path(plan.output_path).unlink(missing_ok=True)
+                result = self._session.build_pdf(actual_order, plan.output_path)
+                sidecar = write_sidecar(
+                    result["path"], parts=sidecar_parts,
+                    noteditor_version=__version__, version=plan.version,
+                )
+                result["sidecar"] = str(sidecar)
+                decision_path = write_decision(plan, decision)
+                return self._ok(decision=decision, decision_path=str(decision_path), result=result)
+            decision_path = write_decision(plan, decision)
+            return self._ok(decision=decision, decision_path=str(decision_path), result=None)
         except Exception as exc:
             return self._error(exc)
 

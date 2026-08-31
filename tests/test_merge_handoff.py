@@ -14,6 +14,7 @@ from noteditor.app import ComposerApi, run
 from noteditor.engine import ComposerSession
 from noteditor.merge_handoff import (
     CONTRACT_VERSION,
+    LEGACY_CONTRACT_VERSION,
     load_merge_plan,
     sidecar_path,
 )
@@ -32,18 +33,23 @@ class MergeHandoffTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
-        self.first = self.root / "첫 자료.pdf"
-        self.second = self.root / "둘째 자료.pdf"
+        self.input_root = self.root / "imports" / "lecture"
+        self.input_root.mkdir(parents=True)
+        self.first = self.input_root / "첫 자료.pdf"
+        self.second = self.input_root / "둘째 자료.pdf"
+        self.reference = self.root / "bundle" / "lecture.pdf"
+        self.reference.parent.mkdir()
         self.output = self.root / "result" / "merged.pdf"
         make_pdf(self.first, ["A1", "A2"])
         make_pdf(self.second, ["B1", "B2"])
+        make_pdf(self.reference, ["A1", "A2"])
 
     def tearDown(self):
         self.temp.cleanup()
 
     def write_plan(self, **updates) -> Path:
         payload = {
-            "version": CONTRACT_VERSION,
+            "version": LEGACY_CONTRACT_VERSION,
             "title": "병리학 1주차 — lecture",
             "output_path": str(self.output.resolve()),
             "parts": [
@@ -53,6 +59,20 @@ class MergeHandoffTests(unittest.TestCase):
         }
         payload.update(updates)
         path = self.root / "handoff.json"
+        path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        return path
+
+    def write_v2_plan(self, **updates) -> Path:
+        payload = {
+            "version": CONTRACT_VERSION,
+            "mode": "merge",
+            "title": "병리학 강의록 합치기",
+            "input_root": str(self.input_root.resolve()),
+            "output_path": str(self.output.resolve()),
+            "parts": [],
+        }
+        payload.update(updates)
+        path = self.root / "handoff-v2.json"
         path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
         return path
 
@@ -97,7 +117,7 @@ class MergeHandoffTests(unittest.TestCase):
             sidecar = sidecar_path(self.output)
             self.assertTrue(sidecar.is_file())
             payload = json.loads(sidecar.read_text(encoding="utf-8"))
-            self.assertEqual(payload["version"], CONTRACT_VERSION)
+            self.assertEqual(payload["version"], LEGACY_CONTRACT_VERSION)
             self.assertEqual(payload["output"], str(self.output.resolve()))
             self.assertTrue(payload["noteditor_version"])
             self.assertTrue(payload["saved_at"].endswith("+00:00"))
@@ -148,6 +168,75 @@ class MergeHandoffTests(unittest.TestCase):
             response = api.startup_plan()
             self.assertFalse(response["ok"])
             self.assertEqual(api._session.sources, [])
+        finally:
+            api._close()
+
+    def test_v2_empty_merge_plan_keeps_input_root_and_requests_picker(self):
+        plan_path = self.write_v2_plan()
+        plan = load_merge_plan(plan_path)
+        self.assertEqual(plan.version, CONTRACT_VERSION)
+        self.assertEqual(plan.mode, "merge")
+        self.assertEqual(plan.input_root, self.input_root.resolve())
+        self.assertEqual(plan.parts, ())
+        api = ComposerApi(ComposerSession(), plan_path)
+        try:
+            response = api.startup_plan()
+            self.assertTrue(response["ok"], response)
+            self.assertTrue(response["plan"]["auto_choose"])
+            self.assertEqual(response["plan"]["sources"], [])
+        finally:
+            api._close()
+
+    def test_v2_rejects_parts_outside_the_input_root(self):
+        outside = self.root / "outside.pdf"
+        make_pdf(outside, ["outside"])
+        with self.assertRaisesRegex(Exception, "수집함 밖"):
+            load_merge_plan(self.write_v2_plan(parts=[
+                {"path": str(outside.resolve()), "pages": ""},
+            ]))
+
+    def test_review_plan_compares_pages_and_writes_skip_decision(self):
+        decision = self.root / "result" / "decision.json"
+        plan = self.write_v2_plan(
+            mode="review",
+            origin="selected",
+            reference_path=str(self.reference.resolve()),
+            decision_path=str(decision.resolve()),
+            parts=[{"path": str(self.first.resolve()), "pages": ""}],
+        )
+        api = ComposerApi(ComposerSession(), plan)
+        try:
+            response = api.startup_plan()
+            self.assertTrue(response["ok"], response)
+            review = response["plan"]
+            self.assertEqual(review["mode"], "review")
+            self.assertEqual(review["origin"], "selected")
+            self.assertEqual(review["comparison"]["matched_count"], 2)
+            self.assertEqual(len(review["sources"]), 1)
+            finished = api.finish_review("skip")
+            self.assertTrue(finished["ok"], finished)
+            payload = json.loads(decision.read_text(encoding="utf-8"))
+            self.assertEqual(payload["version"], CONTRACT_VERSION)
+            self.assertEqual(payload["decision"], "skip")
+            self.assertFalse(self.output.exists())
+        finally:
+            api._close()
+
+    def test_review_plan_limits_decisions_by_origin(self):
+        decision = self.root / "result" / "decision.json"
+        plan = self.write_v2_plan(
+            mode="review", origin="selected",
+            reference_path=str(self.reference.resolve()),
+            decision_path=str(decision.resolve()),
+            parts=[{"path": str(self.first.resolve()), "pages": ""}],
+        )
+        api = ComposerApi(ComposerSession(), plan)
+        try:
+            self.assertTrue(api.startup_plan()["ok"])
+            response = api.finish_review("merge", [])
+            self.assertFalse(response["ok"])
+            self.assertIn("selected", response["error"])
+            self.assertFalse(decision.exists())
         finally:
             api._close()
 

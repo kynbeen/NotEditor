@@ -68,6 +68,24 @@ class StaticUiContractTests(unittest.TestCase):
         self.assertIn("state.selected = new Set(state.order.map(refKey))", self.js)
         self.assertIn("Boolean(state.mergePlan)", self.js)
 
+    def test_summary_ai_source_review_combines_page_pairs_with_merge_selection(self):
+        self.assertIn('id="sourceReview"', self.html)
+        self.assertIn('id="sourceReviewRows"', self.html)
+        self.assertIn("실제 사용한 파일", self.html)
+        self.assertIn("현재 수집함 파일", self.html)
+        self.assertIn("function renderSourceReview()", self.js)
+        self.assertIn('callApi("page_image", pageRef.document_id', self.js)
+        self.assertIn('callApi("finish_review", decision, state.order)', self.js)
+        self.assertIn('plan.origin === "merged" ? "합쳐서 갱신" : "전체 갱신"', self.js)
+        self.assertIn("넘어가기", self.html)
+        self.assertIn(".workspace.review-mode", self.css)
+
+    def test_empty_summary_ai_merge_plan_opens_the_inbox_picker_immediately(self):
+        self.assertIn('if (plan.auto_choose) setTimeout(() => { void addPdfs(); }, 0)', self.js)
+        app = (Path(__file__).parents[1] / "noteditor" / "app.py").read_text(encoding="utf-8")
+        self.assertIn('directory=str(self._input_root or "")', app)
+        self.assertIn("summary.ai 수집함 밖의 PDF는 사용할 수 없습니다", app)
+
     def test_merge_and_handwriting_are_peer_tabs(self):
         self.assertIn('id="handwritingButton"', self.html)
         self.assertIn('id="mergeTabButton"', self.html)

@@ -1,4 +1,4 @@
-"""summary.ai ↔ NotEditor merge handoff contract (version 1)."""
+"""summary.ai ↔ NotEditor merge/review handoff contracts (versions 1 and 2)."""
 from __future__ import annotations
 
 import json
@@ -13,7 +13,9 @@ from .engine import PageRef, PdfComposerError, SourceDocument
 from .ranges import format_page_ranges
 
 
-CONTRACT_VERSION = 1
+LEGACY_CONTRACT_VERSION = 1
+CONTRACT_VERSION = 2
+SUPPORTED_CONTRACT_VERSIONS = (LEGACY_CONTRACT_VERSION, CONTRACT_VERSION)
 SIDECAR_SUFFIX = ".merge.json"
 
 
@@ -25,9 +27,15 @@ class MergePlanPart:
 
 @dataclass(frozen=True)
 class MergePlan:
+    version: int
+    mode: str
     title: str
     output_path: Path
     parts: tuple[MergePlanPart, ...]
+    input_root: Path | None = None
+    reference_path: Path | None = None
+    origin: str | None = None
+    decision_path: Path | None = None
 
 
 def paths_refer_to_same_file(left: Path, right: Path) -> bool:
@@ -37,6 +45,35 @@ def paths_refer_to_same_file(left: Path, right: Path) -> bool:
         return left.samefile(right)
     except OSError:
         return os.path.normcase(str(left)) == os.path.normcase(str(right))
+
+
+def path_is_within(path: Path, root: Path) -> bool:
+    try:
+        path.expanduser().resolve().relative_to(root.expanduser().resolve())
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def _absolute_pdf(value: object, label: str, *, must_exist: bool = False) -> Path:
+    if not isinstance(value, str) or not value.strip():
+        raise PdfComposerError(f"{label}가 없습니다.")
+    path = Path(value).expanduser()
+    if not path.is_absolute() or path.suffix.lower() != ".pdf":
+        raise PdfComposerError(f"{label}는 절대경로인 PDF 파일이어야 합니다.")
+    path = path.resolve()
+    if must_exist and not path.is_file():
+        raise PdfComposerError(f"{label} 파일을 찾을 수 없습니다: {path}")
+    return path
+
+
+def _absolute_json(value: object, label: str) -> Path:
+    if not isinstance(value, str) or not value.strip():
+        raise PdfComposerError(f"{label}가 없습니다.")
+    path = Path(value).expanduser()
+    if not path.is_absolute() or path.suffix.lower() != ".json":
+        raise PdfComposerError(f"{label}는 절대경로인 JSON 파일이어야 합니다.")
+    return path.resolve()
 
 
 def load_merge_plan(path: str | Path) -> MergePlan:
@@ -49,22 +86,45 @@ def load_merge_plan(path: str | Path) -> MergePlan:
         raise PdfComposerError(f"합치기 계획 JSON을 읽을 수 없습니다: {exc}") from exc
     if not isinstance(payload, dict):
         raise PdfComposerError("합치기 계획은 JSON 객체여야 합니다.")
-    if payload.get("version") != CONTRACT_VERSION:
+    version = payload.get("version")
+    if version not in SUPPORTED_CONTRACT_VERSIONS:
         raise PdfComposerError(
             f"지원하지 않는 합치기 계획 판입니다: {payload.get('version')!r} "
-            f"(지원: {CONTRACT_VERSION})"
+            f"(지원: {', '.join(map(str, SUPPORTED_CONTRACT_VERSIONS))})"
         )
 
-    raw_output = payload.get("output_path")
-    if not isinstance(raw_output, str) or not raw_output.strip():
-        raise PdfComposerError("합치기 계획에 output_path가 없습니다.")
-    output = Path(raw_output).expanduser()
-    if not output.is_absolute() or output.suffix.lower() != ".pdf":
-        raise PdfComposerError("output_path는 절대경로인 PDF 파일이어야 합니다.")
-    output = output.resolve()
+    output = _absolute_pdf(payload.get("output_path"), "합치기 계획의 output_path")
+    mode = "merge" if version == LEGACY_CONTRACT_VERSION else payload.get("mode")
+    if mode not in ("merge", "review"):
+        raise PdfComposerError("합치기 계획의 mode는 merge 또는 review여야 합니다.")
+
+    input_root: Path | None = None
+    reference_path: Path | None = None
+    origin: str | None = None
+    decision_path: Path | None = None
+    if version == CONTRACT_VERSION:
+        raw_root = payload.get("input_root")
+        if not isinstance(raw_root, str) or not raw_root.strip():
+            raise PdfComposerError("판 2 계획에 input_root가 없습니다.")
+        input_root = Path(raw_root).expanduser()
+        if not input_root.is_absolute() or not input_root.is_dir():
+            raise PdfComposerError("input_root는 존재하는 절대경로 디렉터리여야 합니다.")
+        input_root = input_root.resolve()
+        if mode == "review":
+            reference_path = _absolute_pdf(
+                payload.get("reference_path"), "비교 계획의 reference_path", must_exist=True
+            )
+            origin = payload.get("origin")
+            if origin not in ("selected", "merged"):
+                raise PdfComposerError("비교 계획의 origin은 selected 또는 merged여야 합니다.")
+            decision_path = _absolute_json(
+                payload.get("decision_path"), "비교 계획의 decision_path"
+            )
 
     raw_parts = payload.get("parts")
-    if not isinstance(raw_parts, list) or not raw_parts:
+    if not isinstance(raw_parts, list):
+        raise PdfComposerError("합치기 계획의 parts는 목록이어야 합니다.")
+    if (version == LEGACY_CONTRACT_VERSION or mode == "review") and not raw_parts:
         raise PdfComposerError("합치기 계획에 원본 PDF가 없습니다.")
     parts: list[MergePlanPart] = []
     for index, raw_part in enumerate(raw_parts, start=1):
@@ -76,12 +136,13 @@ def load_merge_plan(path: str | Path) -> MergePlan:
             raise PdfComposerError(f"합치기 계획의 {index}번째 PDF 경로가 없습니다.")
         if not isinstance(raw_pages, str):
             raise PdfComposerError(f"합치기 계획의 {index}번째 pages는 문자열이어야 합니다.")
-        source = Path(raw_path).expanduser()
-        if not source.is_absolute() or source.suffix.lower() != ".pdf" or not source.is_file():
+        source = _absolute_pdf(
+            raw_path, f"합치기 계획의 {index}번째 원본", must_exist=True
+        )
+        if input_root is not None and not path_is_within(source, input_root):
             raise PdfComposerError(
-                f"합치기 계획의 {index}번째 원본은 존재하는 절대경로 PDF여야 합니다: {source}"
+                f"합치기 계획의 {index}번째 원본이 수집함 밖에 있습니다: {source}"
             )
-        source = source.resolve()
         if paths_refer_to_same_file(source, output):
             raise PdfComposerError("합치기 결과가 원본 PDF를 덮어쓸 수 없습니다.")
         parts.append(MergePlanPart(source, raw_pages.strip()))
@@ -91,7 +152,17 @@ def load_merge_plan(path: str | Path) -> MergePlan:
         title = ""
     if not isinstance(title, str):
         raise PdfComposerError("합치기 계획의 title은 문자열이어야 합니다.")
-    return MergePlan(title.strip(), output, tuple(parts))
+    return MergePlan(
+        version=version,
+        mode=mode,
+        title=title.strip(),
+        output_path=output,
+        parts=tuple(parts),
+        input_root=input_root,
+        reference_path=reference_path,
+        origin=origin,
+        decision_path=decision_path,
+    )
 
 
 def sidecar_path(output: str | Path) -> Path:
@@ -150,6 +221,7 @@ def write_sidecar(
     *,
     parts: list[dict[str, str]],
     noteditor_version: str,
+    version: int = CONTRACT_VERSION,
 ) -> Path:
     output_path = Path(output).expanduser().resolve()
     if not output_path.is_file():
@@ -157,11 +229,47 @@ def write_sidecar(
     target = sidecar_path(output_path)
     target.parent.mkdir(parents=True, exist_ok=True)
     payload = {
-        "version": CONTRACT_VERSION,
+        "version": version,
         "noteditor_version": str(noteditor_version),
         "output": str(output_path),
         "saved_at": datetime.now(timezone.utc).isoformat(),
         "parts": parts,
+    }
+    descriptor, temporary_name = tempfile.mkstemp(
+        dir=target.parent, prefix=f".{target.name}-", suffix=".tmp"
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as stream:
+            json.dump(payload, stream, ensure_ascii=False, indent=2)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, target)
+    except Exception:
+        temporary.unlink(missing_ok=True)
+        raise
+    return target
+
+
+def write_decision(plan: MergePlan, decision: str) -> Path:
+    if plan.mode != "review" or plan.decision_path is None or plan.origin is None:
+        raise PdfComposerError("비교 계획이 아니어서 갱신 결정을 기록할 수 없습니다.")
+    allowed = {"selected": {"refresh", "skip"}, "merged": {"merge", "skip"}}
+    if decision not in allowed[plan.origin]:
+        raise PdfComposerError(
+            f"{plan.origin} 자료에서 허용하지 않는 갱신 결정입니다: {decision}"
+        )
+    if decision == "merge":
+        if not plan.output_path.is_file() or not sidecar_path(plan.output_path).is_file():
+            raise PdfComposerError("합치기 결과 PDF와 사이드카가 완성되지 않았습니다.")
+
+    target = plan.decision_path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "version": CONTRACT_VERSION,
+        "decision": decision,
+        "saved_at": datetime.now(timezone.utc).isoformat(),
     }
     descriptor, temporary_name = tempfile.mkstemp(
         dir=target.parent, prefix=f".{target.name}-", suffix=".tmp"
