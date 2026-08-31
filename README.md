@@ -35,9 +35,30 @@ GitHub Releases에서 최신 `NotEditor-Setup-<버전>.exe`를 내려받아 실�
 powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
-Python 3.12 이상이 필요하며, 전용 `venv` 생성·의존성 설치·아이콘 생성·바로가기 등록을 한 번에
-처리합니다. 기존 `setup.ps1`과 `install-app.ps1`은 개발 및 이전 설치 흐름과의 호환을 위해 남아
-있습니다.
+Python 3.12 이상이 필요하며, 전용 `venv` 생성·의존성 설치·아이콘 생성·바로가기 등록·PATH 등록을
+한 번에 처리합니다. 기존 `setup.ps1`과 `install-app.ps1`은 개발 및 이전 설치 흐름과의 호환을 위해
+남아 있습니다.
+
+### PATH 등록
+
+`install.ps1`은 이 폴더를 사용자 PATH에 넣습니다. 그러면 어느 폴더에서든 아래처럼 실행할 수
+있습니다(이미 열려 있던 터미널에는 적용되지 않으니 새 창을 여세요).
+
+```powershell
+noteditor
+noteditor --open-plan C:\경로\handoff.json
+```
+
+실행 주체는 저장소 루트의 `noteditor.cmd`이며, `venv`의 `pythonw.exe`가 있으면 그것으로,
+없으면 `dist\NotEditor\NotEditor.exe`로 앱을 띄웁니다.
+
+`noteditor.cmd`는 **반드시 저장소 루트에 그대로 두세요.** summary.ai가 `shutil.which("noteditor")`
+로 설치 위치를 찾고 **이 파일이 있는 폴더를 NotEditor 루트로 간주**합니다. 다른 폴더로 복사하지
+말고, PATH에는 이 폴더를 넣습니다.
+
+이 파일은 ASCII·CRLF로만 저장합니다. `cmd.exe`는 LF만 있는 배치 파일의 `rem` 줄을 명령으로
+실행하려 들고, OEM 코드페이지에서 한글 주석을 깨뜨립니다(실제로 겪은 함정입니다).
+`.gitattributes`가 체크아웃 때 CRLF를 보장합니다.
 
 ## 데스크톱 개발 실행
 
