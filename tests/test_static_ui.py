@@ -80,6 +80,41 @@ class StaticUiContractTests(unittest.TestCase):
         self.assertIn("넘어가기", self.html)
         self.assertIn(".workspace.review-mode", self.css)
 
+    def test_page_comparison_is_tall_enough_to_read_and_scrolls_with_the_window(self):
+        """좁은 칸에 밀어 넣으면 한 번에 한두 쪽밖에 안 보여 비교가 되지 않았다."""
+        self.assertIn("overflow-y: auto;", self.css)                 # 창 전체가 스크롤된다
+        self.assertIn(".workspace.review-mode { height: auto;", self.css)
+        self.assertIn(".source-review .page-review-rows { min-height: 0; flex: none; "
+                      "overflow: visible;", self.css)
+        self.assertIn(".source-review .review-page { height: clamp(160px", self.css)
+        self.assertIn("position: sticky; top: 0; z-index: 30;", self.css)   # 도구 막대 고정
+        self.assertIn('{ root: null, rootMargin: "500px 0px" }', self.js)
+
+    def test_changed_pages_can_be_jumped_to_directly(self):
+        self.assertIn('id="sourceReviewPrev"', self.html)
+        self.assertIn('id="sourceReviewNext"', self.html)
+        self.assertIn("function jumpToChangedPage(step)", self.js)
+        self.assertIn('row.scrollIntoView({ behavior: "smooth", block: "center" })', self.js)
+        self.assertIn("state.sourceReviewChanged.push(index)", self.js)
+
+    def test_merged_sources_flag_changes_inside_or_beside_the_recorded_range(self):
+        self.assertIn("function recordedImpact(pair, ranges)", self.js)
+        self.assertIn('entry.pages.has(index - 1) || entry.pages.has(index + 1)', self.js)
+        self.assertIn('id="sourceReviewRangeNote"', self.html)
+        self.assertIn(".review-row.range-impact.inside", self.css)
+        app = (Path(__file__).parents[1] / "noteditor" / "app.py").read_text(encoding="utf-8")
+        self.assertIn('"recorded_ranges": recorded', app)
+
+    def test_a_handoff_session_stays_on_merge_and_returns_to_summary_ai(self):
+        self.assertIn("function lockToMergeTool()", self.js)
+        self.assertIn("refs.handwriting.disabled = true", self.js)
+        self.assertIn('refs.save.textContent = "저장하고 summary.ai로 돌아가기"', self.js)
+        self.assertIn("async function returnToSummaryAi(message)", self.js)
+        self.assertIn('callApi("close_window")', self.js)
+        app = (Path(__file__).parents[1] / "noteditor" / "app.py").read_text(encoding="utf-8")
+        self.assertIn("def close_window(self) -> dict:", app)
+        self.assertIn("summary.ai 인계로 열린 창에서만 쓸 수 있습니다.", app)
+
     def test_empty_summary_ai_merge_plan_opens_the_inbox_picker_immediately(self):
         self.assertIn('if (plan.auto_choose) setTimeout(() => { void addPdfs(); }, 0)', self.js)
         app = (Path(__file__).parents[1] / "noteditor" / "app.py").read_text(encoding="utf-8")

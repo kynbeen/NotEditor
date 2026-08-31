@@ -47,8 +47,16 @@
             <strong>실제 사용한 파일과 현재 수집함 파일</strong>
             <small>왼쪽은 파이프라인이 실제 사용한 PDF입니다. 오른쪽에서 같은 쪽·새 쪽·빠진 쪽을 확인하고, 아래 문서 카드에서 갱신 결과에 넣을 쪽과 순서를 고르세요.</small>
           </div>
-          <div class="page-review-tools"><span id="sourceReviewSummary"></span></div>
+          <div class="page-review-tools">
+            <span id="sourceReviewSummary"></span>
+            <div class="review-jump">
+              <button id="sourceReviewPrev" class="mini-button" type="button" disabled>← 이전 다른 쪽</button>
+              <span id="sourceReviewPosition" class="review-jump-position">다른 쪽 없음</span>
+              <button id="sourceReviewNext" class="mini-button" type="button" disabled>다음 다른 쪽 →</button>
+            </div>
+          </div>
         </div>
+        <div id="sourceReviewRangeNote" class="review-range-note" hidden></div>
         <div class="page-review-columns" aria-hidden="true">
           <span>실제 사용한 파일</span>
           <span>현재 수집함 파일</span>

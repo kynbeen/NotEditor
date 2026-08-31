@@ -168,6 +168,7 @@ class ComposerApi:
                 raise PdfComposerError("비교 기준 PDF를 등록하지 못했습니다.")
             candidates = [source for source in sources if source is not reference]
             order: list[dict] = []
+            recorded: list[dict] = []
             for part in plan.parts:
                 source = source_by_path.get(os.path.normcase(str(part.path.resolve())))
                 if source is None:
@@ -180,6 +181,14 @@ class ComposerApi:
                 order.extend(
                     {"document_id": source.id, "page_index": index} for index in indices
                 )
+                # 합쳐서 만든 자료를 검토할 때, 원래 어느 쪽을 골랐었는지 화면이 알아야
+                # "고른 범위 안에서 바뀌었다"를 따로 강조할 수 있다.
+                recorded.append({
+                    "document_id": source.id,
+                    "document_name": source.name,
+                    "pages": part.pages,
+                    "page_indexes": indices,
+                })
             if len({(item["document_id"], item["page_index"]) for item in order}) != len(order):
                 raise PdfComposerError("합치기 계획에 같은 페이지가 두 번 들어 있습니다.")
             if order:
@@ -195,6 +204,7 @@ class ComposerApi:
                 "input_root": str(plan.input_root) if plan.input_root else None,
                 "sources": [source.as_dict() for source in candidates],
                 "order": order,
+                "recorded_ranges": recorded,
                 "auto_choose": plan.mode == "merge" and not candidates,
             }
             if plan.mode == "review":
@@ -713,6 +723,23 @@ class ComposerApi:
                 return self._ok(decision=decision, decision_path=str(decision_path), result=result)
             decision_path = write_decision(plan, decision)
             return self._ok(decision=decision, decision_path=str(decision_path), result=None)
+        except Exception as exc:
+            return self._error(exc)
+
+    def close_window(self) -> dict:
+        """summary.ai 인계를 끝낸 창을 스스로 닫는다.
+
+        결과를 넘기고 나면 이 창이 더 할 일이 없다. 사용자가 직접 닫게 두면 창이 쌓이고,
+        다음 합치기에서 어느 창이 지금 것인지 헷갈린다. **인계로 열린 창에만** 허용한다 —
+        사용자가 그냥 실행한 NotEditor 를 웹 화면이 마음대로 닫으면 안 된다.
+        """
+        try:
+            if self._startup_plan is None:
+                raise PdfComposerError("summary.ai 인계로 열린 창에서만 쓸 수 있습니다.")
+            if self._window is None:
+                raise PdfComposerError("앱 창이 아직 준비되지 않았습니다.")
+            self._window.destroy()
+            return self._ok()
         except Exception as exc:
             return self._error(exc)
 

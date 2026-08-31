@@ -17,10 +17,13 @@
 }
 
 * { box-sizing: border-box; }
-html, body { height: 100%; }
+html, body { min-height: 100%; }
 body {
   margin: 0;
-  overflow: hidden;
+  /* 세로는 창 전체가 스크롤된다 — 쪽 대조처럼 한 화면에 안 들어가는 화면이 있다.
+     가로는 그대로 막는다(패널마다 자기 안에서 가로 스크롤한다). */
+  overflow-x: hidden;
+  overflow-y: auto;
   color: var(--text);
   font-family: "Segoe UI Variable", "Pretendard", "Malgun Gothic", sans-serif;
   background:
@@ -35,6 +38,8 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent-2); 
 .sr-only { position: absolute !important; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
 
 .topbar {
+  /* 화면 전체가 세로로 스크롤되므로 도구 막대는 위에 붙여 둔다. */
+  position: sticky; top: 0; z-index: 30;
   height: 92px;
   display: grid;
   grid-template-columns: minmax(250px, 1fr) auto minmax(250px, 1fr);
@@ -84,7 +89,8 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent-2); 
 .output-name-field > span:not(.sr-only) { padding-right: 10px; color: var(--muted); font-size: 10px; }
 .output-name-field.compact input { width: 132px; }
 .workspace {
-  height: calc(100vh - 92px); min-height: 588px;
+  /* 창이 작아도 패널이 납작해지지 않게 바닥을 두고, 넘치면 화면이 스크롤된다. */
+  height: calc(100vh - 92px); min-height: 780px;
   display: grid; grid-template-columns: minmax(310px, 1.05fr) minmax(430px, 1.48fr) minmax(310px, .95fr);
   gap: 12px; padding: 12px;
 }
@@ -196,7 +202,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent-2); 
 .confirm-dialog p { margin: 10px 0 20px; color: var(--muted); font-size: 11px; line-height: 1.65; }
 .confirm-dialog-actions { display: flex; justify-content: flex-end; gap: 9px; }
 
-.handwriting-workspace { height: calc(100vh - 92px); min-height: 0; overflow: auto; padding: 12px; }
+.handwriting-workspace { min-height: calc(100vh - 92px); overflow: visible; padding: 12px; }
 .handwriting-shell { width: min(980px, 100%); min-height: calc(100vh - 116px); margin: 0 auto; padding: 28px; overflow: hidden; border: 1px solid var(--line); border-radius: 17px; background: var(--panel); box-shadow: inset 0 1px 0 rgba(255,255,255,.025); }
 .handwriting-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; }
 .handwriting-header h2 { margin: 5px 0 7px; font-size: 22px; letter-spacing: -.45px; }
@@ -262,14 +268,30 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent-2); 
 .review-confirm:hover { background: rgba(255,190,92,.16); }
 .review-confirm.done { color: #b7f4dd; border-color: rgba(86,211,165,.35); background: rgba(86,211,165,.08); }
 .review-drag-handle { color: var(--accent-2); font-size: 14px; letter-spacing: -2px; }
-.workspace.review-mode { grid-template-rows: minmax(250px, .9fr) minmax(290px, 1.1fr); }
+/* 쪽 대조는 한 화면에 다 담으려 하지 않는다. 대조 구역은 내용만큼 길어지고 창 전체가
+   스크롤된다 — 좁은 칸에 밀어 넣으면 한 번에 한두 쪽밖에 안 보여 비교가 안 됐다. */
+.workspace.review-mode { height: auto; grid-template-rows: auto minmax(520px, 62vh); }
 .source-review {
   min-width: 0; min-height: 0; grid-column: 1 / -1; margin: 0;
-  display: flex; flex-direction: column; overflow: hidden; background: var(--panel);
+  display: flex; flex-direction: column; overflow: visible; background: var(--panel);
 }
-.source-review .page-review-columns { margin-top: 9px; }
-.source-review .page-review-rows { min-height: 0; flex: 1; overflow-y: auto; padding-right: 4px; }
-.source-review .review-page { height: clamp(92px, 9vw, 118px); }
+.source-review .page-review-columns { margin-top: 9px; position: sticky; top: 96px; z-index: 5; padding: 6px 0; background: var(--panel); }
+.source-review .page-review-rows { min-height: 0; flex: none; overflow: visible; padding-right: 4px; }
+/* 세 쪽이 한 화면에 들어가면서도 읽을 수 있는 높이. 기준은 창의 **세로** 길이다 —
+   가로(vw)로 재면 넓고 낮은 창에서 세 쪽이 화면 밖으로 밀린다. */
+.source-review .review-page { height: clamp(160px, 21vh, 300px); }
+.review-jump { display: flex; align-items: center; gap: 6px; }
+.review-jump-position { min-width: 92px; color: var(--muted); text-align: center; font-weight: 650; }
+.review-range-note { margin-top: 10px; padding: 9px 12px; border-left: 3px solid rgba(255,190,92,.7); border-radius: 3px 10px 10px 3px; color: #ffe4ae; background: rgba(255,190,92,.08); font-size: 10px; line-height: 1.5; }
+.review-range-note[hidden] { display: none; }
+.review-badge.range-badge { color: #ffd9a6; background: rgba(255,150,60,.18); }
+.review-badge.range-badge.adjacent { color: #ffe9c4; background: rgba(255,190,92,.12); }
+.source-review .review-row.range-impact.inside { border-color: rgba(255,132,60,.85); background: rgba(255,132,60,.1); box-shadow: inset 4px 0 0 rgba(255,132,60,.95); }
+.source-review .review-row.range-impact.adjacent { border-color: rgba(255,190,92,.7); box-shadow: inset 4px 0 0 rgba(255,190,92,.8); }
+.source-review .review-row { scroll-margin-top: 150px; }
+.source-review .review-row.focused { outline: 2px solid var(--accent-2); outline-offset: 3px; }
+.tool-tab:disabled, .tool-tab.locked { opacity: .42; cursor: not-allowed; }
+.tool-tab.locked:hover { color: var(--muted); background: transparent; }
 .source-review .review-row.same { border-color: rgba(86,211,165,.27); box-shadow: inset 3px 0 0 rgba(86,211,165,.55); }
 .source-review .review-row.different { border-color: rgba(255,190,92,.48); background: rgba(255,190,92,.055); box-shadow: inset 3px 0 0 rgba(255,190,92,.68); }
 .source-review-actions { display: flex; align-items: center; justify-content: flex-end; gap: 9px; padding-top: 11px; }

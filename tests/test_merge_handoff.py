@@ -160,6 +160,44 @@ class MergeHandoffTests(unittest.TestCase):
         finally:
             api._close()
 
+    def test_a_handoff_window_can_close_itself_but_a_plain_one_cannot(self):
+        """저장한 뒤 summary.ai 로 돌아가려면 이 창이 스스로 닫혀야 한다.
+
+        다만 사용자가 그냥 실행한 NotEditor 까지 웹 화면이 닫을 수 있으면 안 된다.
+        """
+        api = ComposerApi(ComposerSession(), self.write_plan())
+        try:
+            api.startup_plan()
+            window = SimpleNamespace(destroy=Mock())
+            api._bind_window(window)
+            self.assertTrue(api.close_window()["ok"])
+            window.destroy.assert_called_once_with()
+        finally:
+            api._close()
+
+        plain = ComposerApi(ComposerSession())
+        try:
+            plain._bind_window(SimpleNamespace(destroy=Mock()))
+            response = plain.close_window()
+            self.assertFalse(response["ok"])
+            self.assertIn("인계로 열린 창에서만", response["error"])
+        finally:
+            plain._close()
+
+    def test_a_merged_review_plan_reports_the_page_range_it_recorded(self):
+        """합쳐서 만든 자료는 "고른 범위 안팎이 바뀌었나"가 핵심이라 화면이 범위를 알아야 한다."""
+        api = ComposerApi(ComposerSession(), self.write_plan(parts=[
+            {"path": str(self.first.resolve()), "pages": "2"},
+            {"path": str(self.second.resolve()), "pages": "1-2"},
+        ]))
+        try:
+            recorded = api.startup_plan()["plan"]["recorded_ranges"]
+            self.assertEqual([entry["pages"] for entry in recorded], ["2", "1-2"])
+            self.assertEqual([entry["page_indexes"] for entry in recorded], [[1], [0, 1]])
+            self.assertEqual(len({entry["document_id"] for entry in recorded}), 2)
+        finally:
+            api._close()
+
     def test_invalid_startup_plan_does_not_leave_partial_documents(self):
         api = ComposerApi(ComposerSession(), self.write_plan(parts=[
             {"path": str(self.first.resolve()), "pages": "99"},
