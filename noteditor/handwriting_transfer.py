@@ -87,14 +87,24 @@ def transfer_handwriting(
     *,
     match_override=None,
     plan_override=None,
+    outline_entries: list[dict] | None = None,
+    outline_page_basis: str = "target_pdf",
 ) -> dict:
     _inspect, _preview, transfer = _handlers(source)
+    arguments = dict(
+        match_override=match_override,
+        plan_override=plan_override,
+    )
+    if _suffix(source) == ".goodnotes" and outline_entries is not None:
+        arguments.update(
+            outline_entries=outline_entries,
+            outline_page_basis=outline_page_basis,
+        )
     return transfer(
         source,
         target_pdf,
         output,
-        match_override=match_override,
-        plan_override=plan_override,
+        **arguments,
     )
 
 

@@ -153,6 +153,33 @@
           </div>
         </div>
 
+        <section id="goodnotesOutlineOptions" class="goodnotes-outline-options" hidden>
+          <div class="goodnotes-outline-head">
+            <div>
+              <strong>Goodnotes 목차 추가</strong>
+              <small>JSON 파일을 선택하거나 같은 형식의 텍스트를 아래에 붙여넣으세요.</small>
+            </div>
+            <button id="chooseOutlineJsonButton" class="button utility" type="button">목차 JSON 선택</button>
+          </div>
+          <label class="outline-json-editor">
+            <span>목차 JSON 텍스트</span>
+            <textarea id="outlineJsonText" rows="7" spellcheck="false" placeholder='[{"page": 1, "title": "목차 제목"}]'></textarea>
+          </label>
+          <div class="outline-json-actions">
+            <button id="applyOutlineJsonTextButton" class="mini-button" type="button">붙여넣은 내용 확인</button>
+            <button id="clearOutlineJsonButton" class="mini-button" type="button">목차 입력 지우기</button>
+          </div>
+          <div id="outlineJsonStatus" class="outline-json-status">선택된 목차 JSON이 없습니다.</div>
+          <fieldset class="outline-page-basis">
+            <legend>목차 페이지 번호 기준</legend>
+            <div class="outline-page-basis-options">
+              <label><input type="radio" name="outlinePageBasis" value="target_pdf" checked /> 수정 후 PDF 기준</label>
+              <label><input type="radio" name="outlinePageBasis" value="source_goodnotes" /> 기존 Goodnotes 기준</label>
+            </div>
+          </fieldset>
+          <small id="outlineBasisHelp">JSON의 page는 새로 선택한 PDF의 페이지 번호로 해석합니다.</small>
+        </section>
+
         <section id="handwritingReview" class="page-review" hidden>
           <div class="page-review-head">
             <div>
@@ -194,6 +221,7 @@
     <input id="webPdfInput" type="file" accept="application/pdf,.pdf" multiple hidden />
     <input id="webHandwritingInput" type="file" accept=".sdocx,.notewise,.goodnotes,application/zip" hidden />
     <input id="webTargetPdfInput" type="file" accept="application/pdf,.pdf" hidden />
+    <input id="outlineJsonInput" type="file" accept="application/json,.json" hidden />
 
     <div id="busyOverlay" class="busy-overlay" role="status" aria-live="polite" hidden>
       <div class="busy-card"><div class="loader"></div><strong id="busyText">처리 중…</strong></div>

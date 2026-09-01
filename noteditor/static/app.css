@@ -31,9 +31,9 @@ body {
     radial-gradient(circle at 89% 6%, rgba(44, 97, 151, 0.19), transparent 30%),
     var(--bg);
 }
-button, input { font: inherit; }
+button, input, textarea, fieldset, legend { font: inherit; }
 button { color: inherit; white-space: nowrap; }
-button:focus-visible, input:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 2px; }
+button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 2px; }
 [hidden] { display: none !important; }
 .sr-only { position: absolute !important; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
 
@@ -333,4 +333,121 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent-2); 
   .workspace.review-mode .source-panel { grid-column: 1; grid-row: 2; }
   .panel { min-height: 620px; }
   .handwriting-workspace { height: auto; }
+}
+.goodnotes-outline-options {
+  margin-top: 16px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--panel);
+  color: var(--text);
+  font-family: "Segoe UI Variable", "Pretendard", "Malgun Gothic", sans-serif;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.goodnotes-outline-options * {
+  font-family: inherit;
+}
+
+.goodnotes-outline-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.goodnotes-outline-head div {
+  display: grid;
+  gap: 4px;
+}
+
+.goodnotes-outline-head small,
+.goodnotes-outline-options > small,
+.outline-json-status {
+  color: var(--muted);
+}
+
+.outline-json-status {
+  margin-top: 12px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.outline-json-editor {
+  display: grid;
+  gap: 7px;
+  margin-top: 14px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.outline-json-editor textarea {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 132px;
+  resize: vertical;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #0b1122;
+  color: var(--text);
+  caret-color: var(--accent-2);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.55;
+}
+
+.outline-json-editor textarea::placeholder {
+  color: var(--muted-2);
+  opacity: 1;
+}
+
+.outline-json-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.outline-page-basis {
+  display: grid;
+  gap: 8px;
+  min-inline-size: 0;
+  margin: 14px 0 8px;
+  padding: 0;
+  border: 0;
+  font: inherit;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.outline-page-basis legend {
+  padding: 0;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.5;
+}
+
+.outline-page-basis-options {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px 18px;
+}
+
+.outline-page-basis label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  line-height: 1.4;
+}
+
+.goodnotes-outline-options > small {
+  display: block;
+  font-size: 12px;
+  line-height: 1.5;
 }
