@@ -72,6 +72,8 @@ class PagePlan:
     source_count: int
     target_count: int
     slots: tuple[PlanSlot, ...]
+    excluded_sources: tuple[int, ...] = ()
+    excluded_targets: tuple[int, ...] = ()
 
     @classmethod
     def from_match(cls, result: MatchResult, source_count: int, target_count: int) -> "PagePlan":
@@ -108,6 +110,8 @@ class PagePlan:
         }
         values = list(payload)
         slots: list[PlanSlot] = []
+        excluded_sources: list[int] = []
+        excluded_targets: list[int] = []
         target_order: list[int] = []
         for index, value in enumerate(values):
             if not isinstance(value, dict):
@@ -116,6 +120,15 @@ class PagePlan:
             target = _optional_index(value.get("target_index"), "대상", index)
             if source is None and target is None:
                 raise PagePlanError("양쪽이 모두 빈 쪽 대응 행은 저장할 수 없습니다.")
+            excluded = value.get("excluded", False)
+            if not isinstance(excluded, bool):
+                raise PagePlanError(f"{index + 1}번째 행의 제외 상태가 올바르지 않습니다.")
+            if excluded:
+                if source is not None:
+                    excluded_sources.append(source)
+                if target is not None:
+                    excluded_targets.append(target)
+                continue
             confirmed = value.get("confirmed", False)
             if not isinstance(confirmed, bool):
                 raise PagePlanError(f"{index + 1}번째 행의 확인 상태가 올바르지 않습니다.")
@@ -142,15 +155,25 @@ class PagePlan:
                 for slot in slots
             ]
 
-        plan = cls(source_count, target_count, tuple(slots))
+        plan = cls(
+            source_count,
+            target_count,
+            tuple(slots),
+            tuple(excluded_sources),
+            tuple(excluded_targets),
+        )
         plan._validate_complete()
         return plan
 
     def _validate_complete(self) -> None:
         if self.source_count < 0 or self.target_count < 0:
             raise PagePlanError("쪽 수가 올바르지 않습니다.")
+        if not self.slots:
+            raise PagePlanError("결과에는 한 쪽 이상 포함해야 합니다.")
         sources = [slot.source_index for slot in self.slots if slot.source_index is not None]
         targets = [slot.target_index for slot in self.slots if slot.target_index is not None]
+        sources.extend(self.excluded_sources)
+        targets.extend(self.excluded_targets)
         _validate_indices(sources, self.source_count, "원본")
         _validate_indices(targets, self.target_count, "대상")
         if any(slot.source_index is None and slot.target_index is None for slot in self.slots):
@@ -178,6 +201,9 @@ class PagePlan:
             "source_count": self.source_count,
             "target_count": self.target_count,
             "slots": [slot.as_dict() for slot in self.slots],
+            "excluded_sources": list(self.excluded_sources),
+            "excluded_targets": list(self.excluded_targets),
+            "excluded_count": len(self.excluded_sources) + len(self.excluded_targets),
             "unconfirmed_count": len(self.unconfirmed),
         }
 
@@ -252,7 +278,13 @@ class PagePlan:
             for source in range(self.source_count)
             if before_source_target.get(source) != after_source_target.get(source)
         ))
-        plan = PagePlan(self.source_count, self.target_count, tuple(rebuilt))
+        plan = PagePlan(
+            self.source_count,
+            self.target_count,
+            tuple(rebuilt),
+            self.excluded_sources,
+            self.excluded_targets,
+        )
         plan._validate_complete()
         return plan, PlanImpact(changed_targets, changed_sources)
 

@@ -227,6 +227,8 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent-2); 
 .review-row.needs-confirmation { border-color: rgba(255,190,92,.56); background: rgba(255,190,92,.07); box-shadow: inset 3px 0 0 rgba(255,190,92,.72); }
 .review-row.confirmed { border-color: rgba(86,211,165,.23); }
 .review-row.special-row.confirmed { border-color: rgba(169,156,255,.38); background: rgba(128,108,255,.045); box-shadow: inset 3px 0 0 rgba(169,156,255,.5); }
+.review-row.excluded { opacity: .58; border-color: rgba(255,113,139,.38); background: rgba(255,113,139,.045); box-shadow: inset 3px 0 0 rgba(255,113,139,.55); }
+.review-row.excluded .review-page { filter: grayscale(.75); }
 .review-row.drop-before::before, .review-row.drop-after::after { content: ""; position: absolute; z-index: 8; left: 8px; right: 8px; height: 3px; border-radius: 999px; background: var(--accent-2); box-shadow: 0 0 12px rgba(169,156,255,.65); }
 .review-row.drop-before::before { top: -6px; }
 .review-row.drop-after::after { bottom: -6px; }
@@ -251,6 +253,9 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent-2); 
 .review-confirm { flex: 0 0 auto; padding: 5px 8px; border: 1px solid rgba(255,190,92,.42); border-radius: 7px; color: #ffe4ae; background: rgba(255,190,92,.08); font: inherit; font-size: 9px; cursor: pointer; }
 .review-confirm:hover { background: rgba(255,190,92,.16); }
 .review-confirm.done { color: #b7f4dd; border-color: rgba(86,211,165,.35); background: rgba(86,211,165,.08); }
+.review-exclude { flex: 0 0 auto; padding: 5px 8px; border: 1px solid rgba(255,113,139,.38); border-radius: 7px; color: #ffc2cd; background: rgba(255,113,139,.08); font: inherit; font-size: 9px; cursor: pointer; }
+.review-exclude:hover { background: rgba(255,113,139,.16); }
+.review-row.excluded .review-exclude { color: #d9d3ff; border-color: rgba(169,156,255,.38); background: rgba(169,156,255,.1); }
 .review-drag-handle { color: var(--accent-2); font-size: 14px; letter-spacing: -2px; }
 /* 원본 검토는 세 패널을 한 줄에 욱여넣지 않는다. 왼쪽은 큰 실제 페이지 비교, 오른쪽은
    수집함 PDF 쪽 선택만 담당한다. 두 영역은 창 높이를 모두 쓰고 각각 내부에서 스크롤한다. */
