@@ -4,6 +4,8 @@ import inspect
 import tempfile
 import time
 import unittest
+import zipfile
+from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -12,6 +14,7 @@ from urllib.parse import unquote
 from fastapi.testclient import TestClient
 
 from noteditor.page_match import MatchResult, PagePair
+from noteditor.goodnotes_proto import field_values, split_delimited
 from noteditor.web import (
     SESSION_COOKIE,
     HandwritingExportRequest,
@@ -167,13 +170,25 @@ class WebAppTests(unittest.TestCase):
 
         exported = self.client.post(
             "/api/handwriting/export",
-            json={"suggested_name": "moved.goodnotes", "target_mapping": None},
+            json={
+                "suggested_name": "moved.goodnotes",
+                "target_mapping": None,
+                "outline_entries": [{"page": 1, "title": "Web outline"}],
+                "outline_page_basis": "target_pdf",
+            },
         )
         self.assertEqual(exported.status_code, 200, exported.text)
         self.assertTrue(exported.content.startswith(b"PK"))
         self.assertIn(
             ".goodnotes", unquote(exported.headers.get("content-disposition", ""))
         )
+        with zipfile.ZipFile(BytesIO(exported.content)) as archive:
+            records = split_delimited(archive.read("index.events.pb"))
+        outlines = [record for record in records if 65 in field_values(record)]
+        self.assertEqual(len(outlines), 1)
+        payload = bytes(field_values(outlines[0])[65][0])
+        title_wrapper = bytes(field_values(payload)[5][0])
+        self.assertEqual(field_values(title_wrapper)[1][0], b"Web outline")
 
     def test_export_without_a_source_answers_with_an_error_not_a_crash(self):
         """원본을 안 고른 채 저장을 누르면 400과 안내 문구가 나가야 한다."""

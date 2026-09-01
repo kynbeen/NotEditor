@@ -137,6 +137,8 @@ class HandwritingExportRequest(BaseModel):
     target_mapping: list[int | None] | None = None
     page_plan: list[dict] | None = None
     allow_unconfirmed: bool = False
+    outline_entries: list[dict] | None = None
+    outline_page_basis: str = "target_pdf"
 
 
 class ClientErrorRequest(BaseModel):
@@ -420,6 +422,12 @@ async def reset_handwriting(request: Request):
 
 def _export_handwriting(api: ComposerApi, payload: HandwritingExportRequest, output: Path) -> dict:
     inspection = api._inspection()
+    outline_options = {}
+    if payload.outline_entries is not None:
+        outline_options = {
+            "outline_entries": payload.outline_entries,
+            "outline_page_basis": payload.outline_page_basis,
+        }
     if payload.page_plan is not None:
         plan = PagePlan.from_payload(
             inspection.source_page_count,
@@ -436,6 +444,7 @@ def _export_handwriting(api: ComposerApi, payload: HandwritingExportRequest, out
             api._handwriting_target,
             output,
             plan_override=plan,
+            **outline_options,
         )
         if plan.unconfirmed:
             result.setdefault("warnings", []).append(
@@ -454,8 +463,14 @@ def _export_handwriting(api: ComposerApi, payload: HandwritingExportRequest, out
             api._handwriting_target,
             output,
             match_override=match,
+            **outline_options,
         )
-    return transfer_handwriting(api._handwriting_source, api._handwriting_target, output)
+    return transfer_handwriting(
+        api._handwriting_source,
+        api._handwriting_target,
+        output,
+        **outline_options,
+    )
 
 
 @app.post("/api/handwriting/export")

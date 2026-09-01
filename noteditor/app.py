@@ -542,6 +542,8 @@ class ComposerApi:
         suggested_name: str = "필기-이전.sdocx",
         page_plan: list[dict] | list[int | None] | None = None,
         allow_unconfirmed: bool = False,
+        outline_entries: list[dict] | None = None,
+        outline_page_basis: str = "target_pdf",
     ) -> dict:
         try:
             if self._window is None:
@@ -560,6 +562,12 @@ class ComposerApi:
             output = self._dialog_path(selected)
             if output is None:
                 return self._ok(cancelled=True, inspection=inspection.as_dict())
+            outline_options = {}
+            if outline_entries is not None:
+                outline_options = {
+                    "outline_entries": outline_entries,
+                    "outline_page_basis": outline_page_basis,
+                }
             if page_plan is not None and all(isinstance(item, dict) for item in page_plan):
                 plan = PagePlan.from_payload(
                     inspection.source_page_count,
@@ -576,6 +584,7 @@ class ComposerApi:
                     self._handwriting_target,
                     output,
                     plan_override=plan,
+                    **outline_options,
                 )
                 if plan.unconfirmed:
                     result.setdefault("warnings", []).append(
@@ -595,10 +604,14 @@ class ComposerApi:
                     self._handwriting_target,
                     output,
                     match_override=match,
+                    **outline_options,
                 )
             else:
                 result = transfer_handwriting(
-                    self._handwriting_source, self._handwriting_target, output
+                    self._handwriting_source,
+                    self._handwriting_target,
+                    output,
+                    **outline_options,
                 )
             return self._ok(cancelled=False, result=result)
         except Exception as exc:

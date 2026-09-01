@@ -35,6 +35,15 @@ from .goodnotes_archive import (
     safe_members,
 )
 from .goodnotes_ink import count_goodnotes_strokes, render_goodnotes_ink
+from .goodnotes_outline import (
+    PAGE_BASIS_SOURCE,
+    PAGE_BASIS_TARGET,
+    append_outline_events,
+    load_outline,
+    map_outline_to_result,
+    validate_outline,
+    verify_outline_events,
+)
 from .goodnotes_proto import GoodnotesTransferError
 from .page_match import MatchResult
 from .page_plan import PagePlan
@@ -167,6 +176,9 @@ def transfer_goodnotes_handwriting(
     *,
     match_override: MatchResult | None = None,
     plan_override: PagePlan | None = None,
+    outline_path: str | Path | None = None,
+    outline_entries: list[dict] | None = None,
+    outline_page_basis: str = PAGE_BASIS_TARGET,
 ) -> dict:
     source, target = _checked_paths(source_goodnotes, target_pdf)
     output = Path(output_goodnotes).expanduser().resolve()
@@ -187,6 +199,7 @@ def transfer_goodnotes_handwriting(
     )
     os.close(fd)
     temporary = Path(temp_name)
+    mapped_outline = ()
     try:
         with _open_archive(source) as archive:
             members = safe_members(archive)
@@ -231,6 +244,29 @@ def transfer_goodnotes_handwriting(
                 len(attachment),
                 target.stem,
             )
+            if outline_path is not None and outline_entries is not None:
+                raise GoodnotesTransferError(
+                    "Provide outline_path or outline_entries, not both."
+                )
+            if outline_path is not None or outline_entries is not None:
+                input_page_count = (
+                    inspection.source_page_count
+                    if outline_page_basis == PAGE_BASIS_SOURCE
+                    else inspection.page_count
+                )
+                outline = (
+                    load_outline(outline_path, input_page_count)
+                    if outline_path is not None
+                    else validate_outline(outline_entries, input_page_count)
+                )
+                mapped_outline = map_outline_to_result(
+                    outline, list(plan.slots), outline_page_basis
+                )
+                events = append_outline_events(
+                    events,
+                    [entity_id for _page, entity_id, _content_id in slots],
+                    mapped_outline,
+                )
             search_blob = b""
             for identifier, member in document.attachments.items():
                 candidate = f"search/{identifier}"
@@ -264,7 +300,7 @@ def transfer_goodnotes_handwriting(
                     result.writestr(member, payload)
                 result.writestr("thumbnail.jpg", thumbnail)
 
-        _validate_output(temporary, plan, attachment)
+        _validate_output(temporary, plan, attachment, mapped_outline)
         os.replace(temporary, output)
     finally:
         temporary.unlink(missing_ok=True)
@@ -280,11 +316,22 @@ def transfer_goodnotes_handwriting(
     }
 
 
-def _validate_output(path: Path, plan: PagePlan, attachment: bytes) -> None:
+def _validate_output(
+    path: Path,
+    plan: PagePlan,
+    attachment: bytes,
+    outline: tuple | list = (),
+) -> None:
     """저장한 파일을 다시 읽어 쪽 수·순서·배경 참조가 계획과 같은지 확인한다."""
     with _open_archive(path) as archive:
         members = safe_members(archive)
         document = read_document(archive, members)
+        if outline:
+            verify_outline_events(
+                archive.read("index.events.pb"),
+                [page.entity_id for page in document.pages],
+                outline,
+            )
         if len(document.pages) != len(plan.slots):
             raise GoodnotesTransferError("저장된 Goodnotes의 페이지 수가 달라졌습니다.")
         if len(document.attachments) != 1:

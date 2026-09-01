@@ -9,6 +9,8 @@ const state = {
   mergePlan: null,
   sourceReview: null,
   handwritingOutputNameDirty: false,
+  outlineEntries: null,
+  outlineFileName: null,
   active: null,
   thumbnailCache: new Map(),
   thumbnailCacheBytes: 0,
@@ -65,6 +67,14 @@ const refs = {
   reviewReorderContinue: $("#reviewReorderContinue"),
   webPdfInput: $("#webPdfInput"), webHandwritingInput: $("#webHandwritingInput"),
   webTargetPdfInput: $("#webTargetPdfInput"),
+  outlineJsonInput: $("#outlineJsonInput"),
+  goodnotesOutlineOptions: $("#goodnotesOutlineOptions"),
+  chooseOutlineJson: $("#chooseOutlineJsonButton"),
+  outlineJsonText: $("#outlineJsonText"),
+  applyOutlineJsonText: $("#applyOutlineJsonTextButton"),
+  clearOutlineJson: $("#clearOutlineJsonButton"),
+  outlineJsonStatus: $("#outlineJsonStatus"),
+  outlineBasisHelp: $("#outlineBasisHelp"),
   sourceReview: $("#sourceReview"), sourceReviewRows: $("#sourceReviewRows"),
   sourceReviewSummary: $("#sourceReviewSummary"),
   sourceReviewMessage: $("#sourceReviewMessage"),
@@ -211,8 +221,9 @@ const webApi = {
   handwriting_preview: (pageIndex, sourceIndex) => fetchJson(`/api/handwriting/preview?page_index=${pageIndex}&source_index=${sourceIndex}`),
   reset_handwriting_transfer: () => fetchJson("/api/handwriting/reset", { method: "POST" }),
   reset_documents: () => fetchJson("/api/documents/reset", { method: "POST" }),
-  save_handwriting_transfer: (suggestedName, pagePlan, allowUnconfirmed = false) => downloadWebResult("/api/handwriting/export", {
+  save_handwriting_transfer: (suggestedName, pagePlan, allowUnconfirmed = false, outlineEntries = null, outlinePageBasis = "target_pdf") => downloadWebResult("/api/handwriting/export", {
     suggested_name: suggestedName, page_plan: pagePlan, allow_unconfirmed: allowUnconfirmed,
+    outline_entries: outlineEntries, outline_page_basis: outlinePageBasis,
   }),
 };
 
@@ -580,6 +591,11 @@ function showTool(tool) {
 
 function renderHandwritingStatus(error = "") {
   const status = state.handwriting;
+  const isGoodnotes = status.source_format === "goodnotes";
+  refs.goodnotesOutlineOptions.hidden = !isGoodnotes;
+  refs.outlineJsonStatus.textContent = state.outlineEntries
+    ? `${state.outlineFileName} · ${state.outlineEntries.length}개 항목`
+    : "선택된 목차 JSON이 없습니다.";
   const analysis = status.analysis || {};
   refs.handwritingSourceName.textContent = status.source_name || ".sdocx · .notewise · .goodnotes 파일 선택";
   refs.handwritingTargetName.textContent = status.target_name || ".pdf 파일 선택";
@@ -999,6 +1015,12 @@ function applyHandwritingResponse(response) {
       error: null,
     },
   };
+  if (selectionChanged && state.handwriting.source_format !== "goodnotes") {
+    state.outlineEntries = null;
+    state.outlineFileName = null;
+    refs.outlineJsonInput.value = "";
+    refs.outlineJsonText.value = "";
+  }
   if (selectionChanged) updateHandwritingOutputName(!state.handwritingOutputNameDirty);
   else updateHandwritingOutputName(false);
   renderHandwritingStatus();
@@ -1050,11 +1072,71 @@ async function resetHandwritingTransfer() {
   try {
     const response = await callApi("reset_handwriting_transfer");
     state.handwritingOutputNameDirty = false;
+    state.outlineEntries = null;
+    state.outlineFileName = null;
+    refs.outlineJsonInput.value = "";
+    refs.outlineJsonText.value = "";
     if (!applyHandwritingResponse(response)) toast(response.error, "error");
   } catch (error) {
     toast(error.message, "error");
     reportClientError(error);
   }
+}
+
+async function loadOutlineJson() {
+  const file = refs.outlineJsonInput.files?.[0];
+  if (!file) return;
+  try {
+    refs.outlineJsonText.value = await file.text();
+    state.outlineFileName = file.name;
+    applyOutlineJsonText(false);
+  } catch (error) {
+    state.outlineEntries = null;
+    state.outlineFileName = null;
+    refs.outlineJsonInput.value = "";
+    renderHandwritingStatus();
+    toast(`목차 JSON을 읽을 수 없습니다: ${error.message}`, "error");
+  }
+}
+
+function applyOutlineJsonText(showSuccess = true) {
+  const text = refs.outlineJsonText.value.trim();
+  if (!text) {
+    state.outlineEntries = null;
+    state.outlineFileName = null;
+    refs.outlineJsonInput.value = "";
+    renderHandwritingStatus();
+    return null;
+  }
+  const value = JSON.parse(text);
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new Error("목차 JSON은 하나 이상의 항목이 있는 배열이어야 합니다.");
+  }
+  state.outlineEntries = value;
+  if (!state.outlineFileName || state.outlineFileName === "붙여넣은 JSON · 확인 필요") {
+    state.outlineFileName = "붙여넣은 JSON";
+  }
+  renderHandwritingStatus();
+  if (showSuccess) toast(`목차 ${value.length}개 항목을 확인했습니다.`, "success");
+  return value;
+}
+
+function clearOutlineJson() {
+  refs.outlineJsonText.value = "";
+  state.outlineEntries = null;
+  state.outlineFileName = null;
+  refs.outlineJsonInput.value = "";
+  renderHandwritingStatus();
+}
+
+function outlinePageBasis() {
+  return document.querySelector('input[name="outlinePageBasis"]:checked')?.value || "target_pdf";
+}
+
+function updateOutlineBasisHelp() {
+  refs.outlineBasisHelp.textContent = outlinePageBasis() === "source_goodnotes"
+    ? "JSON의 page는 기존 Goodnotes 문서의 페이지 번호로 해석합니다."
+    : "JSON의 page는 새로 선택한 PDF의 페이지 번호로 해석합니다.";
 }
 
 async function resetDocuments() {
@@ -1096,12 +1178,15 @@ async function saveHandwritingTransfer() {
   if (unconfirmed && !window.confirm(
     `확인하지 않은 쪽 대응이 ${unconfirmed}개 남아 있습니다 (${unconfirmedPages}). 그대로 필기를 옮길까요?`,
   )) return;
-  setBusy(true, "필기와 형광펜을 새 PDF로 옮기는 중…");
   try {
+    if (state.handwriting.source_format === "goodnotes") applyOutlineJsonText(false);
+    setBusy(true, "필기와 형광펜을 새 PDF로 옮기는 중…");
     const response = await callApi("save_handwriting_transfer",
       `${requestedName}${outputExtension}`,
       state.handwriting.plan,
       unconfirmed > 0,
+      state.outlineEntries,
+      outlinePageBasis(),
     );
     if (!response.ok) throw new Error(response.error);
     if (response.cancelled) return;
@@ -1583,6 +1668,22 @@ refs.reviewInkToggle.addEventListener("change", () => {
 });
 refs.chooseHandwritingSource.addEventListener("click", () => chooseHandwriting("source"));
 refs.chooseHandwritingTarget.addEventListener("click", () => chooseHandwriting("target"));
+refs.chooseOutlineJson.addEventListener("click", () => refs.outlineJsonInput.click());
+refs.outlineJsonInput.addEventListener("change", loadOutlineJson);
+refs.applyOutlineJsonText.addEventListener("click", () => {
+  try { applyOutlineJsonText(); }
+  catch (error) { toast(`목차 JSON을 읽을 수 없습니다: ${error.message}`, "error"); }
+});
+refs.clearOutlineJson.addEventListener("click", clearOutlineJson);
+refs.outlineJsonText.addEventListener("input", () => {
+  state.outlineEntries = null;
+  state.outlineFileName = refs.outlineJsonText.value.trim() ? "붙여넣은 JSON · 확인 필요" : null;
+  refs.outlineJsonInput.value = "";
+  renderHandwritingStatus();
+});
+document.querySelectorAll('input[name="outlinePageBasis"]').forEach((input) => {
+  input.addEventListener("change", updateOutlineBasisHelp);
+});
 refs.retryHandwriting.addEventListener("click", retryHandwritingAnalysis);
 refs.resetHandwriting.addEventListener("click", resetHandwritingTransfer);
 refs.resetDocuments.addEventListener("click", resetDocuments);

@@ -271,6 +271,21 @@ class StaticUiContractTests(unittest.TestCase):
         """어느 버전이 되는지는 화면에서 바로 보여야 한다. 6에서만 확인했다."""
         self.assertIn("GOODNOTES 6", self.html)
 
+    def test_goodnotes_outline_ui_supports_json_and_both_page_bases(self):
+        self.assertIn('id="goodnotesOutlineOptions"', self.html)
+        self.assertIn('id="outlineJsonInput"', self.html)
+        self.assertIn('id="outlineJsonText"', self.html)
+        self.assertIn('id="applyOutlineJsonTextButton"', self.html)
+        self.assertIn("applyOutlineJsonText(false)", self.js)
+        self.assertIn('state.outlineFileName = "붙여넣은 JSON"', self.js)
+        self.assertIn("button, input, textarea, fieldset, legend", self.css)
+        self.assertIn("background: #0b1122", self.css)
+        self.assertIn('value="target_pdf" checked', self.html)
+        self.assertIn('value="source_goodnotes"', self.html)
+        self.assertIn('status.source_format === "goodnotes"', self.js)
+        self.assertIn("outline_entries: outlineEntries", self.js)
+        self.assertIn("outline_page_basis: outlinePageBasis", self.js)
+
     def test_saved_handwriting_name_follows_the_source_format(self):
         """확장자를 파일명에서 추측하지 않고 서버가 알려준 형식으로 정한다."""
         self.assertIn("source_format: response.source_format", self.js)
