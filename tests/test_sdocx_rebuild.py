@@ -11,7 +11,7 @@ import pymupdf
 from noteditor.page_match import MatchResult, PagePair
 from noteditor.sdocx_note import PageOrder, PageOrderEntry, read_note, read_page_order
 from noteditor.sdocx_page import is_blank_page, page_hash, read_page
-from noteditor.sdocx_rebuild import rebuild_handwriting
+from noteditor.sdocx_rebuild import SdocxRebuildError, rebuild_handwriting
 from noteditor.sdocx_transfer import parse_media_info
 from tests.test_sdocx_note import make_note
 from tests.test_sdocx_ink import make_stroke_layers
@@ -152,6 +152,50 @@ class RebuildHandwritingTests(unittest.TestCase):
             self.assertEqual(document.page_count, 4)
             labels = [document[index].get_text().strip() for index in range(document.page_count)]
             self.assertEqual(labels, ["A", "KEEP", "NEW", "C"])
+
+    def test_rebuild_rejects_a_missing_page_that_the_user_did_not_exclude(self):
+        """빠진 쪽과 빼기로 한 쪽은 다르다 — 선언하지 않은 누락은 여전히 거절한다."""
+        match = MatchResult(
+            pairs=(
+                PagePair(0, 0, 0.0, 1.0),
+                PagePair(2, None),
+                PagePair(None, 1),
+                PagePair(3, 2, 0.0, 1.0),
+            )
+        )
+        output = self.root / "rejected.sdocx"
+        with self.assertRaisesRegex(SdocxRebuildError, "원본 PDF의 모든 쪽"):
+            rebuild_handwriting(self.source_sdocx, self.target_pdf, output, match)
+        self.assertFalse(output.exists())
+
+    def test_rebuild_accepts_a_page_the_user_excluded_on_purpose(self):
+        """사용자가 뺀 쪽은 결과에서 빠지고 나머지 쪽은 그대로 남는다."""
+        match = MatchResult(
+            pairs=(
+                PagePair(0, 0, 0.0, 1.0),
+                PagePair(2, None),
+                PagePair(None, 1),
+                PagePair(3, 2, 0.0, 1.0),
+            )
+        )
+        output = self.root / "excluded.sdocx"
+        result = rebuild_handwriting(
+            self.source_sdocx,
+            self.target_pdf,
+            output,
+            match,
+            uuid_factory=lambda: NEW_UUID,
+            hash_factory=lambda size: b"N" * size,
+            excluded_sources=(1,),
+        )
+
+        with ZipFile(output) as archive:
+            embedded = archive.read("media/0@source.pdf")
+            order = read_page_order(archive.read("pageIdInfo.dat"))
+        self.assertNotIn(UUIDS[1], [entry.uuid for entry in order.entries])
+        with pymupdf.open(stream=embedded, filetype="pdf") as document:
+            labels = [document[index].get_text().strip() for index in range(document.page_count)]
+        self.assertEqual(labels, ["A", "KEEP", "NEW", "C"])
 
     def test_rebuild_accepts_confirmed_target_reorder_and_preserves_source_only_ink(self):
         match = MatchResult(
