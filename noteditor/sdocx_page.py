@@ -55,6 +55,9 @@ class PdfReference:
     page_index: int
     entry_offset: int          # pdfDataList 첫 레코드의 파일 내 위치
     entry_count: int
+    rect: tuple[float, float, float, float]
+    rect_offset: int
+    rect_kind: str
 
 
 @dataclass(frozen=True)
@@ -69,6 +72,7 @@ class PageInfo:
     property_offset: int
     property_end: int
     pdf: PdfReference | None
+    background_width_offset: int | None
     page_hash: bytes
 
     @property
@@ -86,13 +90,16 @@ def _skip_utf16(blob: bytes, position: int) -> int:
     return position + 2 + chars * 2
 
 
-def _walk_properties(blob: bytes, mask: int, start: int) -> tuple[int, PdfReference | None]:
+def _walk_properties(
+    blob: bytes, mask: int, start: int, format_version: int
+) -> tuple[int, PdfReference | None, int | None]:
     """속성 블록을 순서대로 훑어 끝 위치와 PDF 참조를 돌려준다."""
     unknown = mask & ~_KNOWN_MASK
     _require(not unknown, f"모르는 페이지 속성 비트가 있습니다: 0x{unknown:08x}")
 
     position = start
     reference: PdfReference | None = None
+    background_width_offset: int | None = None
     if mask & _MASK_DRAWN_RECT:
         position += 32                       # float64 4개
     if mask & _MASK_TAG_LIST:
@@ -105,13 +112,28 @@ def _walk_properties(blob: bytes, mask: int, start: int) -> tuple[int, PdfRefere
     for bit in (_MASK_BG_IMAGE_ID, _MASK_BG_IMAGE_MODE, _MASK_BG_COLOR,
                 _MASK_BG_WIDTH, _MASK_BG_ROTATION):
         if mask & bit:
+            if bit == _MASK_BG_WIDTH:
+                background_width_offset = position
             position += 4
     if mask & _MASK_PDF_DATA_LIST:
         count = struct.unpack_from("<H", blob, position)[0]
         entry_offset = position + 2
         _require(count >= 1, "PDF 배경 목록이 비어 있습니다.")
         file_id, page_index = struct.unpack_from("<ii", blob, entry_offset)
-        reference = PdfReference(file_id, page_index, entry_offset, count)
+        rect_offset = entry_offset + 8
+        rect_kind = "float" if 0 < format_version < 2034 else "int"
+        rect = struct.unpack_from(
+            "<4f" if rect_kind == "float" else "<4i", blob, rect_offset
+        )
+        reference = PdfReference(
+            file_id,
+            page_index,
+            entry_offset,
+            count,
+            tuple(float(value) for value in rect),
+            rect_offset,
+            rect_kind,
+        )
         position = entry_offset + count * 24
     if mask & _MASK_TEMPLATE_TYPE:
         position += 4
@@ -123,7 +145,7 @@ def _walk_properties(blob: bytes, mask: int, start: int) -> tuple[int, PdfRefere
     if mask & _MASK_RESERVED_1000:
         position += 4
     _require(position <= len(blob), "페이지 속성 블록이 파일 끝을 넘어갑니다.")
-    return position, reference
+    return position, reference, background_width_offset
 
 
 def read_page(blob: bytes) -> PageInfo:
@@ -146,7 +168,9 @@ def read_page(blob: bytes) -> PageInfo:
         property_offset >= position + 8,
         "페이지 속성 블록 위치가 메타데이터와 겹칩니다.",
     )
-    property_end, reference = _walk_properties(blob, mask, property_offset)
+    property_end, reference, background_width_offset = _walk_properties(
+        blob, mask, property_offset, format_version
+    )
     # 속성 블록의 끝이 레이어 구간의 시작과 정확히 맞아야 해석이 옳다.
     _require(
         property_end == layer_offset,
@@ -163,6 +187,7 @@ def read_page(blob: bytes) -> PageInfo:
         property_offset=property_offset,
         property_end=property_end,
         pdf=reference,
+        background_width_offset=background_width_offset,
         page_hash=blob[-(_HASH_SIZE + len(PAGE_FOOTER)):-len(PAGE_FOOTER)],
     )
 
@@ -201,6 +226,7 @@ def patch_page(
     pdf_page_index: int | None = None,
     uuid: str | None = None,
     canvas: tuple[int, int] | None = None,
+    pdf_rect: tuple[float, float, float, float] | None = None,
     new_page_hash: bytes | None = None,
 ) -> bytes:
     """고정 크기 필드만 제자리에서 바꾼다. 파일 길이는 절대 변하지 않는다."""
@@ -221,6 +247,17 @@ def patch_page(
 
     if canvas is not None:
         struct.pack_into("<II", patched, _CANVAS_OFFSET, int(canvas[0]), int(canvas[1]))
+        if info.background_width_offset is not None:
+            struct.pack_into("<I", patched, info.background_width_offset, int(canvas[0]))
+
+    if pdf_rect is not None:
+        _require(info.pdf is not None, "이 페이지에는 PDF 배경이 없습니다.")
+        if info.pdf.rect_kind == "float":
+            struct.pack_into("<4f", patched, info.pdf.rect_offset, *map(float, pdf_rect))
+        else:
+            struct.pack_into("<4i", patched, info.pdf.rect_offset, *(
+                int(round(value)) for value in pdf_rect
+            ))
 
     if new_page_hash is not None:
         _require(len(new_page_hash) == _HASH_SIZE, "페이지 해시는 32바이트여야 합니다.")

@@ -261,6 +261,52 @@ class GoodnotesTransferTest(unittest.TestCase):
             self.assertAlmostEqual(page.canvas[0], CANVAS[0], places=3)
             self.assertAlmostEqual(page.canvas[1], CANVAS[1], places=3)
 
+    def test_different_aspect_ratio_keeps_target_pdf_and_moves_editable_ink(self) -> None:
+        with zipfile.ZipFile(FIXTURE) as archive:
+            source_document = read_document(archive, safe_members(archive))
+            source_pdf = background_pdf(archive, source_document)
+            source_notes = archive.read(source_document.pages[0].notes_member)
+        original_strokes = read_goodnotes_strokes(source_notes)
+
+        with pymupdf.open(stream=source_pdf, filetype="pdf") as origin, pymupdf.open() as target:
+            source_rect = origin[0].rect
+            page = target.new_page(width=source_rect.width, height=source_rect.height + 120)
+            page.show_pdf_page(
+                pymupdf.Rect(0, 60, source_rect.width, source_rect.height + 60),
+                origin,
+                0,
+            )
+            target.save(self.target)
+
+        plan = PagePlan(
+            source_count=1,
+            target_count=1,
+            slots=(PlanSlot(0, 0, confirmed=True, manual=True),),
+        )
+        transfer_goodnotes_handwriting(
+            FIXTURE, self.target, self.output, plan_override=plan
+        )
+
+        with zipfile.ZipFile(self.output) as archive:
+            document = read_document(archive, safe_members(archive))
+            page = document.pages[0]
+            attachment_member = document.attachments[page.attachment_id]
+            notes = archive.read(page.notes_member)
+            self.assertEqual(archive.read(attachment_member), self.target.read_bytes())
+        moved_strokes = read_goodnotes_strokes(notes)
+        self.assertEqual(len(moved_strokes), len(original_strokes))
+        self.assertAlmostEqual(
+            page.canvas[0] / page.canvas[1],
+            PAGE_WIDTH / (PAGE_HEIGHT + 120),
+            places=3,
+        )
+        self.assertAlmostEqual(
+            moved_strokes[0].points[0][0], original_strokes[0].points[0][0], delta=1.0
+        )
+        self.assertGreater(
+            moved_strokes[0].points[0][1], original_strokes[0].points[0][1] + 50
+        )
+
     def test_writes_the_members_the_app_writes(self) -> None:
         """앱이 쓰는 항목을 빠뜨리면 가져오기가 통째로 거절된다."""
         _make_pdf(self.target, "Slide", pages=1)

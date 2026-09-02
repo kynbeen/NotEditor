@@ -1,16 +1,22 @@
 from __future__ import annotations
 
 import inspect
+import io
 import tempfile
 import time
 import unittest
+import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 from urllib.parse import unquote
 
+import pymupdf
 from fastapi.testclient import TestClient
 
+from noteditor.goodnotes_archive import background_pdf, read_document, safe_members
+from noteditor.notewise_ink import read_notewise_strokes
+from noteditor.notewise_transfer import _page_ids
 from noteditor.page_match import MatchResult, PagePair
 from noteditor.web import (
     SESSION_COOKIE,
@@ -133,6 +139,52 @@ class WebAppTests(unittest.TestCase):
         self.assertEqual(exported.status_code, 200, exported.text)
         self.assertTrue(exported.content.startswith(b"PK"))
 
+    def test_sdocx_ratio_change_downloads_target_sized_output(self):
+        from noteditor.sdocx_note import read_page_order
+        from noteditor.sdocx_page import read_page
+        from tests.test_sdocx_ink import make_stroke_layers
+        from tests.test_sdocx_rebuild import UUIDS, make_rebuild_source
+
+        source_pdf = self.root / "sdocx-source.pdf"
+        target_pdf = self.root / "sdocx-tall.pdf"
+        source_sdocx = self.root / "ratio.sdocx"
+        make_pdf(source_pdf, ["A", "B", "C", "D"], width=960, height=540)
+        make_rebuild_source(
+            source_sdocx, source_pdf, annotated_layers=make_stroke_layers()
+        )
+        with pymupdf.open(source_pdf) as origin, pymupdf.open() as target:
+            for index in range(origin.page_count):
+                page = target.new_page(width=960, height=720)
+                page.show_pdf_page(pymupdf.Rect(0, 90, 960, 630), origin, index)
+            target.save(target_pdf)
+
+        self.client.post(
+            "/api/handwriting/source",
+            files={"file": (source_sdocx.name, source_sdocx.read_bytes(), "application/zip")},
+        )
+        self.client.post(
+            "/api/handwriting/target",
+            files={"file": (target_pdf.name, target_pdf.read_bytes(), "application/pdf")},
+        )
+        status = self.wait_for_handwriting_analysis()
+        self.assertTrue(status["ready"], status)
+        exported = self.client.post(
+            "/api/handwriting/export",
+            json={"suggested_name": "ratio.sdocx"},
+        )
+        self.assertEqual(exported.status_code, 200, exported.text)
+        with zipfile.ZipFile(io.BytesIO(exported.content)) as archive:
+            embedded_name = next(
+                name for name in archive.namelist() if name.startswith("media/") and name.endswith(".pdf")
+            )
+            self.assertEqual(archive.read(embedded_name), target_pdf.read_bytes())
+            order = read_page_order(archive.read("pageIdInfo.dat"))
+            page = read_page(archive.read(f"{UUIDS[2]}.page"))
+        self.assertEqual(len(order.entries), 5)
+        self.assertAlmostEqual(
+            page.canvas_width / page.canvas_height, 960 / 720, delta=0.002
+        )
+
     def test_upload_preview_and_export_goodnotes(self):
         """Goodnotes도 같은 업로드·미리보기·저장 흐름을 그대로 탄다."""
         from tests.test_goodnotes_transfer import FIXTURE, _make_pdf as make_goodnotes_pdf
@@ -174,6 +226,51 @@ class WebAppTests(unittest.TestCase):
         self.assertIn(
             ".goodnotes", unquote(exported.headers.get("content-disposition", ""))
         )
+
+    def test_goodnotes_ratio_change_downloads_target_sized_output(self):
+        from tests.test_goodnotes_transfer import FIXTURE
+
+        target_pdf = self.root / "goodnotes-tall.pdf"
+        with zipfile.ZipFile(FIXTURE) as archive:
+            source_document = read_document(archive, safe_members(archive))
+            source_pdf = background_pdf(archive, source_document)
+        with pymupdf.open(stream=source_pdf, filetype="pdf") as origin, pymupdf.open() as target:
+            rect = origin[0].rect
+            page = target.new_page(width=rect.width, height=rect.height + 120)
+            page.show_pdf_page(
+                pymupdf.Rect(0, 60, rect.width, rect.height + 60), origin, 0
+            )
+            target.save(target_pdf)
+
+        self.client.post(
+            "/api/handwriting/source",
+            files={"file": (FIXTURE.name, FIXTURE.read_bytes(), "application/zip")},
+        )
+        self.client.post(
+            "/api/handwriting/target",
+            files={"file": (target_pdf.name, target_pdf.read_bytes(), "application/pdf")},
+        )
+        status = self.wait_for_handwriting_analysis()
+        self.assertTrue(status["ready"], status)
+        exported = self.client.post(
+            "/api/handwriting/export",
+            json={
+                "suggested_name": "ratio.goodnotes",
+                "page_plan": [{
+                    "source_index": 0,
+                    "target_index": 0,
+                    "confirmed": True,
+                    "manual": True,
+                }],
+            },
+        )
+        self.assertEqual(exported.status_code, 200, exported.text)
+        with zipfile.ZipFile(io.BytesIO(exported.content)) as archive:
+            result = read_document(archive, safe_members(archive))
+            page = result.pages[0]
+            attachment = archive.read(result.attachments[page.attachment_id])
+        self.assertEqual(attachment, target_pdf.read_bytes())
+        self.assertAlmostEqual(page.canvas[0] / page.canvas[1], rect.width / (rect.height + 120), places=3)
 
     def test_export_without_a_source_answers_with_an_error_not_a_crash(self):
         """원본을 안 고른 채 저장을 누르면 400과 안내 문구가 나가야 한다."""
@@ -330,6 +427,40 @@ class WebAppTests(unittest.TestCase):
         self.assertEqual(exported.status_code, 200, exported.text)
         self.assertIn("moved.notewise", exported.headers["content-disposition"])
         self.assertTrue(exported.content.startswith(b"PK"))
+
+    def test_notewise_ratio_change_downloads_target_sized_output(self):
+        source_pdf = self.root / "notewise-source.pdf"
+        target_pdf = self.root / "notewise-tall.pdf"
+        source_notewise = self.root / "ratio.notewise"
+        make_notewise_pdf(source_pdf, "same text")
+        _make_notewise(source_notewise, source_pdf)
+        with pymupdf.open(source_pdf) as origin, pymupdf.open() as target:
+            page = target.new_page(width=360, height=480)
+            page.show_pdf_page(pymupdf.Rect(30, 20, 300, 380), origin, 0)
+            target.save(target_pdf)
+
+        self.client.post(
+            "/api/handwriting/source",
+            files={"file": (source_notewise.name, source_notewise.read_bytes(), "application/zip")},
+        )
+        self.client.post(
+            "/api/handwriting/target",
+            files={"file": (target_pdf.name, target_pdf.read_bytes(), "application/pdf")},
+        )
+        status = self.wait_for_handwriting_analysis()
+        self.assertTrue(status["ready"], status)
+        exported = self.client.post(
+            "/api/handwriting/export",
+            json={"suggested_name": "ratio.notewise"},
+        )
+        self.assertEqual(exported.status_code, 200, exported.text)
+        with zipfile.ZipFile(io.BytesIO(exported.content)) as archive:
+            pdf_name = next(name for name in archive.namelist() if name.startswith("pdf/"))
+            background = archive.read(pdf_name)
+            page_id = _page_ids(archive.read("note"))[0]
+            _strokes, canvas = read_notewise_strokes(archive.read(f"page/{page_id}"))
+        self.assertEqual(background, target_pdf.read_bytes())
+        self.assertEqual(canvas, (360.0, 480.0))
 
 
 class WorkspaceIsolationTests(unittest.TestCase):

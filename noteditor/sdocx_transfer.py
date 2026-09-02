@@ -26,6 +26,7 @@ from zipfile import BadZipFile, ZipFile, ZipInfo
 from PIL import Image
 
 from .alignment import Alignment, build_aligned_pdf, render_comparison
+from .ink_transform import canvas_transform
 from .page_match import MatchResult
 from .page_plan import PagePlan
 from .sdocx_ink import render_ink_png
@@ -34,6 +35,7 @@ from .sdocx_page import read_page
 from .transfer_plan import (
     HandwritingTransferError,
     TransferInspection,
+    alignment_for_pairs,
     geometry as _geometry,
     geometry_mismatches,
     open_pdf,
@@ -502,8 +504,7 @@ def preview_transfer(
 ) -> tuple[bytes, bytes, bytes, int]:
     """한 쪽의 원본·새 배경과 필기 PNG를 같은 크기로 렌더링한다.
 
-    필기는 원본 ``.page``에서 읽기만 하고 투명 PNG로 그린다. 저장할 때는 여전히
-    원본 바이너리를 그대로 보존하므로 미리보기 디코더가 필기 데이터에 영향을 주지 않는다.
+    필기는 원본 ``.page``에서 읽어 대상 PDF 캔버스 좌표로 옮긴 뒤 투명 PNG로 그린다.
     """
     source = Path(source_sdocx).expanduser().resolve()
     target = Path(target_pdf).expanduser().resolve()
@@ -560,6 +561,27 @@ def preview_transfer(
         raise
     try:
         with source_document, target_document:
+            preview_alignment = inspection.alignment
+            if source_index_override >= 0 and source_index is not None:
+                if not 0 <= source_index < source_document.page_count:
+                    raise SdocxTransferError(
+                        f"원본 문서에 없는 쪽 번호입니다: {source_index + 1}"
+                    )
+                preview_alignment = alignment_for_pairs(
+                    source_document,
+                    target_document,
+                    [(source_index, page_index)],
+                    error=SdocxTransferError,
+                )
+            preview_transform = None
+            if source_index is not None and page_blob is not None:
+                page_info = read_page(page_blob)
+                preview_transform = canvas_transform(
+                    source_document[source_index],
+                    target_document[page_index],
+                    (page_info.canvas_width, page_info.canvas_height),
+                    preview_alignment,
+                )
             if inspection.mode == "rebuild" or source_index != page_index:
                 if source_index is None:
                     page = target_document[page_index]
@@ -579,7 +601,7 @@ def preview_transfer(
                     before, after = render_comparison(
                         source_document,
                         target_document,
-                        inspection.alignment,
+                        preview_alignment,
                         source_index,
                         max_side,
                         target_page_index=page_index,
@@ -590,11 +612,13 @@ def preview_transfer(
                         f"원본 문서에 없는 쪽 번호입니다: {source_index + 1}"
                     )
                 before, after = render_comparison(
-                    source_document, target_document, inspection.alignment, page_index, max_side
+                    source_document, target_document, preview_alignment, page_index, max_side
                 )
             with Image.open(BytesIO(after)) as preview_image:
                 width, height = preview_image.size
-            ink, stroke_count = render_ink_png(page_blob, width, height)
+            ink, stroke_count = render_ink_png(
+                page_blob, width, height, preview_transform
+            )
             return before, after, ink, stroke_count
     except SdocxTransferError:
         raise
@@ -620,7 +644,7 @@ def transfer_handwriting(
         raise SdocxTransferError("원본 파일을 덮어쓸 수 없습니다. 새 파일명으로 저장하세요.")
     output.parent.mkdir(parents=True, exist_ok=True)
 
-    if inspection.mode == "rebuild" or match_override is not None or plan_override is not None:
+    if inspection.mode in {"aligned", "rebuild"} or match_override is not None or plan_override is not None:
         selected_match = (
             plan_override.to_match_result() if plan_override is not None
             else match_override or inspection.match
@@ -629,7 +653,9 @@ def transfer_handwriting(
             raise SdocxTransferError("쪽 재조립에 필요한 매칭 결과가 없습니다.")
         from .sdocx_rebuild import rebuild_handwriting
 
-        return rebuild_handwriting(source, target, output, selected_match)
+        return rebuild_handwriting(
+            source, target, output, selected_match, mode=inspection.mode
+        )
 
     archive, members, media_info_name, media_info, pdf_entry, embedded_name = _archive_context(source)
     try:
@@ -637,12 +663,7 @@ def transfer_handwriting(
     finally:
         archive.close()
 
-    if inspection.mode == "aligned" and inspection.alignment is not None:
-        target_bytes = _aligned_pdf_bytes(
-            embedded_pdf, target, inspection.alignment, output.parent
-        )
-    else:
-        target_bytes = target.read_bytes()
+    target_bytes = target.read_bytes()
     target_hash = hashlib.sha256(target_bytes).hexdigest()
     patched_media_info = bytearray(media_info)
     patched_media_info[pdf_entry.hash_offset:pdf_entry.hash_offset + 64] = target_hash.encode("ascii")

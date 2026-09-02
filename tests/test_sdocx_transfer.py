@@ -155,24 +155,8 @@ class SdocxTransferTests(unittest.TestCase):
         self.assertEqual(inspection.mode, "aligned")
         self.assertAlmostEqual(inspection.alignment.scale, 1 / 0.9, delta=0.02)
 
-        output = self.root / "aligned.sdocx"
-        result = transfer_handwriting(self.source_sdocx, variant, output)
-        self.assertEqual(result["mode"], "aligned")
-
-        with ZipFile(output) as archive:
-            embedded = archive.read("media/0@source.pdf")
-            entries = parse_media_info(archive.read("media/mediaInfo.dat"))
-        # 사용자의 PDF가 아니라 원본 좌표계로 다시 앉힌 PDF가 들어가고, 해시도 그것을 가리킨다.
-        self.assertNotEqual(embedded, variant.read_bytes())
-        self.assertEqual(entries[0].file_hash, hashlib.sha256(embedded).hexdigest())
-        self.assertEqual(read_footer(output), SPEN_FOOTER)
-
-        with pymupdf.open(stream=embedded, filetype="pdf") as aligned, \
-                pymupdf.open(self.original_pdf) as origin:
-            self.assertEqual(aligned.page_count, origin.page_count)
-            for index in range(origin.page_count):
-                self.assertAlmostEqual(aligned[index].rect.width, origin[index].rect.width, delta=0.5)
-                self.assertAlmostEqual(aligned[index].rect.height, origin[index].rect.height, delta=0.5)
+        self.assertGreater(abs(inspection.alignment.offset_x), 1.0)
+        self.assertGreater(abs(inspection.alignment.offset_y), 1.0)
 
     def test_preview_renders_both_backgrounds_at_the_same_size(self):
         before, after, ink, stroke_count = preview_transfer(self.source_sdocx, self.target_pdf, 0)

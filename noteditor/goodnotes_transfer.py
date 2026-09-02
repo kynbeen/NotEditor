@@ -17,12 +17,14 @@ import os
 import tempfile
 import uuid
 from collections.abc import Callable
+from dataclasses import replace
 from io import BytesIO
 from pathlib import Path
 from zipfile import BadZipFile, ZIP_DEFLATED, ZipFile
 
 from PIL import Image
 
+from .ink_transform import canvas_transform
 from .alignment import Alignment, render_comparison
 from .goodnotes_archive import (
     GoodnotesDocument,
@@ -34,12 +36,18 @@ from .goodnotes_archive import (
     read_document,
     safe_members,
 )
-from .goodnotes_ink import count_goodnotes_strokes, render_goodnotes_ink
+from .goodnotes_ink import (
+    count_goodnotes_strokes,
+    render_goodnotes_ink,
+    transform_goodnotes_journal,
+)
 from .goodnotes_proto import GoodnotesTransferError
 from .page_match import MatchResult
 from .page_plan import PagePlan
 from .transfer_plan import (
     TransferInspection,
+    alignment_for_pairs,
+    alignment_for_plan,
     build_planned_background_pdf,
     open_pdf,
     plan_transfer,
@@ -121,6 +129,11 @@ def _planned_background_bytes(
     Goodnotes 첨부는 쪽마다 "이 첨부의 몇 쪽"을 가리킨다. 결과에서는 첨부 하나에 쪽을
     결과 순서 그대로 담아, 쪽 번호가 곧 결과 쪽 번호가 되게 한다.
     """
+    if all(
+        slot.target_index == output_index
+        for output_index, slot in enumerate(plan.slots)
+    ):
+        return target.read_bytes()
     source_document = open_pdf(embedded_pdf, _SOURCE_LABEL, error=GoodnotesTransferError)
     try:
         target_document = open_pdf(target, "대상 PDF", error=GoodnotesTransferError)
@@ -192,8 +205,17 @@ def transfer_goodnotes_handwriting(
             members = safe_members(archive)
             document = read_document(archive, members)
             embedded_pdf = background_pdf(archive, document)
+            alignment = inspection.alignment
+            if match_override is not None or plan_override is not None:
+                alignment = alignment_for_plan(
+                    embedded_pdf,
+                    target,
+                    plan,
+                    source_label=_SOURCE_LABEL,
+                    error=GoodnotesTransferError,
+                )
             attachment = _planned_background_bytes(
-                embedded_pdf, target, plan, inspection.alignment
+                embedded_pdf, target, plan, alignment
             )
 
             reference = next(
@@ -207,21 +229,61 @@ def transfer_goodnotes_handwriting(
             slots: list[tuple[GoodnotesPage, str, str]] = []
             notes_members: list[tuple[str, bytes]] = []
             index_pairs: list[tuple[str, str]] = []
-            for slot in plan.slots:
-                page = (
-                    reference
-                    if slot.source_index is None
-                    else document.pages[slot.source_index]
+            expected_stroke_counts: list[int] = []
+            source_document = open_pdf(
+                embedded_pdf, _SOURCE_LABEL, error=GoodnotesTransferError
+            )
+            try:
+                target_document = open_pdf(target, "대상 PDF", error=GoodnotesTransferError)
+            except Exception:
+                source_document.close()
+                raise
+            with source_document, target_document:
+                reference_index = next(
+                    (
+                        slot.source_index
+                        for slot in plan.slots
+                        if slot.source_index is not None
+                    ),
+                    0,
                 )
-                entity_id, content_id = new_page_ids()
-                slots.append((page, entity_id, content_id))
-                member = f"notes/{content_id}"
-                # 새로 끼어든 쪽은 필기가 없다. 빈 저널도 앱이 받아들이는 형태다.
-                payload = b""
-                if slot.source_index is not None and page.notes_member:
-                    payload = archive.read(page.notes_member)
-                notes_members.append((member, payload))
-                index_pairs.append((content_id, member))
+                for slot in plan.slots:
+                    page = (
+                        reference
+                        if slot.source_index is None
+                        else document.pages[slot.source_index]
+                    )
+                    transform = None
+                    if slot.target_index is not None:
+                        transform_source = (
+                            reference_index
+                            if slot.source_index is None
+                            else slot.source_index
+                        )
+                        transform = canvas_transform(
+                            source_document[transform_source],
+                            target_document[slot.target_index],
+                            document.pages[transform_source].canvas,
+                            alignment,
+                        )
+                        page = replace(
+                            page,
+                            canvas=(transform.target_width, transform.target_height),
+                        )
+                    entity_id, content_id = new_page_ids()
+                    slots.append((page, entity_id, content_id))
+                    member = f"notes/{content_id}"
+                    # 새로 끼어든 쪽은 필기가 없다. 빈 저널도 앱이 받아들이는 형태다.
+                    payload = b""
+                    expected_stroke_count = 0
+                    if slot.source_index is not None and page.notes_member:
+                        payload = archive.read(page.notes_member)
+                        expected_stroke_count = count_goodnotes_strokes(payload)
+                        if transform is not None:
+                            payload = transform_goodnotes_journal(payload, transform)
+                    notes_members.append((member, payload))
+                    index_pairs.append((content_id, member))
+                    expected_stroke_counts.append(expected_stroke_count)
 
             attachment_id = str(uuid.uuid4()).upper()
             events = build_events(
@@ -264,7 +326,7 @@ def transfer_goodnotes_handwriting(
                     result.writestr(member, payload)
                 result.writestr("thumbnail.jpg", thumbnail)
 
-        _validate_output(temporary, plan, attachment)
+        _validate_output(temporary, plan, attachment, expected_stroke_counts)
         os.replace(temporary, output)
     finally:
         temporary.unlink(missing_ok=True)
@@ -280,8 +342,15 @@ def transfer_goodnotes_handwriting(
     }
 
 
-def _validate_output(path: Path, plan: PagePlan, attachment: bytes) -> None:
-    """저장한 파일을 다시 읽어 쪽 수·순서·배경 참조가 계획과 같은지 확인한다."""
+def _validate_output(
+    path: Path,
+    plan: PagePlan,
+    attachment: bytes,
+    expected_stroke_counts: list[int],
+) -> None:
+    """저장한 파일을 다시 읽어 배경·캔버스·필기 수를 함께 확인한다."""
+    import pymupdf
+
     with _open_archive(path) as archive:
         members = safe_members(archive)
         document = read_document(archive, members)
@@ -292,15 +361,30 @@ def _validate_output(path: Path, plan: PagePlan, attachment: bytes) -> None:
         attachment_id, member = next(iter(document.attachments.items()))
         if archive.read(member) != attachment:
             raise GoodnotesTransferError("저장된 Goodnotes의 배경 검증에 실패했습니다.")
-        for index, page in enumerate(document.pages):
-            if page.attachment_id != attachment_id or page.source_page != index + 1:
-                raise GoodnotesTransferError(
-                    f"저장된 Goodnotes {index + 1}쪽의 배경 참조가 어긋났습니다."
-                )
-            if page.notes_member is None:
-                raise GoodnotesTransferError(
-                    f"저장된 Goodnotes {index + 1}쪽의 필기 항목을 찾을 수 없습니다."
-                )
+        with pymupdf.open(stream=attachment, filetype="pdf") as background:
+            if background.page_count != len(document.pages):
+                raise GoodnotesTransferError("저장된 Goodnotes의 배경 페이지 수가 다릅니다.")
+            for index, page in enumerate(document.pages):
+                if page.attachment_id != attachment_id or page.source_page != index + 1:
+                    raise GoodnotesTransferError(
+                        f"저장된 Goodnotes {index + 1}쪽의 배경 참조가 어긋났습니다."
+                    )
+                if page.notes_member is None:
+                    raise GoodnotesTransferError(
+                        f"저장된 Goodnotes {index + 1}쪽의 필기 항목을 찾을 수 없습니다."
+                    )
+                page_ratio = page.canvas[0] / max(page.canvas[1], 1e-9)
+                pdf_rect = background[index].rect
+                pdf_ratio = float(pdf_rect.width) / max(float(pdf_rect.height), 1e-9)
+                if abs(page_ratio - pdf_ratio) > 0.002:
+                    raise GoodnotesTransferError(
+                        f"저장된 Goodnotes {index + 1}쪽의 캔버스 비율이 PDF와 다릅니다."
+                    )
+                actual_count = count_goodnotes_strokes(archive.read(page.notes_member))
+                if actual_count != expected_stroke_counts[index]:
+                    raise GoodnotesTransferError(
+                        f"저장된 Goodnotes {index + 1}쪽의 필기 수가 달라졌습니다."
+                    )
 
 
 def preview_goodnotes_transfer(
@@ -345,6 +429,7 @@ def preview_goodnotes_transfer(
             if page.notes_member:
                 notes = archive.read(page.notes_member)
 
+    preview_transform = None
     with pymupdf.open(target) as new_document:
         if source_index is None:
             target_page = new_document[target_index]
@@ -360,10 +445,24 @@ def preview_goodnotes_transfer(
         else:
             old_document = pymupdf.open(stream=embedded_pdf, filetype="pdf")
             try:
+                preview_alignment = inspection.alignment
+                if source_index_override >= 0:
+                    preview_alignment = alignment_for_pairs(
+                        old_document,
+                        new_document,
+                        [(source_index, target_index)],
+                        error=GoodnotesTransferError,
+                    )
+                preview_transform = canvas_transform(
+                    old_document[source_index],
+                    new_document[target_index],
+                    canvas,
+                    preview_alignment,
+                )
                 before, after = render_comparison(
                     old_document,
                     new_document,
-                    inspection.alignment,
+                    preview_alignment,
                     source_index,
                     target_page_index=target_index,
                 )
@@ -377,7 +476,9 @@ def preview_goodnotes_transfer(
             transparent.save(ink_output, format="PNG")
             ink, stroke_count = ink_output.getvalue(), 0
         else:
-            ink, stroke_count = render_goodnotes_ink(notes, background.size, canvas)
+            ink, stroke_count = render_goodnotes_ink(
+                notes, background.size, canvas, preview_transform
+            )
     return before, after, ink, stroke_count
 
 

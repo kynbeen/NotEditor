@@ -153,10 +153,16 @@ def build_planned_background_pdf(
     reference_index: int = 0,
     error: type[Exception] = HandwritingTransferError,
 ) -> bytes:
-    """행 계획 순서로 옛 전용·새 전용·대응 쪽을 모두 담은 배경 PDF를 만든다."""
+    """행 계획 순서로 PDF 쪽을 원래 기하 그대로 담는다.
+
+    대상 쪽은 대상 PDF가 유일한 기준이다. 원본에만 남은 필기 쪽에만 옛 배경을 쓴다.
+    ``alignment`` 는 호출 호환을 위해 받지만 배경을 자르는 데 사용하지 않는다.
+    """
     import pymupdf
 
+    _ = alignment
     source_geometry = geometry(source_document)
+    target_geometry = geometry(target_document)
     expected: list[tuple[float, float, int]] = []
     with pymupdf.open() as document:
         for slot in plan.slots:
@@ -170,23 +176,7 @@ def build_planned_background_pdf(
                 expected.append(source_geometry[slot.source_index])
                 continue
 
-            source_index = reference_index if slot.source_index is None else slot.source_index
-            reference = source_document[source_index]
-            target_page = target_document[slot.target_index]
-            expected.append(source_geometry[source_index])
-            if alignment is not None:
-                place_page(document, reference, target_document, slot.target_index, alignment)
-                continue
-            target_size = (
-                round(float(target_page.rect.width), 3),
-                round(float(target_page.rect.height), 3),
-                int(target_page.rotation),
-            )
-            if geometry_mismatches([source_geometry[source_index]], [target_size]):
-                raise error(
-                    f"새 PDF {slot.target_index + 1}쪽의 크기가 대응할 원본 캔버스와 달라 "
-                    "본문 정렬 없이 재조립할 수 없습니다."
-                )
+            expected.append(target_geometry[slot.target_index])
             document.insert_pdf(
                 target_document,
                 from_page=slot.target_index,
@@ -258,3 +248,61 @@ def plan_transfer(
         return mode, None, len(target_geometry), match
     mode = "rebuild" if match.source_only or match.target_only else "aligned"
     return mode, alignment, len(target_geometry), match
+
+
+def alignment_for_plan(
+    embedded_pdf: bytes,
+    target: Path,
+    plan: PagePlan,
+    *,
+    source_label: str = "내장 PDF",
+    error: type[Exception] = HandwritingTransferError,
+) -> Alignment | None:
+    """사용자가 고친 행 계획의 실제 쪽 짝으로 정렬을 다시 계산한다."""
+    source_document = open_pdf(embedded_pdf, source_label, error=error)
+    try:
+        target_document = open_pdf(target, "대상 PDF", error=error)
+    except Exception:
+        source_document.close()
+        raise
+    with source_document, target_document:
+        pairs = [
+            (slot.source_index, slot.target_index)
+            for slot in plan.slots
+            if slot.source_index is not None and slot.target_index is not None
+        ]
+        return alignment_for_pairs(
+            source_document,
+            target_document,
+            pairs,
+            error=error,
+        )
+
+
+def alignment_for_pairs(
+    source_document,
+    target_document,
+    pairs: Sequence[tuple[int, int]],
+    *,
+    error: type[Exception] = HandwritingTransferError,
+) -> Alignment | None:
+    """확정된 쪽 짝에 필요한 필기 캔버스 역변환을 검증한다."""
+    source_geometry = geometry(source_document)
+    target_geometry = geometry(target_document)
+    same_geometry = all(
+        not geometry_mismatches(
+            [source_geometry[source_index]],
+            [target_geometry[target_index]],
+        )
+        for source_index, target_index in pairs
+    )
+    alignment = estimate_alignment(source_document, target_document, pairs)
+    if alignment is None:
+        if not same_geometry:
+            raise error(
+                "페이지 크기가 다른데 확인한 쪽의 본문 영역을 찾지 못해 필기 좌표를 옮길 수 없습니다."
+            )
+        return None
+    if same_geometry and not (alignment.improves and alignment.axes_agree):
+        return None
+    return alignment

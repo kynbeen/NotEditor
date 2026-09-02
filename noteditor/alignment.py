@@ -21,7 +21,7 @@ from statistics import median
 _INK_MAX_SIDE = 1200
 _INK_TOLERANCE = 6
 _SAMPLE_LIMIT = 12
-_MIN_SAMPLES = 2
+_MIN_SAMPLES = 1
 _IDENTITY_SCALE = 0.002
 _IDENTITY_SHIFT = 1.0
 _AXIS_TOLERANCE = 0.005
@@ -75,6 +75,16 @@ class Alignment:
             self.offset_y + self.scale * rect.y0,
             self.offset_x + self.scale * rect.x1,
             self.offset_y + self.scale * rect.y1,
+        )
+
+    def inverse_place(self, rect) -> tuple[float, float, float, float]:
+        """원본 PDF 사각형을 대상 PDF 좌표계로 옮긴다."""
+        scale = max(self.scale, 1e-9)
+        return (
+            (rect.x0 - self.offset_x) / scale,
+            (rect.y0 - self.offset_y) / scale,
+            (rect.x1 - self.offset_x) / scale,
+            (rect.y1 - self.offset_y) / scale,
         )
 
     def as_dict(self) -> dict:
@@ -259,14 +269,14 @@ def render_comparison(
 
     source_page = source_document[page_index]
     target_index = page_index if target_page_index is None else target_page_index
-    rect = source_page.rect
+    target_page = target_document[target_index]
+    rect = target_page.rect
     scale = min(max_side / max(rect.width, rect.height), 3.0)
     matrix = pymupdf.Matrix(scale, scale)
-    before = source_page.get_pixmap(matrix=matrix, alpha=False).tobytes("png")
     with pymupdf.open() as staged:
-        if alignment is None:
-            staged.insert_pdf(target_document, from_page=target_index, to_page=target_index)
-        else:
-            place_page(staged, source_page, target_document, target_index, alignment)
-        after = staged[0].get_pixmap(matrix=matrix, alpha=False).tobytes("png")
+        page = staged.new_page(width=rect.width, height=rect.height)
+        destination = rect if alignment is None else pymupdf.Rect(*alignment.inverse_place(source_page.rect))
+        page.show_pdf_page(destination, source_document, page_index, keep_proportion=True, clip=None)
+        before = page.get_pixmap(matrix=matrix, alpha=False).tobytes("png")
+    after = target_page.get_pixmap(matrix=matrix, alpha=False).tobytes("png")
     return before, after

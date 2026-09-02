@@ -17,7 +17,16 @@ from io import BytesIO
 
 from PIL import Image, ImageDraw
 
-from .goodnotes_proto import apple_lz4_decompress, field_values, split_delimited
+from .ink_transform import CanvasTransform
+from .goodnotes_proto import (
+    GoodnotesTransferError,
+    apple_lz4_decompress,
+    apple_lz4_store,
+    field_values,
+    join_delimited,
+    replace_field,
+    split_delimited,
+)
 
 # 서명마다 "획의 경로가 몇 번째 구역인지"가 다르다. 실제 Goodnotes 6 내보내기에서 확인한
 # 세 가지만 그린다. 값은 (경로 구역 번호, 항목당 실수 개수, 펜 종류).
@@ -281,13 +290,16 @@ def read_goodnotes_strokes(page_payload: bytes) -> tuple[GoodnotesStroke, ...]:
 
 
 def render_goodnotes_ink(
-    page_payload: bytes, size: tuple[int, int], canvas: tuple[float, float]
+    page_payload: bytes,
+    size: tuple[int, int],
+    canvas: tuple[float, float],
+    transform: CanvasTransform | None = None,
 ) -> tuple[bytes, int]:
     """페이지 캔버스 좌표의 획을 미리보기 그림 크기에 맞춰 투명 PNG로 그린다."""
     strokes = read_goodnotes_strokes(page_payload)
     width, height = size
-    canvas_width = max(1.0, float(canvas[0]))
-    canvas_height = max(1.0, float(canvas[1]))
+    canvas_width = max(1.0, float(transform.target_width if transform else canvas[0]))
+    canvas_height = max(1.0, float(transform.target_height if transform else canvas[1]))
     scale_x, scale_y = width / canvas_width, height / canvas_height
     width_scale = (scale_x + scale_y) / 2
     layer = Image.new("RGBA", size, (0, 0, 0, 0))
@@ -295,14 +307,21 @@ def render_goodnotes_ink(
     for stroke in strokes:
         alpha = round(255 * stroke.opacity)
         fill = (*stroke.color, alpha)
-        points = [(x * scale_x, y * scale_y) for x, y in stroke.points]
+        points = [
+            (mapped_x * scale_x, mapped_y * scale_y)
+            for x, y in stroke.points
+            for mapped_x, mapped_y in [
+                transform.point(x, y) if transform is not None else (x, y)
+            ]
+        ]
+        stroke_scale = transform.width_scale if transform else 1.0
         if len(points) == 1:
-            radius = max(0.5, stroke.widths[0] * width_scale / 2)
+            radius = max(0.5, stroke.widths[0] * stroke_scale * width_scale / 2)
             x, y = points[0]
             draw.ellipse((x - radius, y - radius, x + radius, y + radius), fill=fill)
             continue
         for index in range(1, len(points)):
-            segment = (stroke.widths[index - 1] + stroke.widths[index]) / 2
+            segment = (stroke.widths[index - 1] + stroke.widths[index]) * stroke_scale / 2
             draw.line(
                 (points[index - 1], points[index]),
                 fill=fill,
@@ -327,9 +346,137 @@ def count_goodnotes_strokes(page_payload: bytes) -> int:
     return total
 
 
+def _transform_tpl(blob: bytes, transform: CanvasTransform) -> bytes:
+    """관측한 Goodnotes TPL 획의 점·굵기를 같은 길이에서 변환한다."""
+    if not blob.startswith(b"tpl\0") or len(blob) < 8:
+        raise GoodnotesTransferError("Goodnotes 필기 좌표 블록을 읽을 수 없습니다.")
+    end = blob.find(b"\0", 8)
+    if end < 0:
+        raise GoodnotesTransferError("Goodnotes 필기 좌표 서명이 잘렸습니다.")
+    try:
+        signature = blob[8:end].decode("ascii")
+    except UnicodeDecodeError as exc:
+        raise GoodnotesTransferError("Goodnotes 필기 좌표 서명을 읽을 수 없습니다.") from exc
+    tokens = _tokenize(signature)
+    if tokens is None:
+        raise GoodnotesTransferError("지원하지 않는 Goodnotes 필기 좌표 서명입니다.")
+
+    output = bytearray(blob)
+    offset = end + 1
+    scalar_offsets: list[tuple[str, int]] = []
+    sections: list[tuple[tuple[str, ...], list[list[int]]]] = []
+    try:
+        for kind, item in tokens:
+            if kind == "scalar":
+                code = item[0]
+                size = _SCALAR_SIZES.get(code)
+                if size is None or offset + size > len(output):
+                    raise ValueError
+                scalar_offsets.append((code, offset))
+                offset += size
+                continue
+            if offset + 4 > len(output):
+                raise ValueError
+            (count,) = struct.unpack_from("<I", output, offset)
+            offset += 4
+            rows: list[list[int]] = []
+            for _ in range(count):
+                row: list[int] = []
+                for code in item:
+                    size = _SCALAR_SIZES.get(code)
+                    if size is None or offset + size > len(output):
+                        raise ValueError
+                    row.append(offset)
+                    offset += size
+                rows.append(row)
+            sections.append((item, rows))
+    except (ValueError, struct.error) as exc:
+        raise GoodnotesTransferError("Goodnotes 필기 좌표 블록이 잘렸습니다.") from exc
+
+    def get(at: int) -> float:
+        return float(struct.unpack_from("<f", output, at)[0])
+
+    def put(at: int, value: float) -> None:
+        struct.pack_into("<f", output, at, float(value))
+
+    def point(row: list[int], x_column: int, y_column: int) -> None:
+        x, y = get(row[x_column]), get(row[y_column])
+        if abs(x) < 1e-6 and abs(y) < 1e-6:
+            return
+        x, y = transform.point(x, y)
+        put(row[x_column], x)
+        put(row[y_column], y)
+
+    if signature == _PRESSURE_SIGNATURE and len(sections) >= 3:
+        flags = sections[0][1]
+        paired = bool(flags) and (struct.unpack_from("<H", output, flags[0][0])[0] & 0x4)
+        rows = sections[2][1]
+        if paired:
+            for start in range(0, len(rows) - 8, 9):
+                flat = [row[0] for row in rows[start:start + 9]]
+                point(flat, 0, 1)
+                point(flat, 3, 4)
+                put(flat[2], get(flat[2]) * transform.width_scale)
+                put(flat[5], get(flat[5]) * transform.width_scale)
+        else:
+            for start in range(0, len(rows) - 2, 3):
+                flat = [row[0] for row in rows[start:start + 3]]
+                point(flat, 0, 1)
+                put(flat[2], get(flat[2]) * transform.width_scale)
+    elif signature == _CONSTANT_SIGNATURE and len(sections) >= 3:
+        for row in sections[2][1]:
+            point(row, 0, 1)
+            point(row, 2, 3)
+        for code, at in scalar_offsets:
+            if code == "u":
+                put(at, get(at) * transform.width_scale)
+    elif signature == _PENCIL_SIGNATURE and len(sections) >= 3:
+        for row in sections[2][1]:
+            point(row, 1, 2)
+            point(row, 6, 7)
+        for code, at in scalar_offsets:
+            if code == "u":
+                put(at, get(at) * transform.width_scale)
+    else:
+        raise GoodnotesTransferError(
+            "아직 좌표 변환을 검증하지 않은 Goodnotes 필기 종류가 있습니다."
+        )
+    return bytes(output)
+
+
+def transform_goodnotes_journal(
+    page_payload: bytes, transform: CanvasTransform
+) -> bytes:
+    """페이지 저널의 모든 획을 대상 PDF 좌표계로 옮긴다."""
+    if transform.identity or not page_payload:
+        return page_payload
+    records: list[bytes] = []
+    for record in split_delimited(page_payload):
+        fields = field_values(record)
+        payload = fields.get(7)
+        if not payload or not isinstance(payload[0], bytes):
+            records.append(record)
+            continue
+        stroke_payload = bytes(payload[0])
+        stroke = field_values(stroke_payload)
+        geometry = stroke.get(2)
+        if not geometry or not isinstance(geometry[0], bytes) or not geometry[0]:
+            records.append(record)
+            continue
+        transformed = _transform_tpl(
+            apple_lz4_decompress(bytes(geometry[0])), transform
+        )
+        stroke_payload = replace_field(
+            stroke_payload, 2, [(2, apple_lz4_store(transformed))]
+        )
+        records.append(replace_field(record, 7, [(2, stroke_payload)]))
+    return join_delimited(records)
+
+
 __all__ = [
     "GoodnotesStroke",
     "count_goodnotes_strokes",
     "read_goodnotes_strokes",
     "render_goodnotes_ink",
+    "transform_goodnotes_journal",
 ]

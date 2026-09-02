@@ -13,6 +13,7 @@ from io import BytesIO
 
 from PIL import Image, ImageColor, ImageDraw
 
+from .ink_transform import CanvasTransform
 from .notewise_proto import field_values as _message_values
 
 
@@ -120,8 +121,14 @@ def read_notewise_strokes(page_payload: bytes) -> tuple[tuple[NotewiseStroke, ..
     return tuple(strokes), canvas
 
 
-def render_notewise_ink(page_payload: bytes, size: tuple[int, int]) -> tuple[bytes, int]:
+def render_notewise_ink(
+    page_payload: bytes,
+    size: tuple[int, int],
+    transform: CanvasTransform | None = None,
+) -> tuple[bytes, int]:
     strokes, (canvas_width, canvas_height) = read_notewise_strokes(page_payload)
+    if transform is not None:
+        canvas_width, canvas_height = transform.target_width, transform.target_height
     width, height = size
     scale_x, scale_y = width / canvas_width, height / canvas_height
     width_scale = (scale_x + scale_y) / 2
@@ -130,14 +137,24 @@ def render_notewise_ink(page_payload: bytes, size: tuple[int, int]) -> tuple[byt
     for stroke in strokes:
         rgb = ImageColor.getrgb(stroke.color)
         alpha = round(255 * stroke.opacity)
-        points = [(x * scale_x, y * scale_y) for x, y in stroke.points]
+        points = [
+            (mapped_x * scale_x, mapped_y * scale_y)
+            for x, y in stroke.points
+            for mapped_x, mapped_y in [
+                transform.point(x, y) if transform is not None else (x, y)
+            ]
+        ]
+        stroke_scale = transform.width_scale if transform else 1.0
         if len(points) == 1:
-            radius = max(0.5, stroke.widths[0] * width_scale / 2)
+            radius = max(0.5, stroke.widths[0] * stroke_scale * width_scale / 2)
             x, y = points[0]
             draw.ellipse((x - radius, y - radius, x + radius, y + radius), fill=(*rgb, alpha))
             continue
         for index in range(1, len(points)):
-            segment_width = max(1, round((stroke.widths[index - 1] + stroke.widths[index]) * width_scale / 2))
+            segment_width = max(1, round(
+                (stroke.widths[index - 1] + stroke.widths[index])
+                * stroke_scale * width_scale / 2
+            ))
             draw.line((points[index - 1], points[index]), fill=(*rgb, alpha), width=segment_width)
     output = BytesIO()
     layer.save(output, format="PNG")

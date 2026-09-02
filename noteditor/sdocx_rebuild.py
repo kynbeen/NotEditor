@@ -11,10 +11,12 @@ from pathlib import Path, PurePosixPath
 from typing import Callable
 from zipfile import ZipFile
 
-from .alignment import Alignment, estimate_alignment, place_page
+from .alignment import Alignment, estimate_alignment
+from .ink_transform import canvas_transform
 from .page_match import MatchResult
 from .sdocx_note import PageOrder, PageOrderEntry, patch_note_height, read_note, read_page_order
 from .sdocx_page import PageInfo, is_blank_page, patch_page, read_page
+from .sdocx_ink import transform_page_ink
 from .sdocx_transfer import (
     ArchiveAddition,
     SdocxTransferError,
@@ -159,6 +161,7 @@ def rebuild_handwriting(
     *,
     uuid_factory: Callable[[], str] | None = None,
     hash_factory: Callable[[int], bytes] | None = None,
+    mode: str = "rebuild",
 ) -> dict:
     """``match`` 순서대로 PDF와 페이지 목록을 재조립해 새 SDOCX를 저장한다."""
     import pymupdf
@@ -216,7 +219,27 @@ def rebuild_handwriting(
                 output_index = len(slots)
                 if pair.matched:
                     source_page = source_pages[pair.source_index]
-                    blob = patch_page(source_page.blob, pdf_page_index=output_index)
+                    blob = source_page.blob
+                    if pair.target_index is not None:
+                        transform = canvas_transform(
+                            source_document[pair.source_index],
+                            target_document[pair.target_index],
+                            (source_page.info.canvas_width, source_page.info.canvas_height),
+                            alignment,
+                        )
+                        blob = transform_page_ink(blob, transform)
+                        canvas = (
+                            max(1, round(transform.target_width)),
+                            max(1, round(transform.target_height)),
+                        )
+                        blob = patch_page(
+                            blob,
+                            pdf_page_index=output_index,
+                            canvas=canvas,
+                            pdf_rect=(0, 0, *canvas),
+                        )
+                    else:
+                        blob = patch_page(blob, pdf_page_index=output_index)
                     slots.append(
                         _PdfSlot(
                             source_page.name,
@@ -252,9 +275,27 @@ def rebuild_handwriting(
                         blank_template.blob,
                         pdf_page_index=output_index,
                         uuid=new_uuid,
-                        canvas=(blank_template.info.canvas_width, blank_template.info.canvas_height),
                         new_page_hash=new_hash,
                     )
+                    if pair.target_index is not None:
+                        transform = canvas_transform(
+                            source_document[blank_template.info.pdf.page_index],
+                            target_document[pair.target_index],
+                            (
+                                blank_template.info.canvas_width,
+                                blank_template.info.canvas_height,
+                            ),
+                            alignment,
+                        )
+                        canvas = (
+                            max(1, round(transform.target_width)),
+                            max(1, round(transform.target_height)),
+                        )
+                        blob = patch_page(
+                            blob,
+                            canvas=canvas,
+                            pdf_rect=(0, 0, *canvas),
+                        )
                     name = _page_name(page_root, new_uuid)
                     additions[name] = ArchiveAddition(blank_template.name, blob)
                     slots.append(
@@ -268,36 +309,27 @@ def rebuild_handwriting(
                         )
                     )
 
-            with pymupdf.open() as rebuilt_pdf:
-                for slot in slots:
-                    if slot.target_index is None:
-                        rebuilt_pdf.insert_pdf(
-                            source_document,
-                            from_page=slot.source_index,
-                            to_page=slot.source_index,
-                        )
-                        continue
-                    reference = source_document[slot.reference_source_index]
-                    target_page = target_document[slot.target_index]
-                    if alignment is None:
-                        _require(
-                            _same_page_geometry(reference, target_page),
-                            "새 쪽의 크기가 원본 캔버스와 달라 본문 정렬 없이 재조립할 수 없습니다.",
-                        )
+            if all(
+                slot.target_index == output_index
+                for output_index, slot in enumerate(slots)
+            ):
+                rebuilt_pdf_bytes = target.read_bytes()
+            else:
+                with pymupdf.open() as rebuilt_pdf:
+                    for slot in slots:
+                        if slot.target_index is None:
+                            rebuilt_pdf.insert_pdf(
+                                source_document,
+                                from_page=slot.source_index,
+                                to_page=slot.source_index,
+                            )
+                            continue
                         rebuilt_pdf.insert_pdf(
                             target_document,
                             from_page=slot.target_index,
                             to_page=slot.target_index,
                         )
-                    else:
-                        place_page(
-                            rebuilt_pdf,
-                            reference,
-                            target_document,
-                            slot.target_index,
-                            alignment,
-                        )
-                rebuilt_pdf_bytes = rebuilt_pdf.tobytes(garbage=4, deflate=True)
+                    rebuilt_pdf_bytes = rebuilt_pdf.tobytes(garbage=4, deflate=True)
         finally:
             source_document.close()
             target_document.close()
@@ -374,7 +406,7 @@ def rebuild_handwriting(
         "path": str(output),
         "size": output.stat().st_size,
         "sha256": hashlib.sha256(output.read_bytes()).hexdigest(),
-        "mode": "rebuild",
+        "mode": mode,
         "page_count": len(slots),
         "note_page_count": len(ordered_pages),
         "matched_count": len(match.matched_pairs),

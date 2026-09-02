@@ -14,7 +14,8 @@ from io import BytesIO
 
 from PIL import Image, ImageDraw
 
-from .sdocx_page import read_page
+from .ink_transform import CanvasTransform
+from .sdocx_page import SdocxPageError, read_page
 
 
 @dataclass(frozen=True)
@@ -31,6 +32,20 @@ def _can_read(blob: bytes, offset: int, size: int) -> bool:
 def _unpack_delta(value: int) -> float:
     magnitude = ((value >> 5) & 0x3FF) + (value & 0x1F) / 32.0
     return -magnitude if value & 0x8000 else magnitude
+
+
+def _pack_delta(value: float) -> int:
+    magnitude = abs(float(value))
+    if not math.isfinite(magnitude) or magnitude >= 1024.0:
+        raise SdocxPageError("변환한 Samsung Notes 필기 점 간격이 표현 범위를 벗어납니다.")
+    integer = int(math.floor(magnitude))
+    fraction = int(round((magnitude - integer) * 32.0))
+    if fraction >= 32:
+        integer += 1
+        fraction = 0
+    if integer >= 1024:
+        raise SdocxPageError("변환한 Samsung Notes 필기 점 간격이 표현 범위를 벗어납니다.")
+    return (0x8000 if value < 0 else 0) | (integer << 5) | fraction
 
 
 def _read_var_uint(blob: bytes, offset: int, size: int, limit: int) -> int | None:
@@ -261,12 +276,19 @@ def read_ink_strokes(page_blob: bytes) -> tuple[int, int, tuple[InkStroke, ...]]
     return info.canvas_width, info.canvas_height, tuple(strokes)
 
 
-def render_ink_png(page_blob: bytes | None, width: int, height: int) -> tuple[bytes, int]:
+def render_ink_png(
+    page_blob: bytes | None,
+    width: int,
+    height: int,
+    transform: CanvasTransform | None = None,
+) -> tuple[bytes, int]:
     """Render strokes to a transparent PNG matching a PDF preview's pixel size."""
     image = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     count = 0
     if page_blob:
         canvas_width, canvas_height, strokes = read_ink_strokes(page_blob)
+        if transform is not None:
+            canvas_width, canvas_height = transform.target_width, transform.target_height
         if canvas_width > 0 and canvas_height > 0:
             scale_x = width / canvas_width
             scale_y = height / canvas_height
@@ -274,8 +296,11 @@ def render_ink_png(page_blob: bytes | None, width: int, height: int) -> tuple[by
             draw = ImageDraw.Draw(image, "RGBA")
             for stroke in strokes:
                 points = [
-                    (round(x * scale_x, 2), round(y * scale_y, 2))
+                    (round(mapped_x * scale_x, 2), round(mapped_y * scale_y, 2))
                     for x, y in stroke.points
+                    for mapped_x, mapped_y in [
+                        transform.point(x, y) if transform is not None else (x, y)
+                    ]
                     if math.isfinite(x) and math.isfinite(y)
                 ]
                 if len(points) < 2:
@@ -284,9 +309,185 @@ def render_ink_png(page_blob: bytes | None, width: int, height: int) -> tuple[by
                 # Very pale or transparent ink disappears on white PDF previews.
                 # Keep its hue, but apply a conservative visibility floor.
                 visible_alpha = max(90, alpha)
-                line_width = max(1, min(40, round(max(1.0, stroke.pen_size) * scale)))
+                pen_size = stroke.pen_size * (transform.width_scale if transform else 1.0)
+                line_width = max(1, min(40, round(max(1.0, pen_size) * scale)))
                 draw.line(points, fill=(red, green, blue, visible_alpha), width=line_width, joint="curve")
                 count += 1
     output = BytesIO()
     image.save(output, format="PNG")
     return output.getvalue(), count
+
+
+def _patch_base_subrecord(
+    blob: bytearray,
+    start: int,
+    end: int,
+    transform: CanvasTransform,
+    old_canvas: tuple[int, int],
+) -> None:
+    """객체의 경계 상자와 그 안에 반복된 페이지 크기를 고친다."""
+    cursor = start + 6
+    if cursor + 5 > end:
+        return
+    cursor += 4
+    flag_length = blob[cursor]
+    cursor += 1 + 2 + max(0, flag_length - 2)
+    cursor += 1 + 4 + 4
+    if cursor + 2 > end:
+        return
+    uuid_length = struct.unpack_from("<h", blob, cursor)[0]
+    if uuid_length < 0:
+        return
+    cursor += 2 + uuid_length + 8
+    if cursor + 32 > end:
+        return
+    rect = struct.unpack_from("<4d", blob, cursor)
+    struct.pack_into("<4d", blob, cursor, *transform.rect(rect))
+
+    old_width = int(old_canvas[0]) * 256
+    old_height = int(old_canvas[1]) * 256
+    new_width = max(1, round(transform.target_width)) * 256
+    new_height = max(1, round(transform.target_height)) * 256
+    search = cursor + 32
+    while search + 8 <= end:
+        left, right = struct.unpack_from("<II", blob, search)
+        if left == old_width and right == old_height:
+            struct.pack_into("<II", blob, search, new_width, new_height)
+            break
+        search += 1
+
+
+def _patch_stroke_subrecord(
+    blob: bytearray, start: int, end: int, transform: CanvasTransform
+) -> None:
+    if start + 20 > end:
+        raise SdocxPageError("Samsung Notes 필기 레코드가 잘렸습니다.")
+    flexible_offset = struct.unpack_from("<I", blob, start + 6)[0]
+    mask1_size = blob[start + 10]
+    mask1 = _read_var_uint(blob, start + 11, mask1_size, end)
+    if mask1 is None:
+        raise SdocxPageError("Samsung Notes 필기 좌표 마스크를 읽을 수 없습니다.")
+    mask2_size_at = start + 11 + mask1_size
+    if mask2_size_at >= end:
+        raise SdocxPageError("Samsung Notes 필기 속성 마스크가 잘렸습니다.")
+    mask2_size = blob[mask2_size_at]
+    mask2 = _read_var_uint(blob, mask2_size_at + 1, mask2_size, end)
+    if mask2 is None:
+        raise SdocxPageError("Samsung Notes 필기 속성 마스크를 읽을 수 없습니다.")
+    cursor = mask2_size_at + 1 + mask2_size
+    if cursor + 2 > end:
+        raise SdocxPageError("Samsung Notes 필기 점 개수가 잘렸습니다.")
+    point_count = struct.unpack_from("<H", blob, cursor)[0]
+    cursor += 2
+    geometry_end = start + flexible_offset
+    if point_count < 1 or geometry_end < cursor or geometry_end > end:
+        raise SdocxPageError("Samsung Notes 필기 좌표 범위가 올바르지 않습니다.")
+
+    if mask1 & 0x0001:
+        if cursor + 16 > geometry_end:
+            raise SdocxPageError("Samsung Notes 압축 필기 좌표가 잘렸습니다.")
+        x, y = struct.unpack_from("<dd", blob, cursor)
+        x, y = transform.point(x, y)
+        struct.pack_into("<dd", blob, cursor, x, y)
+        cursor += 16
+        for _ in range(point_count - 1):
+            if cursor + 4 > geometry_end:
+                raise SdocxPageError("Samsung Notes 압축 필기 델타가 잘렸습니다.")
+            dx, dy = struct.unpack_from("<HH", blob, cursor)
+            struct.pack_into(
+                "<HH",
+                blob,
+                cursor,
+                _pack_delta(_unpack_delta(dx) * transform.scale_x),
+                _pack_delta(_unpack_delta(dy) * transform.scale_y),
+            )
+            cursor += 4
+    else:
+        optional_axes = bool(mask1 & 0x0004)
+        axes = point_count * 8 if optional_axes else 0
+        available = geometry_end - cursor
+        f32_size = point_count * 8 + point_count * 8 + axes + 2
+        f64_size = point_count * 16 + point_count * 8 + axes + 2
+        if available == f32_size:
+            fmt, stride = "<ff", 8
+        elif available == f64_size:
+            fmt, stride = "<dd", 16
+        else:
+            raise SdocxPageError("Samsung Notes 원시 필기 좌표 형식을 확인할 수 없습니다.")
+        for index in range(point_count):
+            at = cursor + index * stride
+            x, y = struct.unpack_from(fmt, blob, at)
+            struct.pack_into(fmt, blob, at, *transform.point(x, y))
+
+    flexible = geometry_end
+    if mask2 & 0x0002:
+        flexible += 4
+    if mask2 & 0x0004:
+        flexible += 4
+    if mask2 & 0x0008 and flexible + 4 <= end:
+        pen_size = struct.unpack_from("<f", blob, flexible)[0]
+        struct.pack_into("<f", blob, flexible, pen_size * transform.width_scale)
+
+
+def transform_page_ink(page_blob: bytes, transform: CanvasTransform) -> bytes:
+    """Samsung Notes 페이지의 편집 가능한 획을 대상 PDF 캔버스로 옮긴다."""
+    if transform.identity:
+        return page_blob
+    info = read_page(page_blob)
+    blob = bytearray(page_blob)
+
+    if info.property_mask & 0x00000001:
+        rect = struct.unpack_from("<4d", blob, info.property_offset)
+        struct.pack_into("<4d", blob, info.property_offset, *transform.rect(rect))
+
+    def patch_object(position: int) -> int:
+        if position + 7 > len(blob):
+            raise SdocxPageError("Samsung Notes 객체 헤더가 잘렸습니다.")
+        object_type = blob[position]
+        child_count = struct.unpack_from("<H", blob, position + 1)[0]
+        object_size = struct.unpack_from("<I", blob, position + 3)[0]
+        payload_start = position + 7
+        payload_end = payload_start + object_size - 32
+        record_end = payload_start + object_size
+        if object_size < 32 or payload_end < payload_start or record_end > len(blob):
+            raise SdocxPageError("Samsung Notes 객체 크기가 올바르지 않습니다.")
+        if object_type in (1, 15):
+            subrecords = _subrecords(blob, payload_start, payload_end)
+            base = next((item for item in subrecords if item[0] == 0), None)
+            stroke = next((item for item in subrecords if item[0] == 1), None)
+            if base is not None:
+                _patch_base_subrecord(
+                    blob,
+                    base[1],
+                    base[2],
+                    transform,
+                    (info.canvas_width, info.canvas_height),
+                )
+            if stroke is None:
+                raise SdocxPageError("Samsung Notes 필기 좌표 레코드를 찾을 수 없습니다.")
+            _patch_stroke_subrecord(blob, stroke[1], stroke[2], transform)
+        cursor = record_end
+        for _ in range(child_count):
+            cursor = patch_object(cursor)
+        return cursor
+
+    position = info.layer_offset
+    if position + 4 > len(blob):
+        raise SdocxPageError("Samsung Notes 레이어 목록이 잘렸습니다.")
+    layer_count = struct.unpack_from("<H", blob, position)[0]
+    position += 4
+    for _ in range(layer_count):
+        if position + 16 > len(blob):
+            raise SdocxPageError("Samsung Notes 레이어 헤더가 잘렸습니다.")
+        header_size = struct.unpack_from("<I", blob, position)[0]
+        count_at = position + header_size
+        if header_size < 16 or count_at + 4 > len(blob):
+            raise SdocxPageError("Samsung Notes 레이어 크기가 올바르지 않습니다.")
+        object_count = struct.unpack_from("<I", blob, count_at)[0]
+        position = count_at + 4
+        for _ in range(object_count):
+            position = patch_object(position)
+        position += 32
+    result = bytes(blob)
+    read_page(result)
+    return result

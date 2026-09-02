@@ -173,9 +173,15 @@ def apple_lz4_decompress(payload: bytes) -> bytes:
     return bytes(output)
 
 
+def apple_lz4_store(payload: bytes) -> bytes:
+    """Apple libcompression의 무압축 블록으로 바이트를 감싼다."""
+    return _FRAME_RAW + struct.pack("<I", len(payload)) + payload + _FRAME_END
+
+
 __all__ = [
     "GoodnotesTransferError",
     "apple_lz4_decompress",
+    "apple_lz4_store",
     "encode_field",
     "encode_float32",
     "encode_varint",

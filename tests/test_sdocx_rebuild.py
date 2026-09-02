@@ -14,6 +14,7 @@ from noteditor.sdocx_page import is_blank_page, page_hash, read_page
 from noteditor.sdocx_rebuild import rebuild_handwriting
 from noteditor.sdocx_transfer import parse_media_info
 from tests.test_sdocx_note import make_note
+from tests.test_sdocx_ink import make_stroke_layers
 from tests.test_sdocx_page import make_page
 from tests.test_sdocx_transfer import SPEN_FOOTER, make_media_info, make_pdf, read_footer
 
@@ -35,11 +36,18 @@ def layer_payload(object_count: int) -> bytes:
     return b"\x01\x00\x00\x00" + bytes(header) + object_count.to_bytes(4, "little") + bytes(32)
 
 
-def make_rebuild_source(path: Path, embedded_pdf: Path) -> dict[str, bytes]:
+def make_rebuild_source(
+    path: Path, embedded_pdf: Path, *, annotated_layers: bytes | None = None
+) -> dict[str, bytes]:
     pages = [
         make_page(uuid=UUIDS[0], pdf_page_index=0, strokes=layer_payload(0), hash_block=b"A" * 32),
         make_page(uuid=UUIDS[1], pdf_page_index=1, strokes=layer_payload(0), hash_block=b"B" * 32),
-        make_page(uuid=UUIDS[2], pdf_page_index=2, strokes=layer_payload(1), hash_block=b"C" * 32),
+        make_page(
+            uuid=UUIDS[2],
+            pdf_page_index=2,
+            strokes=annotated_layers or layer_payload(1),
+            hash_block=b"C" * 32,
+        ),
         make_page(uuid=UUIDS[3], pdf_page_index=3, strokes=layer_payload(0), hash_block=b"D" * 32),
         make_page(
             uuid=UUIDS[4],
@@ -183,6 +191,51 @@ class RebuildHandwritingTests(unittest.TestCase):
         with pymupdf.open(stream=embedded, filetype="pdf") as document:
             labels = [document[index].get_text().strip() for index in range(document.page_count)]
             self.assertEqual(labels, ["C", "A", "KEEP", "NEW"])
+
+    def test_different_aspect_ratio_uses_target_page_and_moves_editable_ink(self):
+        source_pdf = self.root / "wide-source.pdf"
+        target_pdf = self.root / "tall-target.pdf"
+        source_sdocx = self.root / "wide-source.sdocx"
+        make_pdf(source_pdf, ["A", "B", "C", "D"], width=960, height=540)
+        make_rebuild_source(
+            source_sdocx, source_pdf, annotated_layers=make_stroke_layers()
+        )
+        with pymupdf.open(source_pdf) as origin, pymupdf.open() as target:
+            for index in range(origin.page_count):
+                page = target.new_page(width=960, height=720)
+                page.show_pdf_page(
+                    pymupdf.Rect(0, 90, 960, 630), origin, index
+                )
+            target.save(target_pdf)
+
+        match = MatchResult(
+            tuple(PagePair(index, index) for index in range(4))
+        )
+        output = self.root / "target-ratio.sdocx"
+        result = rebuild_handwriting(source_sdocx, target_pdf, output, match)
+        self.assertIsNotNone(result["alignment"])
+
+        with ZipFile(output) as archive:
+            embedded = archive.read("media/0@source.pdf")
+            transformed = read_page(archive.read(f"{UUIDS[2]}.page"))
+            from noteditor.sdocx_ink import read_ink_strokes
+
+            _width, _height, strokes = read_ink_strokes(
+                archive.read(f"{UUIDS[2]}.page")
+            )
+        with pymupdf.open(stream=embedded, filetype="pdf") as document:
+            self.assertTrue(all(page.rect == pymupdf.Rect(0, 0, 960, 720) for page in document))
+        self.assertAlmostEqual(
+            transformed.canvas_width / transformed.canvas_height,
+            960 / 720,
+            delta=0.002,
+        )
+        self.assertEqual(
+            tuple(round(value) for value in transformed.pdf.rect),
+            (0, 0, transformed.canvas_width, transformed.canvas_height),
+        )
+        self.assertEqual(len(strokes), 1)
+        self.assertGreater(strokes[0].points[0][1], 300.0)
 
 
 if __name__ == "__main__":

@@ -24,13 +24,15 @@ from zipfile import BadZipFile, ZIP_DEFLATED, ZipFile, ZipInfo
 from PIL import Image
 
 from .alignment import Alignment, render_comparison
-from .notewise_ink import render_notewise_ink
+from .ink_transform import CanvasTransform, canvas_transform
+from .notewise_ink import read_notewise_strokes, render_notewise_ink
 from .notewise_proto import NotewiseTransferError, encode_field, iter_fields
 from .page_match import MatchResult
 from .page_plan import PagePlan
 from .transfer_plan import (
     TransferInspection,
-    build_background_pdf,
+    alignment_for_pairs,
+    alignment_for_plan,
     build_planned_background_pdf,
     open_pdf,
     plan_transfer,
@@ -126,6 +128,7 @@ def _patch_page(
     target_index: int,
     *,
     blank: bool = False,
+    transform: CanvasTransform | None = None,
 ) -> bytes:
     message = _decode_message(page_payload, "페이지")
     output = bytearray()
@@ -148,8 +151,13 @@ def _patch_page(
                 bytes(value), 1, [(2, pdf_id.encode("ascii"))]
             )
             value = _replace_field_sequence(bytes(value), 2, [(0, target_index)])
-        elif blank and number == 4:
-            continue
+        elif number == 4:
+            if blank:
+                continue
+            if wire_type == 2 and transform is not None and not transform.identity:
+                value = _transform_page_object(bytes(value), transform)
+        elif number == 6 and wire_type == 2 and transform is not None:
+            value = _patch_page_canvas(bytes(value), transform)
         elif number == 11:
             value = relation_id.encode("ascii")
             wire_type = 2
@@ -163,6 +171,65 @@ def _patch_page(
     if not wrote_sort_key:
         output.extend(encode_field(7, 1, struct.pack("<d", 1024.0 * (target_index + 1))))
     return base64.encodebytes(bytes(output))
+
+
+def _float32(values: dict[int, list[bytes | int]], number: int, default: float) -> float:
+    payload = values.get(number, [None])[0]
+    if isinstance(payload, bytes) and len(payload) == 4:
+        return float(struct.unpack("<f", payload)[0])
+    return default
+
+
+def _transform_page_object(payload: bytes, transform: CanvasTransform) -> bytes:
+    """객체 자체의 행렬에 캔버스 역변환을 앞에서 합성한다."""
+    object_fields: dict[int, list[bytes | int]] = {}
+    for number, _wire, value in iter_fields(payload):
+        object_fields.setdefault(number, []).append(value)
+    matrix_payload = object_fields.get(3, [None])[0]
+    if isinstance(matrix_payload, bytes):
+        matrix_fields: dict[int, list[bytes | int]] = {}
+        for number, _wire, value in iter_fields(matrix_payload):
+            matrix_fields.setdefault(number, []).append(value)
+    else:
+        matrix_fields = {}
+    a = _float32(matrix_fields, 1, 1.0)
+    b = _float32(matrix_fields, 2, 0.0)
+    c = _float32(matrix_fields, 3, 0.0)
+    d = _float32(matrix_fields, 4, 0.0)
+    e = _float32(matrix_fields, 5, 1.0)
+    f = _float32(matrix_fields, 6, 0.0)
+    matrix = bytes(matrix_payload) if isinstance(matrix_payload, bytes) else b""
+    replacements = (
+        (1, transform.scale_x * a),
+        (2, transform.scale_x * b),
+        (3, transform.scale_x * c + transform.offset_x),
+        (4, transform.scale_y * d),
+        (5, transform.scale_y * e),
+        (6, transform.scale_y * f + transform.offset_y),
+    )
+    for number, value in replacements:
+        matrix = _replace_field_sequence(
+            matrix, number, [(5, struct.pack("<f", float(value)))]
+        )
+    if not isinstance(matrix_payload, bytes):
+        matrix = _replace_field_sequence(matrix, 9, [(5, struct.pack("<f", 1.0))])
+    return _replace_field_sequence(payload, 3, [(2, matrix)])
+
+
+def _patch_page_canvas(payload: bytes, transform: CanvasTransform) -> bytes:
+    """페이지 설정의 정수 캔버스를 대상 PDF 비율로 바꾼다."""
+    settings_fields = list(iter_fields(payload))
+    dimensions = next(
+        (bytes(value) for number, wire, value in settings_fields if number == 1 and wire == 2),
+        b"",
+    )
+    dimensions = _replace_field_sequence(
+        dimensions, 3, [(0, max(1, round(transform.target_width)))]
+    )
+    dimensions = _replace_field_sequence(
+        dimensions, 4, [(0, max(1, round(transform.target_height)))]
+    )
+    return _replace_field_sequence(payload, 1, [(2, dimensions)])
 
 
 def _decode_message(payload: bytes, label: str) -> bytes:
@@ -258,44 +325,13 @@ def inspect_notewise_transfer(
     )
 
 
-def _background_bytes(
-    embedded_pdf: bytes,
-    target: Path,
-    mapping: list[int | None],
-    alignment: Alignment | None,
-) -> bytes:
-    """Notewise에 넣을 배경 PDF 바이트를 만든다.
-
-    페이지 크기와 여백이 그대로면 사용자의 PDF를 **바이트 하나 안 바꾸고** 넣는다. 다시
-    그리면 필요도 없는 차이가 생기고, 원본 PDF를 그대로 보존한다는 약속도 깨진다.
-    달라졌을 때만 원본 캔버스에 다시 앉힌 PDF를 만들어 넣는다.
-    """
-    if alignment is None:
-        return target.read_bytes()
-    source_document = open_pdf(embedded_pdf, "Notewise 내장 PDF", error=NotewiseTransferError)
-    try:
-        target_document = open_pdf(target, "대상 PDF", error=NotewiseTransferError)
-    except Exception:
-        source_document.close()
-        raise
-    with source_document, target_document:
-        return build_background_pdf(
-            source_document,
-            target_document,
-            mapping,
-            alignment,
-            reference_index=_reference_index(mapping),
-            error=NotewiseTransferError,
-        )
-
-
 def _planned_background_bytes(
     embedded_pdf: bytes,
     target: Path,
     plan: PagePlan,
     alignment: Alignment | None,
 ) -> bytes:
-    if alignment is None and all(
+    if all(
         slot.target_index == output_index
         for output_index, slot in enumerate(plan.slots)
     ):
@@ -341,6 +377,7 @@ def _validate_archive_structure(
     pdf_name: str,
     page_names: list[str],
     expected_pdf: bytes,
+    expected_object_counts: list[int],
 ) -> None:
     if archive.read(pdf_name) != expected_pdf:
         raise NotewiseTransferError("저장된 Notewise의 내장 PDF 검증에 실패했습니다.")
@@ -362,48 +399,87 @@ def _validate_archive_structure(
         raise NotewiseTransferError("Notewise PDF ID와 ZIP 경로가 일치하지 않습니다.")
     if page_count != len(page_names):
         raise NotewiseTransferError("Notewise 메타데이터의 페이지 수가 일치하지 않습니다.")
-    for expected_index, page_name in enumerate(page_names):
-        page = _decode_message(archive.read(page_name), "페이지")
-        page_fields = list(iter_fields(page))
-        page_id = next(
-            bytes(value).decode("ascii")
-            for number, wire, value in page_fields
-            if number == 1 and wire == 2
-        )
-        if page_name != f"page/{page_id}":
-            raise NotewiseTransferError("Notewise 페이지 ID와 ZIP 경로가 일치하지 않습니다.")
-        page_order = next(
-            (int(value) for number, wire, value in page_fields
-             if number == 2 and wire == 0),
-            0,
-        )
-        sort_key_payload = next(
-            bytes(value) for number, wire, value in page_fields
-            if number == 7 and wire == 1
-        )
-        sort_key = struct.unpack("<d", sort_key_payload)[0]
-        if page_order != expected_index or sort_key != 1024.0 * (expected_index + 1):
-            raise NotewiseTransferError(
-                f"Notewise {expected_index + 1}쪽의 정렬 정보가 일치하지 않습니다."
+    import pymupdf
+
+    background_document = pymupdf.open(stream=expected_pdf, filetype="pdf")
+    try:
+        if background_document.page_count != len(page_names):
+            raise NotewiseTransferError("저장된 Notewise의 배경 페이지 수가 일치하지 않습니다.")
+        for expected_index, page_name in enumerate(page_names):
+            _validate_page(
+                archive,
+                page_name,
+                expected_index,
+                pdf_id,
+                background_document[expected_index],
+                expected_object_counts[expected_index],
             )
-        background = next(
-            bytes(value) for number, wire, value in page_fields if number == 3 and wire == 2
+    finally:
+        background_document.close()
+
+
+def _validate_page(
+    archive: ZipFile,
+    page_name: str,
+    expected_index: int,
+    pdf_id: str,
+    background_page,
+    expected_object_count: int,
+) -> None:
+    page = _decode_message(archive.read(page_name), "페이지")
+    page_fields = list(iter_fields(page))
+    page_id = next(
+        bytes(value).decode("ascii")
+        for number, wire, value in page_fields
+        if number == 1 and wire == 2
+    )
+    if page_name != f"page/{page_id}":
+        raise NotewiseTransferError("Notewise 페이지 ID와 ZIP 경로가 일치하지 않습니다.")
+    page_order = next(
+        (int(value) for number, wire, value in page_fields
+         if number == 2 and wire == 0),
+        0,
+    )
+    sort_key_payload = next(
+        bytes(value) for number, wire, value in page_fields
+        if number == 7 and wire == 1
+    )
+    sort_key = struct.unpack("<d", sort_key_payload)[0]
+    if page_order != expected_index or sort_key != 1024.0 * (expected_index + 1):
+        raise NotewiseTransferError(
+            f"Notewise {expected_index + 1}쪽의 정렬 정보가 일치하지 않습니다."
         )
-        background_fields = list(iter_fields(background))
-        background_pdf_id = next(
-            bytes(value).decode("ascii")
-            for number, wire, value in background_fields
-            if number == 1 and wire == 2
+    background = next(
+        bytes(value) for number, wire, value in page_fields if number == 3 and wire == 2
+    )
+    background_fields = list(iter_fields(background))
+    background_pdf_id = next(
+        bytes(value).decode("ascii")
+        for number, wire, value in background_fields
+        if number == 1 and wire == 2
+    )
+    background_index = next(
+        (int(value) for number, wire, value in background_fields
+         if number == 2 and wire == 0),
+        0,
+    )
+    if background_pdf_id != pdf_id or background_index != expected_index:
+        raise NotewiseTransferError(
+            f"Notewise {expected_index + 1}쪽의 PDF 참조가 일치하지 않습니다."
         )
-        background_index = next(
-            (int(value) for number, wire, value in background_fields
-             if number == 2 and wire == 0),
-            0,
+    _strokes, canvas = read_notewise_strokes(archive.read(page_name))
+    canvas_ratio = canvas[0] / max(canvas[1], 1e-9)
+    pdf_ratio = float(background_page.rect.width) / max(
+        float(background_page.rect.height), 1e-9
+    )
+    if abs(canvas_ratio - pdf_ratio) > 0.002:
+        raise NotewiseTransferError(
+            f"Notewise {expected_index + 1}쪽의 캔버스 비율이 PDF와 다릅니다."
         )
-        if background_pdf_id != pdf_id or background_index != expected_index:
-            raise NotewiseTransferError(
-                f"Notewise {expected_index + 1}쪽의 PDF 참조가 일치하지 않습니다."
-            )
+    if _page_stroke_count(archive.read(page_name)) != expected_object_count:
+        raise NotewiseTransferError(
+            f"Notewise {expected_index + 1}쪽의 필기 객체 수가 달라졌습니다."
+        )
 
 
 def transfer_notewise_handwriting(
@@ -437,8 +513,18 @@ def transfer_notewise_handwriting(
     try:
         with _archive_context(source) as (archive, _members, pdf_name, source_page_names):
             source_pages = [archive.read(name) for name in source_page_names]
+            embedded_pdf = archive.read(pdf_name)
+            alignment = inspection.alignment
+            if match_override is not None or plan_override is not None:
+                alignment = alignment_for_plan(
+                    embedded_pdf,
+                    target,
+                    plan,
+                    source_label="Notewise 내장 PDF",
+                    error=NotewiseTransferError,
+                )
             target_payload = _planned_background_bytes(
-                archive.read(pdf_name), target, plan, inspection.alignment
+                embedded_pdf, target, plan, alignment
             )
             blank_template = next(
                 (payload for payload in source_pages if _page_stroke_count(payload) == 0),
@@ -446,31 +532,65 @@ def transfer_notewise_handwriting(
             )
             output_page_ids: list[str] = []
             output_pages: list[tuple[str, bytes]] = []
+            expected_object_counts: list[int] = []
             note_id = secrets.token_urlsafe(18)
             new_pdf_id = secrets.token_urlsafe(18)
             relation_id = secrets.token_urlsafe(18)
-            for output_index, slot in enumerate(plan.slots):
-                source_index = slot.source_index
-                page_id = secrets.token_urlsafe(18)
-                if source_index is None:
-                    payload = _patch_page(
-                        blank_template,
-                        page_id,
-                        new_pdf_id,
-                        relation_id,
-                        output_index,
-                        blank=True,
-                    )
-                else:
-                    payload = _patch_page(
-                        source_pages[source_index],
-                        page_id,
-                        new_pdf_id,
-                        relation_id,
-                        output_index,
-                    )
-                output_page_ids.append(page_id)
-                output_pages.append((f"page/{page_id}", payload))
+            source_document = open_pdf(
+                embedded_pdf, "Notewise 내장 PDF", error=NotewiseTransferError
+            )
+            try:
+                target_document = open_pdf(target, "대상 PDF", error=NotewiseTransferError)
+            except Exception:
+                source_document.close()
+                raise
+            with source_document, target_document:
+                reference_index = _reference_index(
+                    [slot.source_index for slot in plan.slots]
+                )
+                source_canvases = [
+                    read_notewise_strokes(payload)[1] for payload in source_pages
+                ]
+                for output_index, slot in enumerate(plan.slots):
+                    source_index = slot.source_index
+                    page_id = secrets.token_urlsafe(18)
+                    transform = None
+                    if slot.target_index is not None:
+                        transform_source = (
+                            reference_index if source_index is None else source_index
+                        )
+                        transform = canvas_transform(
+                            source_document[transform_source],
+                            target_document[slot.target_index],
+                            source_canvases[transform_source],
+                            alignment,
+                        )
+                    if source_index is None:
+                        expected_object_count = 0
+                        payload = _patch_page(
+                            blank_template,
+                            page_id,
+                            new_pdf_id,
+                            relation_id,
+                            output_index,
+                            blank=True,
+                            transform=transform,
+                        )
+                    else:
+                        expected_object_count = _page_stroke_count(
+                            source_pages[source_index]
+                        )
+                        payload = _patch_page(
+                            source_pages[source_index],
+                            page_id,
+                            new_pdf_id,
+                            relation_id,
+                            output_index,
+                            transform=transform,
+                        )
+                    output_page_ids.append(page_id)
+                    output_pages.append((f"page/{page_id}", payload))
+                    expected_object_counts.append(expected_object_count)
             patched_note = _patch_note(
                 archive.read("note"),
                 output_page_ids,
@@ -505,7 +625,13 @@ def transfer_notewise_handwriting(
         with _archive_context(temporary) as (archive, _members, pdf_name, page_names):
             if len(page_names) != len(plan.slots):
                 raise NotewiseTransferError("저장된 Notewise의 페이지 수가 달라졌습니다.")
-            _validate_archive_structure(archive, pdf_name, page_names, target_payload)
+            _validate_archive_structure(
+                archive,
+                pdf_name,
+                page_names,
+                target_payload,
+                expected_object_counts,
+            )
         os.replace(temporary, output)
     finally:
         temporary.unlink(missing_ok=True)
@@ -552,6 +678,7 @@ def preview_notewise_transfer(
     with _archive_context(source) as (archive, _members, pdf_name, page_names):
         embedded_pdf = archive.read(pdf_name)
         page_payload = archive.read(page_names[source_index]) if source_index is not None else None
+    preview_transform = None
     with pymupdf.open(target) as new_document:
         if source_index is None:
             target_page = new_document[target_index]
@@ -567,10 +694,25 @@ def preview_notewise_transfer(
         else:
             old_document = pymupdf.open(stream=embedded_pdf, filetype="pdf")
             try:
+                preview_alignment = inspection.alignment
+                if source_index_override >= 0:
+                    preview_alignment = alignment_for_pairs(
+                        old_document,
+                        new_document,
+                        [(source_index, target_index)],
+                        error=NotewiseTransferError,
+                    )
+                source_canvas = read_notewise_strokes(page_payload)[1]
+                preview_transform = canvas_transform(
+                    old_document[source_index],
+                    new_document[target_index],
+                    source_canvas,
+                    preview_alignment,
+                )
                 before, after = render_comparison(
                     old_document,
                     new_document,
-                    inspection.alignment,
+                    preview_alignment,
                     source_index,
                     target_page_index=target_index,
                 )
@@ -583,5 +725,7 @@ def preview_notewise_transfer(
             transparent.save(ink_output, format="PNG")
             ink, stroke_count = ink_output.getvalue(), 0
         else:
-            ink, stroke_count = render_notewise_ink(page_payload, background.size)
+            ink, stroke_count = render_notewise_ink(
+                page_payload, background.size, preview_transform
+            )
     return before, after, ink, stroke_count

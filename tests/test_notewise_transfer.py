@@ -11,8 +11,7 @@ from zipfile import ZipFile
 import pymupdf
 from PIL import Image
 
-from noteditor.alignment import ink_box
-from noteditor.notewise_ink import render_notewise_ink
+from noteditor.notewise_ink import read_notewise_strokes, render_notewise_ink
 from noteditor.notewise_proto import NotewiseTransferError, iter_fields
 from noteditor.notewise_transfer import (
     _page_ids,
@@ -236,16 +235,16 @@ class NotewiseTransferTests(unittest.TestCase):
             document.save(path)
         return path
 
-    def _assert_canvas_preserved(self, embedded: bytes, origin_pdf: Path, page_count: int) -> None:
+    def _assert_target_geometry(self, embedded: bytes, target_pdf: Path, page_count: int) -> None:
         with pymupdf.open(stream=embedded, filetype="pdf") as background, \
-                pymupdf.open(origin_pdf) as origin:
+                pymupdf.open(target_pdf) as target:
             self.assertEqual(background.page_count, page_count)
             for index in range(background.page_count):
                 self.assertAlmostEqual(
-                    background[index].rect.width, origin[0].rect.width, delta=0.5
+                    background[index].rect.width, target[index].rect.width, delta=0.5
                 )
                 self.assertAlmostEqual(
-                    background[index].rect.height, origin[0].rect.height, delta=0.5
+                    background[index].rect.height, target[index].rect.height, delta=0.5
                 )
 
     def test_transfer_aligns_a_relaid_out_pdf_to_the_original_canvas(self):
@@ -276,19 +275,17 @@ class NotewiseTransferTests(unittest.TestCase):
                 in iter_fields(base64.b64decode(archive.read(f"page/{page_id}")))
                 if number == 4 and wire == 2
             ]
-        # 사용자의 PDF가 아니라 원본 캔버스에 다시 앉힌 PDF가 들어간다.
-        self.assertNotEqual(embedded, variant.read_bytes())
-        self._assert_canvas_preserved(embedded, origin_pdf, 2)
-        # 배경만 옮기고 필기 객체는 손대지 않는다.
-        self.assertEqual(after, before)
-        # 쪽 크기만 같아서는 의미가 없다. 본문이 원래 있던 자리로 돌아와야 필기와 맞는다.
-        with pymupdf.open(stream=embedded, filetype="pdf") as background, \
-                pymupdf.open(origin_pdf) as origin:
-            for index in range(background.page_count):
-                old, new = ink_box(origin[index]), ink_box(background[index])
-                self.assertIsNotNone(new, f"{index + 1}쪽 본문을 찾지 못했습니다.")
-                self.assertAlmostEqual(new.x0, old.x0, delta=4)
-                self.assertAlmostEqual(new.y0, old.y0, delta=4)
+            transformed_strokes, transformed_canvas = read_notewise_strokes(
+                archive.read(f"page/{page_id}")
+            )
+        self.assertEqual(embedded, variant.read_bytes())
+        self._assert_target_geometry(embedded, variant, 2)
+        self.assertEqual(len(after), len(before))
+        self.assertNotEqual(after, before)
+        self.assertEqual(transformed_canvas, (360.0, 480.0))
+        first_point = transformed_strokes[0].points[0]
+        self.assertAlmostEqual(first_point[0], 48.0, delta=1.0)
+        self.assertAlmostEqual(first_point[1], 38.0, delta=1.0)
 
     def test_transfer_aligns_while_also_inserting_a_new_page(self):
         source, origin_pdf = self._multipage_source()
@@ -309,8 +306,7 @@ class NotewiseTransferTests(unittest.TestCase):
             embedded = archive.read(pdf_name)
             page_ids = _page_ids(archive.read("note"))
         self.assertEqual(len(page_ids), 3)
-        # 짝이 없는 새 쪽도 원본 캔버스 크기를 빌려 쓴다.
-        self._assert_canvas_preserved(embedded, origin_pdf, 3)
+        self._assert_target_geometry(embedded, variant, 3)
 
     def test_unchanged_geometry_still_embeds_the_users_pdf_byte_for_byte(self):
         output = self.root / "exact.notewise"
