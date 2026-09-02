@@ -654,7 +654,13 @@ def transfer_handwriting(
         from .sdocx_rebuild import rebuild_handwriting
 
         return rebuild_handwriting(
-            source, target, output, selected_match, mode=inspection.mode
+            source,
+            target,
+            output,
+            selected_match,
+            mode=inspection.mode,
+            excluded_sources=plan_override.excluded_sources if plan_override else (),
+            excluded_targets=plan_override.excluded_targets if plan_override else (),
         )
 
     archive, members, media_info_name, media_info, pdf_entry, embedded_name = _archive_context(source)

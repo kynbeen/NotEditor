@@ -185,6 +185,115 @@ class WebAppTests(unittest.TestCase):
             page.canvas_width / page.canvas_height, 960 / 720, delta=0.002
         )
 
+    def test_sdocx_exclusion_drops_only_the_excluded_row(self):
+        """제외한 행만 빠지고, 남은 쪽은 그대로 대상 PDF 비율을 따른다."""
+        from noteditor.sdocx_note import read_page_order
+        from noteditor.sdocx_page import read_page
+        from tests.test_sdocx_ink import make_stroke_layers
+        from tests.test_sdocx_rebuild import UUIDS, make_rebuild_source
+
+        source_pdf = self.root / "sdocx-source.pdf"
+        target_pdf = self.root / "sdocx-tall.pdf"
+        source_sdocx = self.root / "excluded.sdocx"
+        make_pdf(source_pdf, ["A", "B", "C", "D"], width=960, height=540)
+        make_rebuild_source(
+            source_sdocx, source_pdf, annotated_layers=make_stroke_layers()
+        )
+        with pymupdf.open(source_pdf) as origin, pymupdf.open() as target:
+            for index in range(origin.page_count):
+                page = target.new_page(width=960, height=720)
+                page.show_pdf_page(pymupdf.Rect(0, 90, 960, 630), origin, index)
+            target.save(target_pdf)
+
+        self.client.post(
+            "/api/handwriting/source",
+            files={"file": (source_sdocx.name, source_sdocx.read_bytes(), "application/zip")},
+        )
+        self.client.post(
+            "/api/handwriting/target",
+            files={"file": (target_pdf.name, target_pdf.read_bytes(), "application/pdf")},
+        )
+        status = self.wait_for_handwriting_analysis()
+        self.assertTrue(status["ready"], status)
+        rows = [
+            {
+                "source_index": slot["source_index"],
+                "target_index": slot["target_index"],
+                "confirmed": True,
+            }
+            for slot in status["inspection"]["plan"]["slots"]
+        ]
+        rows[1]["excluded"] = True
+
+        exported = self.client.post(
+            "/api/handwriting/export",
+            json={"suggested_name": "excluded.sdocx", "page_plan": rows},
+        )
+        self.assertEqual(exported.status_code, 200, exported.text)
+        with zipfile.ZipFile(io.BytesIO(exported.content)) as archive:
+            embedded_name = next(
+                name for name in archive.namelist() if name.startswith("media/") and name.endswith(".pdf")
+            )
+            embedded = archive.read(embedded_name)
+            order = read_page_order(archive.read("pageIdInfo.dat"))
+            page = read_page(archive.read(f"{UUIDS[2]}.page"))
+        self.assertEqual(len(order.entries), 4)
+        with pymupdf.open(stream=embedded, filetype="pdf") as result:
+            self.assertEqual(result.page_count, 3)
+            for result_page in result:
+                self.assertAlmostEqual(
+                    result_page.rect.width / result_page.rect.height, 960 / 720, delta=0.002
+                )
+        self.assertAlmostEqual(
+            page.canvas_width / page.canvas_height, 960 / 720, delta=0.002
+        )
+
+    def test_notewise_exclusion_drops_only_the_excluded_row(self):
+        source_pdf = self.root / "notewise-source.pdf"
+        target_pdf = self.root / "notewise-target.pdf"
+        source_notewise = self.root / "excluded.notewise"
+        make_notewise_pdf(source_pdf, "same text", pages=3)
+        _make_notewise(source_notewise, source_pdf, pages=3)
+        with pymupdf.open(source_pdf) as origin, pymupdf.open() as target:
+            for index in range(origin.page_count):
+                page = target.new_page(width=360, height=480)
+                page.show_pdf_page(pymupdf.Rect(30, 20, 300, 380), origin, index)
+            target.save(target_pdf)
+
+        self.client.post(
+            "/api/handwriting/source",
+            files={"file": (source_notewise.name, source_notewise.read_bytes(), "application/zip")},
+        )
+        self.client.post(
+            "/api/handwriting/target",
+            files={"file": (target_pdf.name, target_pdf.read_bytes(), "application/pdf")},
+        )
+        status = self.wait_for_handwriting_analysis()
+        self.assertTrue(status["ready"], status)
+        slots = status["inspection"]["plan"]["slots"]
+        rows = [
+            {
+                "source_index": slot["source_index"],
+                "target_index": slot["target_index"],
+                "confirmed": True,
+            }
+            for slot in slots
+        ]
+        rows[0]["excluded"] = True
+
+        exported = self.client.post(
+            "/api/handwriting/export",
+            json={"suggested_name": "excluded.notewise", "page_plan": rows},
+        )
+        self.assertEqual(exported.status_code, 200, exported.text)
+        with zipfile.ZipFile(io.BytesIO(exported.content)) as archive:
+            page_names = [name for name in archive.namelist() if name.startswith("page/")]
+            pdf_name = next(name for name in archive.namelist() if name.startswith("pdf/"))
+            background = archive.read(pdf_name)
+        self.assertEqual(len(page_names), len(slots) - 1)
+        with pymupdf.open(stream=background, filetype="pdf") as result:
+            self.assertEqual(result.page_count, len(slots) - 1)
+
     def test_upload_preview_and_export_goodnotes(self):
         """Goodnotes도 같은 업로드·미리보기·저장 흐름을 그대로 탄다."""
         from tests.test_goodnotes_transfer import FIXTURE, _make_pdf as make_goodnotes_pdf

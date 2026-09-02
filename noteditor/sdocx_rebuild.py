@@ -8,7 +8,7 @@ import tempfile
 import uuid as uuid_module
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Callable
+from typing import Callable, Sequence
 from zipfile import ZipFile
 
 from .alignment import Alignment, estimate_alignment
@@ -61,15 +61,26 @@ def _page_name(root: PurePosixPath, page_uuid: str) -> str:
     return filename if str(root) == "." else str(root / filename)
 
 
-def _validate_match(result: MatchResult, source_count: int, target_count: int) -> None:
+def _validate_match(
+    result: MatchResult,
+    source_count: int,
+    target_count: int,
+    excluded_sources: Sequence[int] = (),
+    excluded_targets: Sequence[int] = (),
+) -> None:
+    """모든 쪽이 결과에 담겼거나 사용자가 명시적으로 뺀 것인지 확인한다.
+
+    사용자가 뺀 쪽까지 세는 이유는, "빠졌다"와 "빼기로 했다"를 구분하지 못하면
+    조용한 쪽 유실을 잡아 주던 이 검사가 무의미해지기 때문이다.
+    """
     source = [pair.source_index for pair in result.pairs if pair.source_index is not None]
     target = [pair.target_index for pair in result.pairs if pair.target_index is not None]
     _require(
-        sorted(source) == list(range(source_count)),
+        sorted(source + list(excluded_sources)) == list(range(source_count)),
         "쪽 대응 계획은 원본 PDF의 모든 쪽을 한 번씩 담아야 합니다.",
     )
     _require(
-        sorted(target) == list(range(target_count)),
+        sorted(target + list(excluded_targets)) == list(range(target_count)),
         "쪽 대응 계획은 대상 PDF의 모든 쪽을 한 번씩 담아야 합니다.",
     )
     _require(
@@ -162,6 +173,8 @@ def rebuild_handwriting(
     uuid_factory: Callable[[], str] | None = None,
     hash_factory: Callable[[int], bytes] | None = None,
     mode: str = "rebuild",
+    excluded_sources: Sequence[int] = (),
+    excluded_targets: Sequence[int] = (),
 ) -> dict:
     """``match`` 순서대로 PDF와 페이지 목록을 재조립해 새 SDOCX를 저장한다."""
     import pymupdf
@@ -192,7 +205,13 @@ def rebuild_handwriting(
             source_document.close()
             raise
         try:
-            _validate_match(match, source_document.page_count, target_document.page_count)
+            _validate_match(
+                match,
+                source_document.page_count,
+                target_document.page_count,
+                excluded_sources,
+                excluded_targets,
+            )
             order, source_pages, supplemental, blank_template = _read_source_pages(
                 archive,
                 members,

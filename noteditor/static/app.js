@@ -650,11 +650,13 @@ function clonePagePlan(plan) {
     target_index: slot.target_index,
     confirmed: Boolean(slot.confirmed),
     manual: Boolean(slot.manual),
+    excluded: Boolean(slot.excluded),
     attention: Boolean(slot.needs_confirmation || slot.kind !== "matched"),
   }));
 }
 
 function reviewBadge(slot) {
+  if (slot.excluded) return "결과에서 제외";
   if (slot.source_index === null) return "새 쪽";
   if (slot.target_index === null) return "원본에만 있음";
   if (slot.manual) return "수동 정렬";
@@ -664,33 +666,43 @@ function reviewBadge(slot) {
 
 function renderReviewSummary() {
   const plan = state.handwriting.plan;
-  const unconfirmed = plan.filter((slot) => !slot.confirmed).length;
-  const automatic = plan.filter((slot) => (
+  const included = plan.filter((slot) => !slot.excluded);
+  const excluded = plan.length - included.length;
+  const unconfirmed = included.filter((slot) => !slot.confirmed).length;
+  const automatic = included.filter((slot) => (
     slot.source_index !== null && slot.target_index !== null && !slot.manual
   )).length;
-  const targetOnly = plan.filter((slot) => slot.source_index === null).length;
-  const sourceOnly = plan.filter((slot) => slot.target_index === null).length;
+  const targetOnly = included.filter((slot) => slot.source_index === null).length;
+  const sourceOnly = included.filter((slot) => slot.target_index === null).length;
   refs.handwritingReviewSummary.textContent = [
-    `전체 ${plan.length}행`,
+    `결과 ${included.length}쪽`,
+    excluded ? `제외 ${excluded}행` : "",
     `자동 연결 ${automatic}`,
     `새 전용 ${targetOnly}`,
     `옛 전용 ${sourceOnly}`,
     unconfirmed ? `확인 필요 ${unconfirmed}` : "모두 확인됨",
-  ].join(" · ");
-  refs.saveHandwriting.disabled = !state.bridgeReady || !state.handwriting.ready;
+  ].filter(Boolean).join(" · ");
+  refs.saveHandwriting.disabled = !state.bridgeReady || !state.handwriting.ready || included.length === 0;
 }
 
 function setReviewRowState(row, slot) {
-  row.classList.toggle("needs-confirmation", !slot.confirmed);
-  row.classList.toggle("confirmed", slot.confirmed);
+  row.classList.toggle("excluded", slot.excluded);
+  row.classList.toggle("needs-confirmation", !slot.excluded && !slot.confirmed);
+  row.classList.toggle("confirmed", !slot.excluded && slot.confirmed);
   row.classList.toggle(
     "special-row",
     slot.attention || slot.manual || slot.source_index === null || slot.target_index === null,
   );
   const button = row.querySelector(".review-confirm");
-  if (!button) return;
-  button.textContent = slot.confirmed ? "확인됨" : "이 대응 확인";
-  button.classList.toggle("done", slot.confirmed);
+  if (button) {
+    button.hidden = slot.excluded;
+    button.textContent = slot.confirmed ? "확인됨" : "이 대응 확인";
+    button.classList.toggle("done", slot.confirmed);
+  }
+  const exclude = row.querySelector(".review-exclude");
+  if (exclude) exclude.textContent = slot.excluded ? "다시 포함" : "결과에서 제외";
+  const target = row.querySelector(".target-cell");
+  if (target) target.draggable = !slot.excluded && slot.target_index !== null;
 }
 
 function makeReviewPage(emptyMessage, alt) {
@@ -888,7 +900,15 @@ function renderPageReview() {
       setReviewRowState(row, slot);
       renderReviewSummary();
     });
-    targetMeta.append(confirm);
+    const exclude = document.createElement("button");
+    exclude.type = "button";
+    exclude.className = "review-exclude";
+    exclude.addEventListener("click", () => {
+      slot.excluded = !slot.excluded;
+      setReviewRowState(row, slot);
+      renderReviewSummary();
+    });
+    targetMeta.append(exclude, confirm);
     target.append(targetMeta);
 
     if (slot.target_index !== null) {
@@ -1087,7 +1107,7 @@ async function saveHandwritingTransfer() {
   const base = (state.handwriting.target_name || "새-문서.pdf").replace(/\.pdf$/i, "");
   const outputExtension = handwritingOutputExtension();
   const requestedName = withoutKnownExtension(refs.handwritingOutputName.value.trim()) || `${base}-필기`;
-  const unconfirmedSlots = state.handwriting.plan.filter((slot) => !slot.confirmed);
+  const unconfirmedSlots = state.handwriting.plan.filter((slot) => !slot.excluded && !slot.confirmed);
   const unconfirmed = unconfirmedSlots.length;
   const unconfirmedPages = unconfirmedSlots.map((slot) => [
     slot.source_index === null ? "" : `원본 ${slot.source_index + 1}쪽`,

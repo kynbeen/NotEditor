@@ -82,6 +82,35 @@ class PagePlanTests(unittest.TestCase):
             with self.subTest(payload=payload), self.assertRaises(PagePlanError):
                 PagePlan.from_payload(3, 3, payload, automatic_match())
 
+    def test_payload_can_exclude_rows_without_losing_page_accounting(self):
+        payload = [
+            {"source_index": 0, "target_index": 0, "confirmed": True},
+            {"source_index": 1, "target_index": None, "confirmed": False, "excluded": True},
+            {"source_index": 2, "target_index": 1, "confirmed": True},
+            {"source_index": None, "target_index": 2, "confirmed": False, "excluded": True},
+        ]
+
+        plan = PagePlan.from_payload(3, 3, payload, automatic_match())
+
+        self.assertEqual(
+            [(slot.source_index, slot.target_index) for slot in plan.slots],
+            [(0, 0), (2, 1)],
+        )
+        self.assertEqual(plan.excluded_sources, (1,))
+        self.assertEqual(plan.excluded_targets, (2,))
+        self.assertEqual(plan.unconfirmed, ())
+
+    def test_payload_rejects_excluding_every_result_page(self):
+        payload = [
+            {"source_index": 0, "target_index": 0, "excluded": True},
+            {"source_index": 1, "target_index": None, "excluded": True},
+            {"source_index": 2, "target_index": 1, "excluded": True},
+            {"source_index": None, "target_index": 2, "excluded": True},
+        ]
+
+        with self.assertRaises(PagePlanError):
+            PagePlan.from_payload(3, 3, payload, automatic_match())
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -271,6 +271,13 @@ class StaticUiContractTests(unittest.TestCase):
         """어느 버전이 되는지는 화면에서 바로 보여야 한다. 6에서만 확인했다."""
         self.assertIn("GOODNOTES 6", self.html)
 
+    def test_page_review_can_exclude_and_restore_result_rows(self):
+        self.assertIn('exclude.className = "review-exclude"', self.js)
+        self.assertIn("targetMeta.append(exclude, confirm)", self.js)
+        self.assertIn('slot.excluded = !slot.excluded', self.js)
+        self.assertIn('slot.excluded ? "다시 포함" : "결과에서 제외"', self.js)
+        self.assertIn(".review-row.excluded", self.css)
+
     def test_saved_handwriting_name_follows_the_source_format(self):
         """확장자를 파일명에서 추측하지 않고 서버가 알려준 형식으로 정한다."""
         self.assertIn("source_format: response.source_format", self.js)
