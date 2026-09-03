@@ -624,8 +624,65 @@ class ComposerApi:
         except Exception as exc:
             return self._error(exc)
 
-    def add_paths(self, paths: list[str]) -> dict:
+    def transfer_handwriting_to_path(
+        self,
+        output_path: str,
+        page_plan: list[dict] | None = None,
+        allow_unconfirmed: bool = False,
+    ) -> dict:
         try:
+            inspection = self._handwriting_inspection
+            if inspection is None:
+                raise PdfComposerError("분석된 필기 정보가 없습니다.")
+            output = Path(output_path)
+            if page_plan is not None and all(isinstance(item, dict) for item in page_plan):
+                plan = PagePlan.from_payload(
+                    inspection.source_page_count,
+                    inspection.page_count,
+                    page_plan,
+                    inspection.match,
+                )
+                if plan.unconfirmed and not allow_unconfirmed:
+                    raise PdfComposerError(
+                        f"확인하지 않은 쪽 대응이 {len(plan.unconfirmed)}개 남아 있습니다."
+                    )
+                result = transfer_handwriting(
+                    self._handwriting_source,
+                    self._handwriting_target,
+                    output,
+                    plan_override=plan,
+                )
+                if plan.unconfirmed:
+                    result.setdefault("warnings", []).append(
+                        f"확인하지 않은 쪽 대응 {len(plan.unconfirmed)}개를 사용자 승인으로 저장했습니다: "
+                        + ", ".join(plan.unconfirmed_labels)
+                    )
+            elif page_plan is not None and getattr(inspection, "mode", None) == "rebuild":
+                from .page_match import match_from_target_mapping
+
+                match = match_from_target_mapping(
+                    inspection.source_page_count,
+                    page_plan,
+                    inspection.match,
+                )
+                result = transfer_handwriting(
+                    self._handwriting_source,
+                    self._handwriting_target,
+                    output,
+                    match_override=match,
+                )
+            else:
+                result = transfer_handwriting(
+                    self._handwriting_source, self._handwriting_target, output
+                )
+            return self._ok(cancelled=False, result=result)
+        except Exception as exc:
+            return self._error(exc)
+
+    def add_paths(self, paths: list[str] | str | Path) -> dict:
+        try:
+            if isinstance(paths, (str, Path)):
+                paths = [paths]
             resolved = [Path(path).expanduser().resolve() for path in paths]
             if self._input_root is not None:
                 outside = [path for path in resolved if not path_is_within(path, self._input_root)]
@@ -715,6 +772,13 @@ class ComposerApi:
             if not paths:
                 return self._ok(cancelled=True)
             output_path = paths if isinstance(paths, str) else paths[0]
+            result = self._session.build_pdf(order, output_path)
+            return self._ok(cancelled=False, result=result)
+        except Exception as exc:
+            return self._error(exc)
+
+    def build_result_to_path(self, order: list[dict], output_path: str) -> dict:
+        try:
             result = self._session.build_pdf(order, output_path)
             return self._ok(cancelled=False, result=result)
         except Exception as exc:

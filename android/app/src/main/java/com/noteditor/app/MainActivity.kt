@@ -50,7 +50,7 @@ class MainActivity : AppCompatActivity() {
                     copyUriToFile(uri, target)
                     copiedPaths.add(target.absolutePath)
                 }
-                val jsonPaths = JSONArray(copiedPaths).toString()
+                val jsonPaths = JSONArray().put(JSONArray(copiedPaths)).toString()
                 val api = pyApi ?: throw IllegalStateException("파이썬 엔진이 아직 초기화되지 않았습니다.")
                 val resultJson = api.callAttr("dispatch_call", "add_paths", jsonPaths).toString()
                 runOnUiThread { cb?.invoke(resultJson) }
