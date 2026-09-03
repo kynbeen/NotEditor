@@ -64,18 +64,18 @@ class NotEditorBridge(
     @JavascriptInterface
     fun saveResult(orderJson: String, suggestedName: String) {
         activity.runOnUiThread {
-            activity.saveResult(orderJson, suggestedName) { resultJson: String ->
+            activity.saveResult(orderJson, suggestedName, callback = { resultJson: String ->
                 dispatchCallback(resultJson)
-            }
+            })
         }
     }
 
     @JavascriptInterface
     fun saveHandwriting(suggestedName: String, pagePlanJson: String, allowUnconfirmed: Boolean) {
         activity.runOnUiThread {
-            activity.saveHandwriting(suggestedName, pagePlanJson, allowUnconfirmed) { resultJson: String ->
+            activity.saveHandwriting(suggestedName, pagePlanJson, allowUnconfirmed, callback = { resultJson: String ->
                 dispatchCallback(resultJson)
-            }
+            })
         }
     }
 
