@@ -60,3 +60,4 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: android/app/build/outputs/apk/debug/*.apk
+

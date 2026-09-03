@@ -12,6 +12,97 @@
     <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png" />
     <link rel="apple-touch-icon" sizes="180x180" href="icons/icon-180.png" />
     <link rel="stylesheet" href="app.css" />
+    <script>
+      (function() {
+        if (window.AndroidBridge && !window.pywebview) {
+          window.pywebview = {
+            api: {
+              health: function() {
+                return Promise.resolve(JSON.parse(window.AndroidBridge.callPython("health", "[]")));
+              },
+              startup_plan: function() {
+                return Promise.resolve(JSON.parse(window.AndroidBridge.callPython("startup_plan", "[]")));
+              },
+              handwriting_status: function() {
+                return Promise.resolve(JSON.parse(window.AndroidBridge.callPython("handwriting_status", "[]")));
+              },
+              handwriting_preview: function(pageIndex, sourceIndex) {
+                return Promise.resolve(JSON.parse(window.AndroidBridge.callPython("handwriting_preview", JSON.stringify([pageIndex, sourceIndex]))));
+              },
+              retry_handwriting_analysis: function() {
+                return Promise.resolve(JSON.parse(window.AndroidBridge.callPython("retry_handwriting_analysis", "[]")));
+              },
+              reset_handwriting_transfer: function() {
+                return Promise.resolve(JSON.parse(window.AndroidBridge.callPython("reset_handwriting_transfer", "[]")));
+              },
+              reset_documents: function() {
+                return Promise.resolve(JSON.parse(window.AndroidBridge.callPython("reset_documents", "[]")));
+              },
+              remove_document: function(documentId) {
+                return Promise.resolve(JSON.parse(window.AndroidBridge.callPython("remove_document", JSON.stringify([documentId]))));
+              },
+              page_image: function(documentId, pageIndex, kind) {
+                return Promise.resolve(JSON.parse(window.AndroidBridge.callPython("page_image", JSON.stringify([documentId, pageIndex, kind]))));
+              },
+              parse_range: function(value, pageCount) {
+                return Promise.resolve(JSON.parse(window.AndroidBridge.callPython("parse_range", JSON.stringify([value, pageCount]))));
+              },
+              log_client_error: function(message) {
+                return Promise.resolve(JSON.parse(window.AndroidBridge.callPython("log_client_error", JSON.stringify([message]))));
+              },
+              toggle_fullscreen: function() {
+                return Promise.resolve({ ok: true });
+              },
+              choose_pdfs: function() {
+                return new Promise(function(resolve) {
+                  window._androidFileCallback = function(res) {
+                    delete window._androidFileCallback;
+                    resolve(JSON.parse(res));
+                  };
+                  window.AndroidBridge.choosePdfs();
+                });
+              },
+              choose_handwriting_source: function() {
+                return new Promise(function(resolve) {
+                  window._androidFileCallback = function(res) {
+                    delete window._androidFileCallback;
+                    resolve(JSON.parse(res));
+                  };
+                  window.AndroidBridge.chooseHandwritingSource();
+                });
+              },
+              choose_handwriting_target: function() {
+                return new Promise(function(resolve) {
+                  window._androidFileCallback = function(res) {
+                    delete window._androidFileCallback;
+                    resolve(JSON.parse(res));
+                  };
+                  window.AndroidBridge.chooseHandwritingTarget();
+                });
+              },
+              save_result: function(order, suggestedName) {
+                return new Promise(function(resolve) {
+                  window._androidFileCallback = function(res) {
+                    delete window._androidFileCallback;
+                    resolve(JSON.parse(res));
+                  };
+                  window.AndroidBridge.saveResult(JSON.stringify(order), suggestedName || "merged.pdf");
+                });
+              },
+              save_handwriting_transfer: function(suggestedName, pagePlan, allowUnconfirmed) {
+                return new Promise(function(resolve) {
+                  window._androidFileCallback = function(res) {
+                    delete window._androidFileCallback;
+                    resolve(JSON.parse(res));
+                  };
+                  window.AndroidBridge.saveHandwriting(suggestedName || "result.sdocx", JSON.stringify(pagePlan || []), !!allowUnconfirmed);
+                });
+              }
+            }
+          };
+        }
+      })();
+    </script>
   </head>
   <body>
     <header class="topbar">

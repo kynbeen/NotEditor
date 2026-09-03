@@ -1,24 +1,13 @@
 package com.noteditor.app
 
-import android.os.Handler
-import android.os.Looper
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
-import com.chaquo.python.PyObject
-import com.chaquo.python.Python
-import org.json.JSONArray
 import org.json.JSONObject
 
 class NotEditorBridge(
     private val activity: MainActivity,
     private val webView: WebView
 ) {
-    private val mainHandler = Handler(Looper.getMainLooper())
-    private val pyInstance: Python by lazy { Python.getInstance() }
-    private val pyApi: PyObject by lazy {
-        val appModule = pyInstance.getModule("noteditor.app")
-        appModule.callAttr("ComposerApi")
-    }
 
     @JavascriptInterface
     fun ping(): String {
@@ -29,37 +18,69 @@ class NotEditorBridge(
     }
 
     @JavascriptInterface
-    fun chooseFiles() {
-        activity.runOnUiThread {
-            activity.launchFilePicker { paths ->
-                val jsonArray = JSONArray(paths)
-                val js = "if (window._onFilesChosen) { window._onFilesChosen(${jsonArray}); delete window._onFilesChosen; }"
-                webView.evaluateJavascript(js, null)
-            }
-        }
-    }
-
-    @JavascriptInterface
-    fun chooseSavePath(defaultName: String, extension: String) {
-        activity.runOnUiThread {
-            activity.launchSavePicker(defaultName) { saveUri ->
-                val js = "if (window._onSavePathChosen) { window._onSavePathChosen('${saveUri}'); delete window._onSavePathChosen; }"
-                webView.evaluateJavascript(js, null)
-            }
-        }
-    }
-
-    @JavascriptInterface
     fun callPython(methodName: String, argsJson: String): String {
         return try {
-            val result = pyApi.callAttr("dispatch_call", methodName, argsJson)
+            val result = activity.pyApi.callAttr("dispatch_call", methodName, argsJson)
             result.toString()
         } catch (e: Exception) {
             JSONObject().apply {
                 put("ok", false)
-                put("error", e.localizedMessage ?: "Python execution error")
+                put("error", e.localizedMessage ?: "Python 실행 오류")
             }.toString()
         }
     }
-}
 
+    @JavascriptInterface
+    fun choosePdfs() {
+        activity.runOnUiThread {
+            activity.choosePdfs { resultJson ->
+                dispatchCallback(resultJson)
+            }
+        }
+    }
+
+    @JavascriptInterface
+    fun chooseHandwritingSource() {
+        activity.runOnUiThread {
+            activity.chooseHandwritingSource { resultJson ->
+                dispatchCallback(resultJson)
+            }
+        }
+    }
+
+    @JavascriptInterface
+    fun chooseHandwritingTarget() {
+        activity.runOnUiThread {
+            activity.chooseHandwritingTarget { resultJson ->
+                dispatchCallback(resultJson)
+            }
+        }
+    }
+
+    @JavascriptInterface
+    fun saveResult(orderJson: String, suggestedName: String) {
+        activity.runOnUiThread {
+            activity.saveResult(orderJson, suggestedName) { resultJson ->
+                dispatchCallback(resultJson)
+            }
+        }
+    }
+
+    @JavascriptInterface
+    fun saveHandwriting(suggestedName: String, pagePlanJson: String, allowUnconfirmed: Boolean) {
+        activity.runOnUiThread {
+            activity.saveHandwriting(suggestedName, pagePlanJson, allowUnconfirmed) { resultJson ->
+                dispatchCallback(resultJson)
+            }
+        }
+    }
+
+    private fun dispatchCallback(resultJson: String) {
+        activity.runOnUiThread {
+            // 자바스크립트 따옴표 이스케이프 처리
+            val escaped = JSONObject.quote(resultJson)
+            val js = "if (window._androidFileCallback) { window._androidFileCallback($escaped); }"
+            webView.evaluateJavascript(js, null)
+        }
+    }
+}

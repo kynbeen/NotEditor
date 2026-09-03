@@ -622,6 +622,61 @@ class ComposerApi:
         except Exception as exc:
             return self._error(exc)
 
+    def set_handwriting_source_path(self, path: str) -> dict:
+        try:
+            self._set_handwriting_path("source", Path(path))
+            return self._ok(cancelled=False, **self._handwriting_status())
+        except Exception as exc:
+            return self._error(exc)
+
+    def set_handwriting_target_path(self, path: str) -> dict:
+        try:
+            self._set_handwriting_path("target", Path(path))
+            return self._ok(cancelled=False, **self._handwriting_status())
+        except Exception as exc:
+            return self._error(exc)
+
+    def build_result_to_path(self, order: list[dict], output_path: str) -> dict:
+        try:
+            result = self._session.build_pdf(order, Path(output_path))
+            return self._ok(cancelled=False, result=result)
+        except Exception as exc:
+            return self._error(exc)
+
+    def transfer_handwriting_to_path(
+        self,
+        output_path: str,
+        page_plan: list[dict] | None = None,
+        allow_unconfirmed: bool = False,
+    ) -> dict:
+        try:
+            inspection = self._inspection()
+            plan = None
+            if page_plan is not None and all(isinstance(item, dict) for item in page_plan):
+                plan = PagePlan.from_payload(
+                    inspection.source_page_count,
+                    inspection.page_count,
+                    page_plan,
+                    inspection.match,
+                )
+                if plan.unconfirmed and not allow_unconfirmed:
+                    raise PdfComposerError(
+                        f"확인하지 않은 쪽 대응이 {len(plan.unconfirmed)}개 남아 있습니다."
+                    )
+                result = transfer_handwriting(
+                    self._handwriting_source,
+                    self._handwriting_target,
+                    Path(output_path),
+                    plan_override=plan,
+                )
+            else:
+                result = transfer_handwriting(
+                    self._handwriting_source, self._handwriting_target, Path(output_path)
+                )
+            return self._ok(cancelled=False, result=result)
+        except Exception as exc:
+            return self._error(exc)
+
     def add_paths(self, paths: list[str]) -> dict:
         try:
             resolved = [Path(path).expanduser().resolve() for path in paths]
