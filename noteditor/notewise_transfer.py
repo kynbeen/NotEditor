@@ -399,7 +399,7 @@ def _validate_archive_structure(
         raise NotewiseTransferError("Notewise PDF ID와 ZIP 경로가 일치하지 않습니다.")
     if page_count != len(page_names):
         raise NotewiseTransferError("Notewise 메타데이터의 페이지 수가 일치하지 않습니다.")
-    import pymupdf
+    from . import pdf as pymupdf
 
     background_document = pymupdf.open(stream=expected_pdf, filetype="pdf")
     try:
@@ -656,7 +656,7 @@ def preview_notewise_transfer(
     source_index_override: int = -2,
 ) -> tuple[bytes, bytes, bytes, int]:
     """이전 배경과 새 배경, 그리고 그 위에 얹을 Notewise 필기 레이어를 그린다."""
-    import pymupdf
+    from . import pdf as pymupdf
 
     source = Path(source_notewise).expanduser().resolve()
     target = Path(target_pdf).expanduser().resolve()

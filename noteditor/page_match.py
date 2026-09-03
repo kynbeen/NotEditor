@@ -156,7 +156,7 @@ def match_from_target_mapping(
 
 def fingerprint(page, grid: int = _GRID) -> PageFingerprint:
     """본문 상자를 ``grid``×``grid`` 로 정규화한 밝기 벡터. 배율·여백에 영향받지 않는다."""
-    import pymupdf
+    from . import pdf as pymupdf
 
     box = ink_box(page, max_side=_FINGERPRINT_MAX_SIDE)
     if box is None or box.width < 1 or box.height < 1:

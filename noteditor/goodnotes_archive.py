@@ -280,7 +280,7 @@ def read_document(archive: ZipFile, members: dict[str, ZipInfo]) -> GoodnotesDoc
 
 def background_pdf(archive: ZipFile, document: GoodnotesDocument) -> bytes:
     """쪽 순서대로 배경을 모아 하나의 PDF로 만든다. 쪽 맞추기의 원본이 된다."""
-    import pymupdf
+    from . import pdf as pymupdf
 
     opened: dict[str, object] = {}
     try:

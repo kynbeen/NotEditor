@@ -63,7 +63,7 @@ def open_pdf(
     pdf: bytes | Path, label: str, *, error: type[Exception] = HandwritingTransferError
 ):
     """PDF를 열고 필기 이전에 쓸 수 없는 문서는 그 자리에서 거른다. 호출자가 닫는다."""
-    import pymupdf
+    from . import pdf as pymupdf
 
     try:
         if isinstance(pdf, Path):
@@ -119,7 +119,7 @@ def build_background_pdf(
     필기 좌표는 절대 건드리지 않고 배경만 옮기는 것이 이 프로젝트의 전제다. 그래서 결과
     PDF의 모든 쪽은 원본 캔버스와 같은 크기여야 하고, 아니면 내보내지 않고 거절한다.
     """
-    import pymupdf
+    from . import pdf as pymupdf
 
     source_geometry = geometry(source_document)
     expected = [
@@ -158,7 +158,7 @@ def build_planned_background_pdf(
     대상 쪽은 대상 PDF가 유일한 기준이다. 원본에만 남은 필기 쪽에만 옛 배경을 쓴다.
     ``alignment`` 는 호출 호환을 위해 받지만 배경을 자르는 데 사용하지 않는다.
     """
-    import pymupdf
+    from . import pdf as pymupdf
 
     _ = alignment
     source_geometry = geometry(source_document)

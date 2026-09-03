@@ -152,7 +152,7 @@ def _planned_background_bytes(
 
 def _thumbnail(background: bytes, notes: bytes | None, canvas: tuple[float, float]) -> bytes:
     """서재에 보이는 미리보기. 새 배경 첫 쪽 위에 그 쪽 필기를 얹는다."""
-    import pymupdf
+    from . import pdf as pymupdf
 
     with pymupdf.open(stream=background, filetype="pdf") as document:
         page = document[0]
@@ -349,7 +349,7 @@ def _validate_output(
     expected_stroke_counts: list[int],
 ) -> None:
     """저장한 파일을 다시 읽어 배경·캔버스·필기 수를 함께 확인한다."""
-    import pymupdf
+    from . import pdf as pymupdf
 
     with _open_archive(path) as archive:
         members = safe_members(archive)
@@ -396,7 +396,7 @@ def preview_goodnotes_transfer(
     source_index_override: int = -2,
 ) -> tuple[bytes, bytes, bytes, int]:
     """이전 배경과 새 배경, 그리고 그 위에 얹을 Goodnotes 필기 레이어를 그린다."""
-    import pymupdf
+    from . import pdf as pymupdf
 
     source, target = _checked_paths(source_goodnotes, target_pdf)
     inspection = inspection or inspect_goodnotes_transfer(source, target)

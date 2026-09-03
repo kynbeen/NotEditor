@@ -587,7 +587,7 @@ def preview_transfer(
                     page = target_document[page_index]
                     rect = page.rect
                     scale = min(max_side / max(rect.width, rect.height), 3.0)
-                    import pymupdf
+                    from . import pdf as pymupdf
 
                     png = page.get_pixmap(
                         matrix=pymupdf.Matrix(scale, scale), alpha=False

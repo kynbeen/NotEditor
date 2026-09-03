@@ -177,7 +177,7 @@ def rebuild_handwriting(
     excluded_targets: Sequence[int] = (),
 ) -> dict:
     """``match`` 순서대로 PDF와 페이지 목록을 재조립해 새 SDOCX를 저장한다."""
-    import pymupdf
+    from . import pdf as pymupdf
 
     source = Path(source_sdocx).expanduser().resolve()
     target = Path(target_pdf).expanduser().resolve()

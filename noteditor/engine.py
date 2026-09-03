@@ -153,7 +153,7 @@ class ComposerSession:
         if path.suffix.lower() != ".pdf" or not path.is_file():
             raise PdfComposerError(f"PDF 파일이 아닙니다: {path.name}")
 
-        import pymupdf
+        from . import pdf as pymupdf
         import pikepdf
 
         try:
@@ -250,7 +250,7 @@ class ComposerSession:
 
     @staticmethod
     def _render_page_image(source: SourceDocument, page_index: int, kind: str) -> str:
-        import pymupdf
+        from . import pdf as pymupdf
 
         max_side = 260 if kind == "thumbnail" else 1500
         with pymupdf.open(source.path) as document:

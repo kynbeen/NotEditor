@@ -18,6 +18,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from statistics import median
 
+from . import pdf as pymupdf
+
 _INK_MAX_SIDE = 1200
 _INK_TOLERANCE = 6
 _SAMPLE_LIMIT = 12
@@ -113,8 +115,6 @@ def _sample_indices(page_count: int, limit: int) -> list[int]:
 
 def ink_box(page, max_side: int = _INK_MAX_SIDE):
     """페이지에서 잉크가 있는 영역을 PDF 좌표로 돌려준다. 빈 쪽이면 ``None``."""
-    import pymupdf
-
     rect = page.rect
     if rect.is_empty or rect.is_infinite:
         return None
@@ -230,8 +230,6 @@ def estimate_alignment(
 
 def place_page(output_document, source_page, target_document, page_index: int, alignment: Alignment):
     """원본 페이지 크기의 새 쪽을 만들고 대상 PDF 쪽을 변환해 그린다."""
-    import pymupdf
-
     source_rect = source_page.rect
     page = output_document.new_page(width=source_rect.width, height=source_rect.height)
     destination = pymupdf.Rect(*alignment.place(target_document[page_index].rect))
@@ -246,8 +244,6 @@ def build_aligned_pdf(
     output_path: str | Path,
 ) -> Path:
     """대상 PDF를 원본 페이지 좌표계에 맞춰 다시 그린 PDF를 만든다."""
-    import pymupdf
-
     output = Path(output_path)
     with pymupdf.open() as document:
         for index in range(source_document.page_count):
@@ -265,8 +261,6 @@ def render_comparison(
     target_page_index: int | None = None,
 ) -> tuple[bytes, bytes]:
     """같은 크기로 렌더링한 (원본 배경, 정렬된 새 배경) PNG 쌍을 돌려준다."""
-    import pymupdf
-
     source_page = source_document[page_index]
     target_index = page_index if target_page_index is None else target_page_index
     target_page = target_document[target_index]
