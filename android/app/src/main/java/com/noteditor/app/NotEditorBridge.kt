@@ -37,7 +37,7 @@ class NotEditorBridge(
     @JavascriptInterface
     fun choosePdfs() {
         activity.runOnUiThread {
-            activity.choosePdfs { resultJson: String ->
+            activity.choosePdfs { resultJson ->
                 dispatchCallback(resultJson)
             }
         }
@@ -46,7 +46,7 @@ class NotEditorBridge(
     @JavascriptInterface
     fun chooseHandwritingSource() {
         activity.runOnUiThread {
-            activity.chooseHandwritingSource { resultJson: String ->
+            activity.chooseHandwritingSource { resultJson ->
                 dispatchCallback(resultJson)
             }
         }
@@ -55,7 +55,7 @@ class NotEditorBridge(
     @JavascriptInterface
     fun chooseHandwritingTarget() {
         activity.runOnUiThread {
-            activity.chooseHandwritingTarget { resultJson: String ->
+            activity.chooseHandwritingTarget { resultJson ->
                 dispatchCallback(resultJson)
             }
         }
@@ -64,18 +64,18 @@ class NotEditorBridge(
     @JavascriptInterface
     fun saveResult(orderJson: String, suggestedName: String) {
         activity.runOnUiThread {
-            activity.saveResult(orderJson, suggestedName, callback = { resultJson: String ->
+            activity.saveResult(orderJson, suggestedName) { resultJson ->
                 dispatchCallback(resultJson)
-            })
+            }
         }
     }
 
     @JavascriptInterface
     fun saveHandwriting(suggestedName: String, pagePlanJson: String, allowUnconfirmed: Boolean) {
         activity.runOnUiThread {
-            activity.saveHandwriting(suggestedName, pagePlanJson, allowUnconfirmed, callback = { resultJson: String ->
+            activity.saveHandwriting(suggestedName, pagePlanJson, allowUnconfirmed) { resultJson ->
                 dispatchCallback(resultJson)
-            })
+            }
         }
     }
 

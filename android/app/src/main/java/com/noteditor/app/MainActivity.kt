@@ -1,12 +1,12 @@
 package com.noteditor.app
 
-import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import com.chaquo.python.PyObject
 import com.chaquo.python.Python
@@ -15,8 +15,6 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
-import java.io.InputStream
-import java.io.OutputStream
 
 class MainActivity : AppCompatActivity() {
 
@@ -51,6 +49,7 @@ class MainActivity : AppCompatActivity() {
                     val target = File(cacheDir, name)
                     copyUriToFile(uri, target)
                     copiedPaths.add(target.absolutePath)
+                }
                 val jsonPaths = JSONArray(copiedPaths).toString()
                 val api = pyApi ?: throw IllegalStateException("파이썬 엔진이 아직 초기화되지 않았습니다.")
                 val resultJson = api.callAttr("dispatch_call", "add_paths", jsonPaths).toString()
@@ -251,7 +250,7 @@ class MainActivity : AppCompatActivity() {
             pyApi = appModule.callAttr("ComposerApi")
         } catch (t: Throwable) {
             t.printStackTrace()
-            androidx.appcompat.app.AlertDialog.Builder(this)
+            AlertDialog.Builder(this)
                 .setTitle("엔진 초기화 오류")
                 .setMessage("NotEditor 파이썬 엔진을 시작하는 중 오류가 발생했습니다:\n\n" + t.stackTraceToString())
                 .setPositiveButton("확인", null)
