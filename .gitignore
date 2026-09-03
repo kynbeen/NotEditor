@@ -12,3 +12,10 @@ tmp/
 output/
 assets/icon.ico
 noteditor/_version.py
+
+# Android build artifacts
+.gradle/
+android/.gradle/
+android/build/
+android/app/build/
+android/app/src/main/python/

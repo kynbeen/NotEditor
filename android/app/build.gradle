@@ -53,13 +53,15 @@ chaquopy {
             install "pillow"
         }
     }
-    sourceSets {
-        getByName("main") {
-            // 루트의 파이썬 코어 패키지를 직접 링크 (단일 소스)
-            srcDir("../..")
-        }
-    }
 }
+
+// 루트의 noteditor 파이썬 패키지를 빌드 시 자동으로 동기화 (단일 소스 유지)
+tasks.register('syncPythonSource', Copy) {
+    from '../../noteditor'
+    into 'src/main/python/noteditor'
+}
+
+preBuild.dependsOn syncPythonSource
 
 dependencies {
     implementation 'androidx.core:core-ktx:1.13.1'
