@@ -62,5 +62,5 @@ dependencies {
     implementation 'androidx.webkit:webkit:1.11.0'
 
     // MuPDF 공식 Android 렌더링 엔진 AAR
-    implementation 'com.artifex.mupdf:fitz-android:1.24.9'
+    implementation 'com.artifex.mupdf:fitz:1.24.4'
 }
