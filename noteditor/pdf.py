@@ -30,6 +30,7 @@ Matrix = _backend.Matrix
 FileDataError = getattr(_backend, "FileDataError", Exception)
 csGRAY = getattr(_backend, "csGRAY", None)
 csRGB = getattr(_backend, "csRGB", None)
+Point = getattr(_backend, "Point", None)
 
 
 def __getattr__(name: str):
@@ -37,5 +38,5 @@ def __getattr__(name: str):
     return getattr(_backend, name)
 
 
-__all__ = ["open", "Rect", "Matrix", "FileDataError", "csGRAY", "csRGB"]
+__all__ = ["open", "Rect", "Matrix", "Point", "FileDataError", "csGRAY", "csRGB"]
 

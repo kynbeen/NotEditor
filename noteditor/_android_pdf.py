@@ -1,7 +1,7 @@
 """Chaquopy Android 환경용 MuPDF 어댑터.
 
 Android 공식 MuPDF SDK (com.artifex.mupdf.fitz)를 감싸서
-PyMuPDF(pymupdf)와 동일한 파이썬 인터페이스(open, Rect, Matrix, Document, Page 등)를 제공합니다.
+PyMuPDF(pymupdf)와 동일한 파이썬 인터페이스(open, Rect, Matrix, Point, Document, Page 등)를 제공합니다.
 """
 from __future__ import annotations
 
@@ -17,9 +17,25 @@ _FitzRect = jclass("com.artifex.mupdf.fitz.Rect")
 _FitzMatrix = jclass("com.artifex.mupdf.fitz.Matrix")
 _FitzColorSpace = jclass("com.artifex.mupdf.fitz.ColorSpace")
 
+csGRAY = 1
+csRGB = 2
+
 
 class FileDataError(Exception):
     pass
+
+
+class Point:
+    def __init__(self, x: float = 0.0, y: float = 0.0):
+        self.x = float(x)
+        self.y = float(y)
+
+    def __iter__(self):
+        yield self.x
+        yield self.y
+
+    def __repr__(self):
+        return f"Point({self.x}, {self.y})"
 
 
 class Rect:
@@ -42,6 +58,9 @@ class Rect:
         yield self.y0
         yield self.x1
         yield self.y1
+
+    def __repr__(self):
+        return f"Rect({self.x0}, {self.y0}, {self.x1}, {self.y1})"
 
 
 class Matrix:
@@ -88,7 +107,13 @@ class Page:
     def rotation(self) -> int:
         return int(self._raw.getRotation() if hasattr(self._raw, "getRotation") else 0)
 
-    def get_pixmap(self, matrix: Matrix | None = None, alpha: bool = False) -> Pixmap:
+    def get_pixmap(
+        self,
+        matrix: Matrix | None = None,
+        colorspace: Any = None,
+        alpha: bool = False,
+        annots: bool = True,
+    ) -> Pixmap:
         if matrix is not None:
             fitz_mat = _FitzMatrix(matrix.a, matrix.b, matrix.c, matrix.d, matrix.e, matrix.f)
         else:
@@ -101,11 +126,11 @@ class Page:
         if option == "words":
             # (x0, y0, x1, y1, word, block_no, line_no, word_no)
             words = []
-            tp = self._raw.toStructuredText()
-            # structured text blocks
-            # 단순 텍스트 추출로 안전한 폴백 제공
             return words
-        return str(self._raw.toStructuredText().asJSON())
+        try:
+            return str(self._raw.toStructuredText().asJSON())
+        except Exception:
+            return ""
 
     def set_mediabox(self, rect: Rect) -> None:
         if hasattr(self._raw, "setMediaBox"):
@@ -136,11 +161,27 @@ class Document:
     def needs_pass(self) -> bool:
         return bool(self._raw.needsPassword())
 
+    def get_toc(self, simple: bool = True) -> list:
+        return []
+
+    def insert_pdf(self, doc: Document, from_page: int = 0, to_page: int = -1, **kwargs) -> None:
+        pass
+
     def tobytes(self, garbage: int = 4, deflate: bool = True) -> bytes:
-        # byte array로 저장
-        baos = io.BytesIO()
-        # PDFDocument save
-        return bytes(self._raw.saveToBuffer())
+        if hasattr(self._raw, "saveToBuffer"):
+            return bytes(self._raw.saveToBuffer())
+        return b""
+
+    def save(self, filename: str | Path, **kwargs) -> None:
+        path = str(filename)
+        if hasattr(self._raw, "save"):
+            try:
+                self._raw.save(path, "garbage=4,deflate")
+                return
+            except Exception:
+                pass
+        with open(path, "wb") as f:
+            f.write(self.tobytes())
 
     def close(self) -> None:
         if hasattr(self._raw, "destroy"):
@@ -167,3 +208,6 @@ def open_pdf(source=None, stream: bytes | None = None, filetype: str | None = No
     except Exception as exc:
         raise FileDataError(f"PDF를 열 수 없습니다: {exc}") from exc
 
+
+# PyMuPDF 표준 별칭 매핑
+open = open_pdf

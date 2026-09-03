@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Any
 
 # pikepdf의 nanobind 열거형 등록은 첫 import가 두 스레드에서 겹치면 프로세스를 종료할 수 있다.
-# 분석 작업 스레드를 만들기 전에 주 스레드에서 한 번 초기화한다.
 try:
     import pikepdf  # noqa: F401
 except ImportError:
