@@ -307,6 +307,36 @@ class GoodnotesTransferTest(unittest.TestCase):
             moved_strokes[0].points[0][1], original_strokes[0].points[0][1] + 50
         )
 
+    def test_new_page_with_a_different_aspect_gets_its_own_canvas(self) -> None:
+        with zipfile.ZipFile(FIXTURE) as archive:
+            original_background = background_pdf(
+                archive, read_document(archive, safe_members(archive))
+            )
+        with pymupdf.open() as target:
+            with pymupdf.open(stream=original_background, filetype="pdf") as original:
+                target.insert_pdf(original)
+            second = target.new_page(width=720, height=405)
+            second.insert_text((50, 80), "New widescreen page", fontsize=20)
+            target.save(self.target)
+
+        inspection = inspect_goodnotes_transfer(FIXTURE, self.target)
+        self.assertEqual(inspection.match.target_only, (1,))
+
+        transfer_goodnotes_handwriting(FIXTURE, self.target, self.output)
+        with zipfile.ZipFile(self.output) as archive:
+            document = read_document(archive, safe_members(archive))
+            rebuilt = background_pdf(archive, document)
+            self.assertAlmostEqual(document.pages[0].canvas[0], CANVAS[0], places=3)
+            self.assertAlmostEqual(document.pages[0].canvas[1], CANVAS[1], places=3)
+            self.assertAlmostEqual(
+                document.pages[1].canvas[0] / document.pages[1].canvas[1],
+                720 / 405,
+                places=3,
+            )
+        with pymupdf.open(stream=rebuilt, filetype="pdf") as result:
+            self.assertAlmostEqual(result[1].rect.width, 720, places=3)
+            self.assertAlmostEqual(result[1].rect.height, 405, places=3)
+
     def test_writes_the_members_the_app_writes(self) -> None:
         """앱이 쓰는 항목을 빠뜨리면 가져오기가 통째로 거절된다."""
         _make_pdf(self.target, "Slide", pages=1)
