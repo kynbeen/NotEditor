@@ -10,7 +10,10 @@ from typing import Any
 
 # pikepdf의 nanobind 열거형 등록은 첫 import가 두 스레드에서 겹치면 프로세스를 종료할 수 있다.
 # 분석 작업 스레드를 만들기 전에 주 스레드에서 한 번 초기화한다.
-import pikepdf  # noqa: F401
+try:
+    import pikepdf  # noqa: F401
+except ImportError:
+    pikepdf = None
 
 from . import __version__
 from .engine import ComposerSession, PdfComposerError
@@ -617,61 +620,6 @@ class ComposerApi:
             else:
                 result = transfer_handwriting(
                     self._handwriting_source, self._handwriting_target, output
-                )
-            return self._ok(cancelled=False, result=result)
-        except Exception as exc:
-            return self._error(exc)
-
-    def set_handwriting_source_path(self, path: str) -> dict:
-        try:
-            self._set_handwriting_path("source", Path(path))
-            return self._ok(cancelled=False, **self._handwriting_status())
-        except Exception as exc:
-            return self._error(exc)
-
-    def set_handwriting_target_path(self, path: str) -> dict:
-        try:
-            self._set_handwriting_path("target", Path(path))
-            return self._ok(cancelled=False, **self._handwriting_status())
-        except Exception as exc:
-            return self._error(exc)
-
-    def build_result_to_path(self, order: list[dict], output_path: str) -> dict:
-        try:
-            result = self._session.build_pdf(order, Path(output_path))
-            return self._ok(cancelled=False, result=result)
-        except Exception as exc:
-            return self._error(exc)
-
-    def transfer_handwriting_to_path(
-        self,
-        output_path: str,
-        page_plan: list[dict] | None = None,
-        allow_unconfirmed: bool = False,
-    ) -> dict:
-        try:
-            inspection = self._inspection()
-            plan = None
-            if page_plan is not None and all(isinstance(item, dict) for item in page_plan):
-                plan = PagePlan.from_payload(
-                    inspection.source_page_count,
-                    inspection.page_count,
-                    page_plan,
-                    inspection.match,
-                )
-                if plan.unconfirmed and not allow_unconfirmed:
-                    raise PdfComposerError(
-                        f"확인하지 않은 쪽 대응이 {len(plan.unconfirmed)}개 남아 있습니다."
-                    )
-                result = transfer_handwriting(
-                    self._handwriting_source,
-                    self._handwriting_target,
-                    Path(output_path),
-                    plan_override=plan,
-                )
-            else:
-                result = transfer_handwriting(
-                    self._handwriting_source, self._handwriting_target, Path(output_path)
                 )
             return self._ok(cancelled=False, result=result)
         except Exception as exc:

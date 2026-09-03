@@ -20,7 +20,11 @@ class NotEditorBridge(
     @JavascriptInterface
     fun callPython(methodName: String, argsJson: String): String {
         return try {
-            val result = activity.pyApi.callAttr("dispatch_call", methodName, argsJson)
+            val api = activity.pyApi ?: return JSONObject().apply {
+                put("ok", false)
+                put("error", "파이썬 엔진이 아직 초기화되지 않았습니다.")
+            }.toString()
+            val result = api.callAttr("dispatch_call", methodName, argsJson)
             result.toString()
         } catch (e: Exception) {
             JSONObject().apply {

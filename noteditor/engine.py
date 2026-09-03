@@ -154,7 +154,6 @@ class ComposerSession:
             raise PdfComposerError(f"PDF 파일이 아닙니다: {path.name}")
 
         from . import pdf as pymupdf
-        import pikepdf
 
         try:
             with pymupdf.open(path) as document:
@@ -178,7 +177,11 @@ class ComposerSession:
         except Exception as exc:
             raise PdfComposerError(f"PDF를 읽을 수 없습니다: {path.name} ({exc})") from exc
 
+        has_forms = False
+        has_attachments = False
+        has_signatures = False
         try:
+            import pikepdf
             with pikepdf.Pdf.open(path) as pdf:
                 root = pdf.Root
                 has_forms = _has_key(root, "/AcroForm")
@@ -186,15 +189,16 @@ class ComposerSession:
                     _has_key(root, "/Names")
                     and _has_key(root.Names, "/EmbeddedFiles")
                 )
-                has_signatures = False
                 if has_forms:
                     for field in getattr(root.AcroForm, "Fields", []):
                         if str(field.get("/FT", "")) == "/Sig":
                             has_signatures = True
                             break
-        except pikepdf.PasswordError as exc:
-            raise EncryptedPdfError(f"암호화된 PDF는 지원하지 않습니다: {path.name}") from exc
+        except ImportError:
+            pass
         except Exception as exc:
+            if "PasswordError" in type(exc).__name__:
+                raise EncryptedPdfError(f"암호화된 PDF는 지원하지 않습니다: {path.name}") from exc
             raise PdfComposerError(f"PDF 구조를 확인할 수 없습니다: {path.name} ({exc})") from exc
 
         return SourceDocument(
@@ -305,7 +309,12 @@ class ComposerSession:
         }
 
     def _compose(self, refs: list[PageRef], output: Path) -> list[str]:
-        import pikepdf
+        from . import pdf as pymupdf
+
+        try:
+            import pikepdf
+        except ImportError:
+            pikepdf = None
 
         warnings: list[str] = []
         selected_by_source: dict[str, list[int]] = {source_id: [] for source_id in self._source_order}
@@ -317,6 +326,22 @@ class ComposerSession:
         )
         os.close(temporary_fd)
         temporary = Path(temporary_name)
+
+        if pikepdf is None:
+            # Android 등 pikepdf 부재 환경: MuPDF 백엔드로 고속 병합
+            try:
+                with pymupdf.open() as built:
+                    for ref in refs:
+                        source = self._source(ref.document_id)
+                        with pymupdf.open(source.path) as src_doc:
+                            built.insert_pdf(src_doc, from_page=ref.page_index, to_page=ref.page_index)
+                    built.save(str(temporary))
+                os.replace(temporary, output)
+                return warnings
+            except Exception as exc:
+                temporary.unlink(missing_ok=True)
+                raise PdfComposerError(f"PDF 병합에 실패했습니다: {exc}") from exc
+
         source_pdfs: list = []
         try:
             destination = pikepdf.Pdf.new()

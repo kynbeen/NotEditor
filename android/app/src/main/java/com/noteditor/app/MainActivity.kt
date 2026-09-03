@@ -21,7 +21,7 @@ import java.io.OutputStream
 class MainActivity : AppCompatActivity() {
 
     private lateinit var webView: WebView
-    lateinit var pyApi: PyObject
+    var pyApi: PyObject? = null
         private set
 
     private var genericFileCallback: ((String) -> Unit)? = null
@@ -51,9 +51,9 @@ class MainActivity : AppCompatActivity() {
                     val target = File(cacheDir, name)
                     copyUriToFile(uri, target)
                     copiedPaths.add(target.absolutePath)
-                }
                 val jsonPaths = JSONArray(copiedPaths).toString()
-                val resultJson = pyApi.callAttr("dispatch_call", "add_paths", jsonPaths).toString()
+                val api = pyApi ?: throw IllegalStateException("파이썬 엔진이 아직 초기화되지 않았습니다.")
+                val resultJson = api.callAttr("dispatch_call", "add_paths", jsonPaths).toString()
                 runOnUiThread { cb?.invoke(resultJson) }
             } catch (e: Exception) {
                 val errJson = JSONObject().apply {
@@ -72,7 +72,7 @@ class MainActivity : AppCompatActivity() {
         val cb = genericFileCallback
         genericFileCallback = null
         if (uri == null) {
-            val statusJson = pyApi.callAttr("dispatch_call", "handwriting_status", "[]").toString()
+            val statusJson = pyApi?.callAttr("dispatch_call", "handwriting_status", "[]")?.toString() ?: "{}"
             cb?.invoke(statusJson)
             return@registerForActivityResult
         }
@@ -83,7 +83,8 @@ class MainActivity : AppCompatActivity() {
                 val target = File(cacheDir, name)
                 copyUriToFile(uri, target)
                 val argsJson = JSONArray().put(target.absolutePath).toString()
-                val resultJson = pyApi.callAttr("dispatch_call", "set_handwriting_source_path", argsJson).toString()
+                val api = pyApi ?: throw IllegalStateException("파이썬 엔진이 아직 초기화되지 않았습니다.")
+                val resultJson = api.callAttr("dispatch_call", "set_handwriting_source_path", argsJson).toString()
                 runOnUiThread { cb?.invoke(resultJson) }
             } catch (e: Exception) {
                 val errJson = JSONObject().apply {
@@ -102,7 +103,7 @@ class MainActivity : AppCompatActivity() {
         val cb = genericFileCallback
         genericFileCallback = null
         if (uri == null) {
-            val statusJson = pyApi.callAttr("dispatch_call", "handwriting_status", "[]").toString()
+            val statusJson = pyApi?.callAttr("dispatch_call", "handwriting_status", "[]")?.toString() ?: "{}"
             cb?.invoke(statusJson)
             return@registerForActivityResult
         }
@@ -113,7 +114,8 @@ class MainActivity : AppCompatActivity() {
                 val target = File(cacheDir, name)
                 copyUriToFile(uri, target)
                 val argsJson = JSONArray().put(target.absolutePath).toString()
-                val resultJson = pyApi.callAttr("dispatch_call", "set_handwriting_target_path", argsJson).toString()
+                val api = pyApi ?: throw IllegalStateException("파이썬 엔진이 아직 초기화되지 않았습니다.")
+                val resultJson = api.callAttr("dispatch_call", "set_handwriting_target_path", argsJson).toString()
                 runOnUiThread { cb?.invoke(resultJson) }
             } catch (e: Exception) {
                 val errJson = JSONObject().apply {
@@ -146,7 +148,8 @@ class MainActivity : AppCompatActivity() {
             try {
                 val tempOutput = File(cacheDir, "merged_output_${System.currentTimeMillis()}.pdf")
                 val args = JSONArray().put(JSONArray(order)).put(tempOutput.absolutePath).toString()
-                val resultRaw = pyApi.callAttr("dispatch_call", "build_result_to_path", args).toString()
+                val api = pyApi ?: throw IllegalStateException("파이썬 엔진이 아직 초기화되지 않았습니다.")
+                val resultRaw = api.callAttr("dispatch_call", "build_result_to_path", args).toString()
                 val resultObj = JSONObject(resultRaw)
 
                 if (resultObj.optBoolean("ok", false)) {
@@ -198,7 +201,8 @@ class MainActivity : AppCompatActivity() {
                     put(allowUnconfirmed)
                 }.toString()
 
-                val resultRaw = pyApi.callAttr("dispatch_call", "transfer_handwriting_to_path", pyArgs).toString()
+                val api = pyApi ?: throw IllegalStateException("파이썬 엔진이 아직 초기화되지 않았습니다.")
+                val resultRaw = api.callAttr("dispatch_call", "transfer_handwriting_to_path", pyArgs).toString()
                 val resultObj = JSONObject(resultRaw)
 
                 if (resultObj.optBoolean("ok", false)) {
@@ -219,14 +223,6 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Chaquopy 파이썬 런타임 초기화
-        if (!Python.isStarted()) {
-            Python.start(AndroidPlatform(this))
-        }
-        val py = Python.getInstance()
-        val appModule = py.getModule("noteditor.app")
-        pyApi = appModule.callAttr("ComposerApi")
-
         webView = WebView(this)
         setContentView(webView)
 
@@ -244,6 +240,23 @@ class MainActivity : AppCompatActivity() {
 
         // JavaScript 브리지 등록
         webView.addJavascriptInterface(NotEditorBridge(this, webView), "AndroidBridge")
+
+        // Chaquopy 파이썬 런타임 초기화
+        try {
+            if (!Python.isStarted()) {
+                Python.start(AndroidPlatform(this))
+            }
+            val py = Python.getInstance()
+            val appModule = py.getModule("noteditor.app")
+            pyApi = appModule.callAttr("ComposerApi")
+        } catch (t: Throwable) {
+            t.printStackTrace()
+            androidx.appcompat.app.AlertDialog.Builder(this)
+                .setTitle("엔진 초기화 오류")
+                .setMessage("NotEditor 파이썬 엔진을 시작하는 중 오류가 발생했습니다:\n\n" + t.stackTraceToString())
+                .setPositiveButton("확인", null)
+                .show()
+        }
 
         // 웹 UI 로드
         webView.loadUrl("file:///android_asset/index.html")
