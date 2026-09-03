@@ -40,8 +40,8 @@ android {
 
     sourceSets {
         main {
-            // 루트의 웹 UI 자산을 별도 복사 없이 직접 공유
-            assets.srcDirs = ['../../noteditor/static']
+            assets.srcDirs = ['src/main/assets']
+            python.srcDirs = ['src/main/python']
         }
     }
 }
@@ -54,14 +54,6 @@ chaquopy {
         }
     }
 }
-
-// 루트의 noteditor 파이썬 패키지를 빌드 시 자동으로 동기화 (단일 소스 유지)
-tasks.register('syncPythonSource', Copy) {
-    from '../../noteditor'
-    into 'src/main/python/noteditor'
-}
-
-preBuild.dependsOn syncPythonSource
 
 dependencies {
     implementation 'androidx.core:core-ktx:1.13.1'

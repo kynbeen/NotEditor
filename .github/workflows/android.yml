@@ -37,6 +37,13 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
 
+      - name: Sync Sources into Android Project
+        run: |
+          mkdir -p android/app/src/main/python/noteditor
+          cp -r noteditor/* android/app/src/main/python/noteditor/
+          mkdir -p android/app/src/main/assets
+          cp -r noteditor/static/* android/app/src/main/assets/
+
       - name: Build Android Debug APK
         working-directory: android
         run: |
@@ -53,4 +60,3 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: android/app/build/outputs/apk/debug/*.apk
-
