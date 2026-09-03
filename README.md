@@ -306,4 +306,7 @@ NotEditor/                 Git 저장소 루트
     **그리지 않을 뿐 저장 결과에는 그대로 남습니다.**
 - 원본 파일은 읽기 전용으로 열며 사용자가 요청한 결과 외에는 영구 파일을 만들지 않습니다.
 
+## 라이선스
+
+이 프로젝트는 [MIT License](LICENSE)에 따라 배포됩니다.
 제3자 코드 고지는 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)를 확인하세요.
