@@ -38,3 +38,4 @@ def __getattr__(name: str):
 
 
 __all__ = ["open", "Rect", "Matrix", "FileDataError", "csGRAY", "csRGB"]
+

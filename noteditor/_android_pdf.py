@@ -166,3 +166,4 @@ def open_pdf(source=None, stream: bytes | None = None, filetype: str | None = No
         return Document(raw)
     except Exception as exc:
         raise FileDataError(f"PDF를 열 수 없습니다: {exc}") from exc
+
