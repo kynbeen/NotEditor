@@ -95,7 +95,9 @@ class Pixmap:
             w = int(self._raw.getWidth())
             h = int(self._raw.getHeight())
             pixels = bytes(self._raw.getPixels())
-            img = Image.frombytes("RGBA", (w, h), pixels)
+            n = int(self._raw.getNumberOfComponents() if hasattr(self._raw, "getNumberOfComponents") else 3)
+            mode = "RGB" if n == 3 else ("RGBA" if n == 4 else "L")
+            img = Image.frombytes(mode, (w, h), pixels)
             buf = io.BytesIO()
             img.save(buf, format="PNG")
             return buf.getvalue()
@@ -140,9 +142,6 @@ class Page:
             if getter:
                 cs = getter()
 
-        # MuPDF Android Pixmap.getPixels requires alpha=True (RGBA)
-        alpha = True
-
         try:
             raw = self._raw.toPixmap(fitz_mat, cs, alpha, annots)
         except Exception:
@@ -168,16 +167,12 @@ class Page:
 
 
 class Document:
-    def __init__(self, raw_doc, path: str | None = None):
+    def __init__(self, raw_doc):
         self._raw = raw_doc
-        self.path = path
-        self._pypdf_writer = None
 
     @property
     def page_count(self) -> int:
-        if self._pypdf_writer is not None and len(self._pypdf_writer.pages) > 0:
-            return len(self._pypdf_writer.pages)
-        return int(self._raw.countPages()) if self._raw else 0
+        return int(self._raw.countPages())
 
     def __len__(self) -> int:
         return self.page_count
@@ -193,87 +188,33 @@ class Document:
 
     @property
     def needs_pass(self) -> bool:
-        return bool(self._raw.needsPassword()) if self._raw else False
+        return bool(self._raw.needsPassword())
 
     def get_toc(self, simple: bool = True) -> list:
         return []
 
     def insert_pdf(self, doc: Document, from_page: int = 0, to_page: int = -1, **kwargs) -> None:
-        if to_page < 0:
-            to_page = doc.page_count - 1
-
-        if hasattr(self._raw, "graftPage") and hasattr(getattr(doc, "_raw", None), "countPages"):
-            try:
-                for p in range(from_page, to_page + 1):
-                    self._raw.graftPage(int(self._raw.countPages()), doc._raw, p)
-                return
-            except Exception:
-                pass
-
-        try:
-            import pypdf
-
-            if self._pypdf_writer is None:
-                self._pypdf_writer = pypdf.PdfWriter()
-
-            src_path = getattr(doc, "path", None)
-            if src_path and Path(src_path).exists():
-                reader = pypdf.PdfReader(str(src_path))
-                for p in range(from_page, to_page + 1):
-                    self._pypdf_writer.add_page(reader.pages[p])
-            else:
-                buf = doc.tobytes()
-                if buf:
-                    reader = pypdf.PdfReader(io.BytesIO(buf))
-                    for p in range(from_page, to_page + 1):
-                        self._pypdf_writer.add_page(reader.pages[p])
-        except Exception:
-            pass
+        pass
 
     def tobytes(self, garbage: int = 4, deflate: bool = True) -> bytes:
-        if self._pypdf_writer is not None and len(self._pypdf_writer.pages) > 0:
-            buf = io.BytesIO()
-            self._pypdf_writer.write(buf)
-            return buf.getvalue()
         if hasattr(self._raw, "saveToBuffer"):
-            try:
-                return bytes(self._raw.saveToBuffer())
-            except Exception:
-                pass
+            return bytes(self._raw.saveToBuffer())
         return b""
 
     def save(self, filename: str | Path, **kwargs) -> None:
         path = str(filename)
-        if self._pypdf_writer is not None and len(self._pypdf_writer.pages) > 0:
-            with open(path, "wb") as f:
-                self._pypdf_writer.write(f)
-            return
-
         if hasattr(self._raw, "save"):
             try:
                 self._raw.save(path, "garbage=4,deflate")
-                if Path(path).exists() and Path(path).stat().st_size > 300:
-                    return
+                return
             except Exception:
                 pass
-            try:
-                self._raw.save(path)
-                if Path(path).exists() and Path(path).stat().st_size > 300:
-                    return
-            except Exception:
-                pass
-
-        buf = self.tobytes()
-        if buf:
-            with open(path, "wb") as f:
-                f.write(buf)
+        with open(path, "wb") as f:
+            f.write(self.tobytes())
 
     def close(self) -> None:
         if hasattr(self._raw, "destroy"):
-            try:
-                self._raw.destroy()
-            except Exception:
-                pass
+            self._raw.destroy()
 
     def __enter__(self):
         return self
@@ -288,14 +229,11 @@ def open_pdf(source=None, stream: bytes | None = None, filetype: str | None = No
             raw = _FitzDocument.openDocument(stream)
             return Document(raw)
         if source is None:
-            try:
-                raw = _FitzPDFDocument()
-            except Exception:
-                raw = None
+            raw = _FitzPDFDocument()
             return Document(raw)
         path = str(source) if isinstance(source, (str, Path)) else str(source)
         raw = _FitzDocument.openDocument(path)
-        return Document(raw, path=path)
+        return Document(raw)
     except Exception as exc:
         raise FileDataError(f"PDF를 열 수 없습니다: {exc}") from exc
 

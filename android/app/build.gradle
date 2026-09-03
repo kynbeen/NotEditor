@@ -52,7 +52,6 @@ chaquopy {
         version = "3.12"
         pip {
             install "pillow"
-            install "pypdf"
         }
     }
 }
@@ -65,23 +64,4 @@ dependencies {
 
     // MuPDF 공식 Android 렌더링 엔진 AAR
     implementation 'com.artifex.mupdf:fitz:1.24.4'
-}
-
-tasks.register('syncPython', Sync) {
-    from "${rootDir}/../noteditor"
-    into "src/main/python/noteditor"
-}
-tasks.register('syncAssets', Sync) {
-    from "${rootDir}/../noteditor/static"
-    into "src/main/assets/www"
-}
-preBuild.dependsOn 'syncPython', 'syncAssets'
-
-afterEvaluate {
-    tasks.matching { it.name.contains("PythonSources") }.configureEach {
-        dependsOn 'syncPython'
-    }
-    tasks.matching { it.name.contains("Assets") && it.name != "syncAssets" }.configureEach {
-        dependsOn 'syncAssets'
-    }
 }
