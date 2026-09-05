@@ -1,0 +1,46 @@
+# NotEditor 현재 상태
+
+**기준일:** 2026-09-05
+
+이 문서는 현재 구현과 검증 상태를 찾는 시작점이다. 날짜가 붙은 `docs/specs/`와
+`docs/handoffs/`는 당시 결정과 증거를 보존하는 변경 이력이며, 후속 문서가 승계할 수 있다.
+현재 사용자 동작은 README와 코드·테스트가 기준이고, 남은 작업은 `docs/backlog.md`가 기준이다.
+
+## 현재 구현
+
+- Windows 데스크톱, 로컬 웹, Docker 웹과 Android 프로젝트가 같은 Python 엔진과 UI를 공유한다.
+- PDF 합치기는 문서 추가·쪽 번호 순서를 기본값으로 삼고, 결과 패널에서 선택한 쪽을
+  마우스나 터치로 자유롭게 재정렬해 그 순서로 저장한다.
+- Samsung Notes, Notewise, Goodnotes 6 필기 이전은 쪽 추가·삭제, 대상 쪽 수동 재정렬,
+  쪽 제외와 PDF 비율·여백 변환을 지원한다.
+- 필기 대상 쪽은 드래그 또는 위·아래 이동 버튼으로 재배치한다. 제외된 행은 재정렬에
+  참여하지 않으며, 바뀐 대응은 확인을 다시 받는다.
+- Goodnotes의 새 JSON 목차 입력과 결과 쪽 연결을 추가했다. PDF 비율·획 수 검증을 유지하며,
+  제외된 쪽을 가리키는 목차는 저장 전에 거절한다. 기존 목차 보존·병합은 아직 미완료다.
+- Android는 플랫폼 `PdfRenderer`로 읽기·렌더링하고 BSD-3-Clause `pypdf`로 PDF를 조립한다.
+- 배경 배치와 비교 미리보기는 PDF의 CropBox·원점 이동·직각 회전을 유지한다. Android 조립과
+  데스크톱 배치를 원본 렌더링 픽셀에 대조하는 회귀 테스트를 포함한다.
+- 데스크톱·웹은 PyMuPDF를 유지한다. 개인 사용과 배포의 라이선스 조건은 README에 구분한다.
+- Windows와 Android 버전은 모두 깃 태그 또는 현재 `git describe`에서 파생한다.
+
+## 자동 검증
+
+- Python 단위·HTTP·정적 UI 테스트
+- JavaScript 구문 검사
+- Android Python 소스·UI 자동 동기화
+- Android Kotlin 컴파일, JVM 단위 테스트와 debug APK clean build
+- 태그 릴리스의 Android release keystore secret 확인과 서명 APK 빌드
+
+## 아직 닫히지 않은 검증
+
+- 실제 태블릿에서 SDOCX·Notewise·Goodnotes 결과 가져오기와 펜·지우개 편집 왕복
+- Goodnotes 다중 페이지·가져온 PDF·스키마 24 실제 샘플
+- 페이지 크기가 다를 때 정렬 잔차를 거절하거나 경고할 절대 품질 기준
+- Flexcil `.flex`와 편집 가능한 PDF 주석 실제 샘플
+- Android 실제 기기에서 파일 선택, 미리보기, 세 형식 저장의 종단 간 확인
+- Goodnotes 목차의 실제 앱 이동·순서 확인, 기존 목차 보존과 JSON 병합 정책 적용
+- Goodnotes 목차 입력과 쪽 이동 버튼의 브라우저 시각·상호작용 검증
+- summary.ai 합치기 인계에서도 자유 순서를 추적·재현할지에 대한 계약 범위 결정
+
+완료되지 않은 실기 검증은 자동 테스트 통과로 대신 닫지 않는다. 입력 원본은 항상 읽기 전용으로
+다루고 결과는 새 파일로 저장한다.

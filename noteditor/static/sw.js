@@ -1,10 +1,11 @@
 "use strict";
 
-const CACHE_NAME = "noteditor-shell-v3";
+const CACHE_NAME = "noteditor-shell-v6";
 const APP_SHELL = [
   "/index.html",
   "/app.css",
   "/app.js",
+  "/vendor/sortable-1.15.7.min.js",
   "/manifest.webmanifest",
   "/icons/icon-180.png",
   "/icons/icon-192.png",

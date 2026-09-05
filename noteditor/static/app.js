@@ -9,18 +9,23 @@ const state = {
   mergePlan: null,
   sourceReview: null,
   handwritingOutputNameDirty: false,
+  outlineRevision: 0,
   active: null,
   thumbnailCache: new Map(),
   thumbnailCacheBytes: 0,
   imageInflight: new Map(),
   sourceThumbnailObserver: null,
+  resultThumbnailObserver: null,
+  resultSortable: null,
   previewObserver: null,
   previewScrollFrame: 0,
   bridgeReady: false,
   bridgeFailed: false,
-  runtime: window.location.hash === "#desktop" || !window.location.protocol.startsWith("http")
-    ? "desktop"
-    : "web",
+  runtime: window.AndroidBridge
+    ? "android"
+    : (window.location.hash === "#desktop" || !window.location.protocol.startsWith("http")
+      ? "desktop"
+      : "web"),
   handwriting: {
     source_name: null, source_format: null, target_name: null,
     ready: false, inspection: null, plan: [],
@@ -36,10 +41,15 @@ let handwritingPollTimer = 0;
 
 const $ = (selector) => document.querySelector(selector);
 const refs = {
+  goodnotesOutlineOptions: $("#goodnotesOutlineOptions"),
+  outlineJsonInput: $("#outlineJsonInput"), outlineJsonText: $("#outlineJsonText"),
+  outlineJsonStatus: $("#outlineJsonStatus"),
+  chooseOutlineJson: $("#chooseOutlineJsonButton"), clearOutlineJson: $("#clearOutlineJsonButton"),
   add: $("#addPdfButton"), emptyAdd: $("#emptyAddButton"), save: $("#saveButton"),
   mergeOutputName: $("#mergeOutputName"),
-  sourceEmpty: $("#sourceEmpty"), sourceHeading: $("#sourceHeading"),
+  resetOrder: $("#resetOrderButton"), sourceEmpty: $("#sourceEmpty"), sourceHeading: $("#sourceHeading"),
   documentList: $("#documentList"), documentCount: $("#documentCount"),
+  resultEmpty: $("#resultEmpty"), resultList: $("#resultList"), pageCount: $("#pageCount"),
   selectionSummary: $("#selectionSummary"), previewEmpty: $("#previewEmpty"),
   previewStage: $("#previewStage"), previewPages: $("#previewPages"),
   previewEyebrow: $("#previewEyebrow"), previewHeading: $("#previewHeading"),
@@ -211,12 +221,84 @@ const webApi = {
   handwriting_preview: (pageIndex, sourceIndex) => fetchJson(`/api/handwriting/preview?page_index=${pageIndex}&source_index=${sourceIndex}`),
   reset_handwriting_transfer: () => fetchJson("/api/handwriting/reset", { method: "POST" }),
   reset_documents: () => fetchJson("/api/documents/reset", { method: "POST" }),
-  save_handwriting_transfer: (suggestedName, pagePlan, allowUnconfirmed = false) => downloadWebResult("/api/handwriting/export", {
+  save_handwriting_transfer: (suggestedName, pagePlan, allowUnconfirmed = false, outlineEntries = null, outlinePageBasis = "target_pdf") => downloadWebResult("/api/handwriting/export", {
     suggested_name: suggestedName, page_plan: pagePlan, allow_unconfirmed: allowUnconfirmed,
+    outline_entries: outlineEntries, outline_page_basis: outlinePageBasis,
   }),
 };
 
+function parseAndroidResponse(value) {
+  try {
+    return JSON.parse(value);
+  } catch (_error) {
+    return { ok: false, error: "안드로이드 앱 응답을 읽을 수 없습니다." };
+  }
+}
+
+function callAndroidPython(method, ...args) {
+  return Promise.resolve(parseAndroidResponse(
+    window.AndroidBridge.callPython(method, JSON.stringify(args)),
+  ));
+}
+
+let androidFileOperation = null;
+
+function callAndroidFileOperation(start) {
+  if (androidFileOperation) {
+    return Promise.resolve({ ok: false, error: "열려 있는 파일 선택 또는 저장을 먼저 마쳐 주세요." });
+  }
+  return new Promise((resolve) => {
+    androidFileOperation = resolve;
+    window._androidFileCallback = (value) => {
+      const finish = androidFileOperation;
+      androidFileOperation = null;
+      window._androidFileCallback = null;
+      finish(parseAndroidResponse(value));
+    };
+    try {
+      start();
+    } catch (error) {
+      androidFileOperation = null;
+      window._androidFileCallback = null;
+      resolve({ ok: false, error: error.message || String(error) });
+    }
+  });
+}
+
+const androidApi = window.AndroidBridge ? {
+  health: () => callAndroidPython("health"),
+  startup_plan: () => callAndroidPython("startup_plan"),
+  log_client_error: (message) => callAndroidPython("log_client_error", message),
+  choose_pdfs: () => callAndroidFileOperation(() => window.AndroidBridge.choosePdfs()),
+  remove_document: (documentId) => callAndroidPython("remove_document", documentId),
+  page_image: (documentId, pageIndex, kind) => callAndroidPython("page_image", documentId, pageIndex, kind),
+  parse_range: (value, pageCount) => callAndroidPython("parse_range", value, pageCount),
+  save_result: (order, suggestedName) => callAndroidFileOperation(
+    () => window.AndroidBridge.saveResult(JSON.stringify(order), suggestedName),
+  ),
+  choose_handwriting_source: () => callAndroidFileOperation(
+    () => window.AndroidBridge.chooseHandwritingSource(),
+  ),
+  choose_handwriting_target: () => callAndroidFileOperation(
+    () => window.AndroidBridge.chooseHandwritingTarget(),
+  ),
+  handwriting_status: () => callAndroidPython("handwriting_status"),
+  retry_handwriting_analysis: () => callAndroidPython("retry_handwriting_analysis"),
+  handwriting_preview: (pageIndex, sourceIndex) => callAndroidPython(
+    "handwriting_preview", pageIndex, sourceIndex,
+  ),
+  reset_handwriting_transfer: () => callAndroidPython("reset_handwriting_transfer"),
+  reset_documents: () => callAndroidPython("reset_documents"),
+  save_handwriting_transfer: (suggestedName, pagePlan, allowUnconfirmed = false, outlineEntries = null, outlinePageBasis = "target_pdf") => (
+    callAndroidFileOperation(() => window.AndroidBridge.saveHandwriting(
+      suggestedName, JSON.stringify(pagePlan), allowUnconfirmed,
+      JSON.stringify(outlineEntries), outlinePageBasis,
+    ))
+  ),
+} : null;
+
 function requireApi() {
+  if (androidApi) return androidApi;
   const bridge = window.pywebview?.api;
   if (bridge) return bridge;
   if (state.runtime === "web") return webApi;
@@ -285,8 +367,8 @@ function applyStartupPlan(plan) {
   state.selected = new Set(state.order.map(refKey));
   // 계획이 문서·쪽 순서 그대로면 사용자가 순서를 손댄 것이 아니다. 무조건 dirty 로 두면
   // 그 뒤 선택을 바꿀 때마다 새 쪽이 결과 목록 맨 끝으로 밀린다(빈 계획이 특히 그렇다).
-  state.orderDirty = state.order.map(refKey).join(" ")
-    !== defaultOrder().map(refKey).join(" ");
+  state.orderDirty = state.order.map(refKey).join("\u0000")
+    !== defaultOrder().map(refKey).join("\u0000");
   state.mergeOutputNameDirty = true;
   refs.mergeOutputName.value = withoutKnownExtension(plan.output_name || "merged.pdf");
   refs.mergeOutputName.title = `summary.ai 지정 저장 경로: ${plan.output_path}`;
@@ -580,6 +662,7 @@ function showTool(tool) {
 
 function renderHandwritingStatus(error = "") {
   const status = state.handwriting;
+  refs.goodnotesOutlineOptions.hidden = status.source_format !== "goodnotes";
   const analysis = status.analysis || {};
   refs.handwritingSourceName.textContent = status.source_name || ".sdocx · .notewise · .goodnotes 파일 선택";
   refs.handwritingTargetName.textContent = status.target_name || ".pdf 파일 선택";
@@ -703,6 +786,11 @@ function setReviewRowState(row, slot) {
   if (exclude) exclude.textContent = slot.excluded ? "다시 포함" : "결과에서 제외";
   const target = row.querySelector(".target-cell");
   if (target) target.draggable = !slot.excluded && slot.target_index !== null;
+  row.querySelectorAll(".review-move").forEach((button) => {
+    const index = Number(row.dataset.slotIndex);
+    button.disabled = slot.excluded || slot.target_index === null
+      || reviewMoveDestination(index, Number(button.dataset.direction)) === -1;
+  });
 }
 
 function makeReviewPage(emptyMessage, alt) {
@@ -739,9 +827,14 @@ function describeChangedPages(before, after) {
 
 function shiftedTargetPlan(from, to) {
   const before = state.handwriting.plan;
+  const active = before.map((slot, index) => slot.excluded ? -1 : index)
+    .filter((index) => index !== -1);
   const targets = before.map((slot) => slot.target_index);
-  const [moved] = targets.splice(from, 1);
-  targets.splice(to, 0, moved);
+  const moving = active.map((index) => targets[index]);
+  if (!active.includes(from) || !active.includes(to)) return before;
+  const [moved] = moving.splice(active.indexOf(from), 1);
+  moving.splice(active.indexOf(to), 0, moved);
+  active.forEach((index, position) => { targets[index] = moving[position]; });
   const priorByPair = new Map(before.map((slot) => [
     `${slot.source_index}:${slot.target_index}`, slot,
   ]));
@@ -749,6 +842,7 @@ function shiftedTargetPlan(from, to) {
     const target = targets[index];
     const same = priorByPair.get(`${prior.source_index}:${target}`);
     return {
+      ...prior,
       source_index: prior.source_index,
       target_index: target,
       confirmed: same ? same.confirmed : false,
@@ -756,6 +850,14 @@ function shiftedTargetPlan(from, to) {
       attention: same ? same.attention : true,
     };
   }).filter((slot) => slot.source_index !== null || slot.target_index !== null);
+}
+
+function reviewMoveDestination(index, direction) {
+  const plan = state.handwriting.plan;
+  for (let next = index + direction; next >= 0 && next < plan.length; next += direction) {
+    if (!plan[next].excluded) return next;
+  }
+  return -1;
 }
 
 function confirmReviewReorder(message) {
@@ -780,8 +882,9 @@ function confirmReviewReorder(message) {
 async function moveReviewTarget(from, to) {
   if (!Number.isInteger(from) || !Number.isInteger(to) || from === to) return;
   const before = state.handwriting.plan;
-  if (!before[from] || before[from].target_index === null) return;
-  const next = shiftedTargetPlan(from, Math.max(0, Math.min(to, before.length - 1)));
+  if (!before[from] || before[from].excluded || before[from].target_index === null
+    || !before[to] || before[to].excluded) return;
+  const next = shiftedTargetPlan(from, to);
   const changed = describeChangedPages(before, next);
   const relationshipCount = next.filter((slot, index) => (
     before[index]?.source_index !== slot.source_index
@@ -794,6 +897,7 @@ async function moveReviewTarget(from, to) {
   if (details && !await confirmReviewReorder(
     `${relationshipCount}개 대응이 달라집니다 (${details}). 변경된 행은 다시 확인해야 합니다. 계속할까요?`,
   )) return;
+  if (state.handwriting.plan !== before) return;
   state.handwriting.plan = next;
   renderPageReview();
 }
@@ -905,9 +1009,29 @@ function renderPageReview() {
     exclude.className = "review-exclude";
     exclude.addEventListener("click", () => {
       slot.excluded = !slot.excluded;
-      setReviewRowState(row, slot);
+      refs.handwritingReviewRows.querySelectorAll(".review-row").forEach((reviewRow) => {
+        setReviewRowState(reviewRow, state.handwriting.plan[Number(reviewRow.dataset.slotIndex)]);
+      });
       renderReviewSummary();
     });
+    if (slot.target_index !== null) {
+      const moves = document.createElement("span");
+      moves.className = "review-moves";
+      for (const [direction, icon, label] of [[-1, "\u2191", "위로 이동"], [1, "\u2193", "아래로 이동"]]) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "review-move";
+        button.dataset.direction = String(direction);
+        button.textContent = icon;
+        button.title = `새 PDF ${slot.target_index + 1}쪽 ${label}`;
+        button.setAttribute("aria-label", button.title);
+        button.addEventListener("click", () => {
+          void moveReviewTarget(index, reviewMoveDestination(index, direction));
+        });
+        moves.append(button);
+      }
+      targetMeta.append(moves);
+    }
     targetMeta.append(exclude, confirm);
     target.append(targetMeta);
 
@@ -999,6 +1123,9 @@ function applyHandwritingResponse(response) {
     return false;
   }
   const previous = state.handwriting;
+  if (previous.source_name !== (response.source_name || null)
+    || previous.target_name !== (response.target_name || null)
+    || response.source_format !== "goodnotes") clearOutlineJson();
   const selectionChanged = previous.source_name !== (response.source_name || null)
     || previous.target_name !== (response.target_name || null);
   const becameReady = !previous.ready && Boolean(response.ready);
@@ -1102,6 +1229,41 @@ async function resetDocuments() {
   } finally { setBusy(false); }
 }
 
+function clearOutlineJson() {
+  state.outlineRevision += 1;
+  refs.outlineJsonText.value = "";
+  refs.outlineJsonInput.value = "";
+  refs.outlineJsonStatus.textContent = "";
+}
+
+async function loadOutlineJson() {
+  const file = refs.outlineJsonInput.files?.[0];
+  if (!file) return;
+  const revision = ++state.outlineRevision;
+  try {
+    const text = await file.text();
+    if (revision !== state.outlineRevision) return;
+    const entries = parseOutlineJson(text);
+    refs.outlineJsonText.value = text;
+    refs.outlineJsonStatus.textContent = `${file.name} · ${entries?.length || 0}개 항목`;
+  } catch (error) {
+    if (revision === state.outlineRevision) refs.outlineJsonStatus.textContent = error.message;
+  } finally {
+    if (revision === state.outlineRevision) refs.outlineJsonInput.value = "";
+  }
+}
+
+function parseOutlineJson(text) {
+  if (!text.trim()) return null;
+  const entries = JSON.parse(text);
+  if (!Array.isArray(entries) || !entries.length || entries.some((entry) => (
+    !entry || typeof entry !== "object" || Object.keys(entry).sort().join(",") !== "page,title"
+    || !Number.isSafeInteger(entry.page) || entry.page < 1
+    || typeof entry.title !== "string" || !entry.title.trim()
+  ))) throw new Error("목차는 양의 정수 page와 비어 있지 않은 title을 가진 항목의 배열이어야 합니다.");
+  return entries;
+}
+
 async function saveHandwritingTransfer() {
   if (!state.handwriting.ready) return;
   const base = (state.handwriting.target_name || "새-문서.pdf").replace(/\.pdf$/i, "");
@@ -1118,10 +1280,14 @@ async function saveHandwritingTransfer() {
   )) return;
   setBusy(true, "필기와 형광펜을 새 PDF로 옮기는 중…");
   try {
+    const outlineEntries = state.handwriting.source_format === "goodnotes"
+      ? parseOutlineJson(refs.outlineJsonText.value) : null;
     const response = await callApi("save_handwriting_transfer",
       `${requestedName}${outputExtension}`,
       state.handwriting.plan,
       unconfirmed > 0,
+      outlineEntries,
+      document.querySelector('input[name="outlinePageBasis"]:checked').value,
     );
     if (!response.ok) throw new Error(response.error);
     if (response.cancelled) return;
@@ -1140,8 +1306,29 @@ function defaultOrder() {
 }
 
 function syncOrder() {
-  // 수동 순서변경은 제거했다. 문서를 추가한 순서, 각 PDF의 원래 쪽 순서가 곧 결과 순서다.
-  state.order = defaultOrder();
+  const valid = new Set(defaultOrder().map(refKey));
+  state.order = state.order.filter((ref) => valid.has(refKey(ref)));
+  if (!state.orderDirty) {
+    state.order = defaultOrder();
+    return;
+  }
+  const present = new Set(state.order.map(refKey));
+  defaultOrder().forEach((ref) => {
+    if (!present.has(refKey(ref))) insertNearOwnPages(ref);
+  });
+}
+
+function insertNearOwnPages(ref) {
+  const positions = [];
+  state.order.forEach((item, index) => {
+    if (item.document_id === ref.document_id) positions.push(index);
+  });
+  if (!positions.length) {
+    state.order.push(ref);
+    return;
+  }
+  const before = positions.find((index) => state.order[index].page_index > ref.page_index);
+  state.order.splice(before === undefined ? positions[positions.length - 1] + 1 : before, 0, ref);
 }
 
 function formatRanges(indices) {
@@ -1243,13 +1430,14 @@ function showInlineImageError(node, placeholder, retry) {
 async function loadThumbnailNode(node) {
   if (!node?.isConnected || node.dataset.imageLoaded === "true" || node.dataset.imageLoading === "true") return;
   node.dataset.imageLoading = "true";
-  const placeholder = node.querySelector(".image-placeholder");
+  const placeholder = node.querySelector(".image-placeholder, .result-image-placeholder");
   try {
     const pageIndex = Number(node.dataset.pageIndex);
     const src = await loadImage(node.dataset.documentId, pageIndex, "thumbnail");
     if (!node.isConnected) return;
     const image = new Image();
-    image.alt = `${pageIndex + 1}쪽`;
+    image.className = node.classList.contains("result-item") ? "result-thumb" : "";
+    image.alt = node.classList.contains("result-item") ? "" : `${pageIndex + 1}쪽`;
     image.src = src;
     placeholder?.replaceWith(image);
     node.dataset.imageLoaded = "true";
@@ -1327,6 +1515,7 @@ function setDocumentSelection(doc, indices) {
   updateDocumentSelectionUi(doc);
   updatePreviewSelection();
   updateSourceReviewSelection();
+  renderResult();
   renderSummary();
 }
 
@@ -1369,6 +1558,7 @@ function togglePage(doc, page, tile) {
   updatePreviewSelection(key);
   updateSourceReviewSelection(key);
   showPreview(doc.id, page.index, "원본 미리보기");
+  renderResult();
   renderSummary();
 }
 
@@ -1387,6 +1577,9 @@ function setActivePreview(docId, pageIndex, origin = "전체 페이지 미리보
   refs.previewMeta.textContent = `${doc.name} · ${pageIndex + 1}쪽`;
   refs.previewPages.querySelectorAll(".preview-page.active").forEach((node) => node.classList.remove("active"));
   previewNode(docId, pageIndex)?.classList.add("active");
+  refs.resultList.querySelectorAll(".result-item").forEach((node) => {
+    node.classList.toggle("active", node.dataset.key === pageKey(docId, pageIndex));
+  });
 }
 
 async function loadPreviewPage(node) {
@@ -1511,6 +1704,51 @@ function showPreview(docId, pageIndex, origin = "원본 미리보기") {
   node.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
+function renderResult() {
+  state.resultThumbnailObserver?.disconnect();
+  state.resultSortable?.destroy();
+  state.resultSortable = null;
+  state.resultThumbnailObserver = lazyImageObserver(refs.resultList);
+  refs.pageCount.textContent = `${state.order.length}쪽`;
+  refs.resultEmpty.hidden = state.order.length > 0;
+  refs.resultList.hidden = state.order.length === 0;
+  refs.resultList.replaceChildren();
+  refs.resetOrder.disabled = !state.orderDirty || state.order.length < 2;
+
+  state.order.forEach((ref) => {
+    const doc = documentById(ref.document_id);
+    if (!doc) return;
+    const item = document.createElement("li");
+    item.className = `result-item${state.active?.document_id === ref.document_id && state.active?.page_index === ref.page_index ? " active" : ""}`;
+    item.dataset.key = refKey(ref);
+    item.dataset.documentId = ref.document_id;
+    item.dataset.pageIndex = String(ref.page_index);
+    item.innerHTML = `<span class="result-image-placeholder"></span><div class="result-label"><strong>${escapeHtml(doc.name)}</strong><span>원본 ${ref.page_index + 1}쪽</span></div><button class="drag-handle" type="button" aria-label="${escapeHtml(doc.name)} ${ref.page_index + 1}쪽 순서 이동" title="끌어서 순서 변경">⠿</button>`;
+    item.addEventListener("click", () => showPreview(ref.document_id, ref.page_index, "결과 미리보기"));
+    refs.resultList.append(item);
+    state.resultThumbnailObserver.observe(item);
+  });
+
+  if (state.order.length > 1 && window.Sortable) {
+    state.resultSortable = window.Sortable.create(refs.resultList, {
+      animation: 140,
+      handle: ".drag-handle",
+      ghostClass: "dragging",
+      chosenClass: "drag-chosen",
+      delay: 120,
+      delayOnTouchOnly: true,
+      touchStartThreshold: 4,
+      onEnd: ({ oldIndex, newIndex }) => {
+        if (!Number.isInteger(oldIndex) || !Number.isInteger(newIndex) || oldIndex === newIndex) return;
+        const [moved] = state.order.splice(oldIndex, 1);
+        state.order.splice(newIndex, 0, moved);
+        state.orderDirty = true;
+        renderResult();
+      },
+    });
+  }
+}
+
 function renderSummary() {
   refs.selectionSummary.textContent = !state.bridgeReady
     ? (state.bridgeFailed ? "바로가기로 다시 실행해 주세요" : "앱 연결 중…")
@@ -1522,7 +1760,7 @@ function renderSummary() {
   refs.resetDocuments.disabled = !state.bridgeReady || state.documents.length === 0 || state.mergePlan?.mode === "review";
 }
 
-function render() { renderDocuments(); renderPreviewPages(); renderSummary(); }
+function render() { renderDocuments(); renderPreviewPages(); renderResult(); renderSummary(); }
 
 async function addPdfs() {
   setBusy(true, "PDF를 확인하는 중…");
@@ -1603,10 +1841,22 @@ refs.reviewInkToggle.addEventListener("change", () => {
 });
 refs.chooseHandwritingSource.addEventListener("click", () => chooseHandwriting("source"));
 refs.chooseHandwritingTarget.addEventListener("click", () => chooseHandwriting("target"));
+refs.chooseOutlineJson.addEventListener("click", () => refs.outlineJsonInput.click());
+refs.outlineJsonInput.addEventListener("change", loadOutlineJson);
+refs.clearOutlineJson.addEventListener("click", clearOutlineJson);
+refs.outlineJsonText.addEventListener("input", () => {
+  state.outlineRevision += 1;
+  refs.outlineJsonStatus.textContent = "";
+});
 refs.retryHandwriting.addEventListener("click", retryHandwritingAnalysis);
 refs.resetHandwriting.addEventListener("click", resetHandwritingTransfer);
 refs.resetDocuments.addEventListener("click", resetDocuments);
 refs.saveHandwriting.addEventListener("click", saveHandwritingTransfer);
+refs.resetOrder.addEventListener("click", () => {
+  state.orderDirty = false;
+  state.order = defaultOrder();
+  renderResult();
+});
 refs.previewStage.addEventListener("scroll", () => {
   if (state.previewScrollFrame) return;
   state.previewScrollFrame = requestAnimationFrame(updatePreviewFromScroll);
@@ -1626,7 +1876,7 @@ window.addEventListener("pywebviewready", initializeBridge);
 setBridgeState(false, false);
 showTool("merge");
 renderHandwritingStatus();
-if (window.pywebview?.api || state.runtime === "web") initializeBridge();
+if (window.AndroidBridge || window.pywebview?.api || state.runtime === "web") initializeBridge();
 setTimeout(() => {
   if (!state.bridgeReady) setBridgeState(false, true);
 }, 6000);

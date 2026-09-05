@@ -16,11 +16,16 @@
 
 [CmdletBinding()]
 param(
+    [switch]$Silent,
     [switch]$Wizard,
     [string]$Repository = "kynbeen/NotEditor"
 )
 
 $ErrorActionPreference = "Stop"
+
+if ($Silent -and $Wizard) {
+    throw "-Silent와 -Wizard는 함께 사용할 수 없습니다."
+}
 
 # Windows PowerShell 5.1 은 TLS 1.2 를 기본으로 켜지 않아서 GitHub 연결이 끊긴다.
 try {
@@ -74,8 +79,20 @@ if ($Downloaded.Length -ne $Asset.size) {
     Remove-Item -LiteralPath $Destination -Force -ErrorAction SilentlyContinue
     throw "내려받은 파일 크기가 릴리스와 다릅니다. 네트워크 문제일 수 있으니 다시 실행하세요."
 }
+
+$Stream = [IO.File]::OpenRead($Destination)
+try {
+    $First = $Stream.ReadByte()
+    $Second = $Stream.ReadByte()
+} finally {
+    $Stream.Dispose()
+}
+if ($First -ne 0x4D -or $Second -ne 0x5A) {
+    Remove-Item -LiteralPath $Destination -Force -ErrorAction SilentlyContinue
+    throw "내려받은 파일이 Windows 실행 파일(MZ)이 아닙니다. 릴리스 파일을 확인하세요."
+}
 # 인터넷에서 받은 표시를 지워 SmartScreen 경고 없이 실행되게 한다. 방금 이 스크립트가
-# GitHub 릴리스에서 직접 받아 크기까지 확인한 파일이다.
+# GitHub 릴리스에서 직접 받아 크기와 실행 파일 헤더를 확인한 파일이다.
 Unblock-File -LiteralPath $Destination -ErrorAction SilentlyContinue
 
 Write-Step "[3/3] 설치하는 중... (관리자 권한을 묻는 창이 뜨면 '예'를 누르세요)"

@@ -481,6 +481,19 @@ class ComposerApi:
     def handwriting_status(self) -> dict:
         return self._ok(**self._handwriting_status())
 
+    def set_handwriting_source_path(self, path: str) -> dict:
+        return self._select_handwriting_path("source", path)
+
+    def set_handwriting_target_path(self, path: str) -> dict:
+        return self._select_handwriting_path("target", path)
+
+    def _select_handwriting_path(self, kind: str, path: str) -> dict:
+        try:
+            self._set_handwriting_path(kind, Path(path))
+            return self._ok(cancelled=False, **self._handwriting_status())
+        except Exception as exc:
+            return self._error(exc)
+
     def retry_handwriting_analysis(self) -> dict:
         try:
             if not self._handwriting_source or not self._handwriting_target:
@@ -562,6 +575,8 @@ class ComposerApi:
         suggested_name: str = "필기-이전.sdocx",
         page_plan: list[dict] | list[int | None] | None = None,
         allow_unconfirmed: bool = False,
+        outline_entries: list[dict] | None = None,
+        outline_page_basis: str = "target_pdf",
     ) -> dict:
         try:
             if self._window is None:
@@ -580,61 +595,28 @@ class ComposerApi:
             output = self._dialog_path(selected)
             if output is None:
                 return self._ok(cancelled=True, inspection=inspection.as_dict())
-            if page_plan is not None and all(isinstance(item, dict) for item in page_plan):
-                plan = PagePlan.from_payload(
-                    inspection.source_page_count,
-                    inspection.page_count,
-                    page_plan,
-                    inspection.match,
-                )
-                if plan.unconfirmed and not allow_unconfirmed:
-                    raise PdfComposerError(
-                        f"확인하지 않은 쪽 대응이 {len(plan.unconfirmed)}개 남아 있습니다."
-                    )
-                result = transfer_handwriting(
-                    self._handwriting_source,
-                    self._handwriting_target,
-                    output,
-                    plan_override=plan,
-                )
-                if plan.unconfirmed:
-                    result.setdefault("warnings", []).append(
-                        f"확인하지 않은 쪽 대응 {len(plan.unconfirmed)}개를 사용자 승인으로 저장했습니다: "
-                        + ", ".join(plan.unconfirmed_labels)
-                    )
-            elif page_plan is not None and getattr(inspection, "mode", None) == "rebuild":
-                from .page_match import match_from_target_mapping
-
-                match = match_from_target_mapping(
-                    inspection.source_page_count,
-                    page_plan,
-                    inspection.match,
-                )
-                result = transfer_handwriting(
-                    self._handwriting_source,
-                    self._handwriting_target,
-                    output,
-                    match_override=match,
-                )
-            else:
-                result = transfer_handwriting(
-                    self._handwriting_source, self._handwriting_target, output
-                )
-            return self._ok(cancelled=False, result=result)
+            return self.transfer_handwriting_to_path(
+                str(output), page_plan, allow_unconfirmed, outline_entries, outline_page_basis
+            )
         except Exception as exc:
             return self._error(exc)
 
     def transfer_handwriting_to_path(
         self,
         output_path: str,
-        page_plan: list[dict] | None = None,
+        page_plan: list[dict] | list[int | None] | None = None,
         allow_unconfirmed: bool = False,
+        outline_entries: list[dict] | None = None,
+        outline_page_basis: str = "target_pdf",
     ) -> dict:
         try:
-            inspection = self._handwriting_inspection
-            if inspection is None:
-                raise PdfComposerError("분석된 필기 정보가 없습니다.")
-            output = Path(output_path)
+            inspection = self._inspection()
+            output = Path(output_path).expanduser().resolve()
+            outline_options = {}
+            if outline_entries is not None:
+                outline_options = dict(
+                    outline_entries=outline_entries, outline_page_basis=outline_page_basis
+                )
             if page_plan is not None and all(isinstance(item, dict) for item in page_plan):
                 plan = PagePlan.from_payload(
                     inspection.source_page_count,
@@ -651,6 +633,7 @@ class ComposerApi:
                     self._handwriting_target,
                     output,
                     plan_override=plan,
+                    **outline_options,
                 )
                 if plan.unconfirmed:
                     result.setdefault("warnings", []).append(
@@ -670,10 +653,11 @@ class ComposerApi:
                     self._handwriting_target,
                     output,
                     match_override=match,
+                    **outline_options,
                 )
             else:
                 result = transfer_handwriting(
-                    self._handwriting_source, self._handwriting_target, output
+                    self._handwriting_source, self._handwriting_target, output, **outline_options
                 )
             return self._ok(cancelled=False, result=result)
         except Exception as exc:
@@ -832,14 +816,18 @@ class ComposerApi:
         except Exception as exc:
             return self._error(exc)
 
-    def _close(self) -> None:
+    def _close(self, wait_for_analysis: bool = False) -> None:
         if self._closed:
             return
         self._closed = True
         with self._handwriting_lock:
             self._handwriting_generation += 1
-            if self._handwriting_future is not None:
-                self._handwriting_future.cancel()
+            future = self._handwriting_future
+            if future is not None:
+                future.cancel()
+        if wait_for_analysis and future is not None and not future.cancelled():
+            # Android removes imported copies after this worker has released them.
+            future.result()
         self._session.close()
 
 

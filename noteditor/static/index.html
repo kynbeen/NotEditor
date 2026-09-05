@@ -12,97 +12,6 @@
     <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png" />
     <link rel="apple-touch-icon" sizes="180x180" href="icons/icon-180.png" />
     <link rel="stylesheet" href="app.css" />
-    <script>
-      (function() {
-        if (window.AndroidBridge && !window.pywebview) {
-          window.pywebview = {
-            api: {
-              health: function() {
-                return Promise.resolve(JSON.parse(window.AndroidBridge.callPython("health", "[]")));
-              },
-              startup_plan: function() {
-                return Promise.resolve(JSON.parse(window.AndroidBridge.callPython("startup_plan", "[]")));
-              },
-              handwriting_status: function() {
-                return Promise.resolve(JSON.parse(window.AndroidBridge.callPython("handwriting_status", "[]")));
-              },
-              handwriting_preview: function(pageIndex, sourceIndex) {
-                return Promise.resolve(JSON.parse(window.AndroidBridge.callPython("handwriting_preview", JSON.stringify([pageIndex, sourceIndex]))));
-              },
-              retry_handwriting_analysis: function() {
-                return Promise.resolve(JSON.parse(window.AndroidBridge.callPython("retry_handwriting_analysis", "[]")));
-              },
-              reset_handwriting_transfer: function() {
-                return Promise.resolve(JSON.parse(window.AndroidBridge.callPython("reset_handwriting_transfer", "[]")));
-              },
-              reset_documents: function() {
-                return Promise.resolve(JSON.parse(window.AndroidBridge.callPython("reset_documents", "[]")));
-              },
-              remove_document: function(documentId) {
-                return Promise.resolve(JSON.parse(window.AndroidBridge.callPython("remove_document", JSON.stringify([documentId]))));
-              },
-              page_image: function(documentId, pageIndex, kind) {
-                return Promise.resolve(JSON.parse(window.AndroidBridge.callPython("page_image", JSON.stringify([documentId, pageIndex, kind]))));
-              },
-              parse_range: function(value, pageCount) {
-                return Promise.resolve(JSON.parse(window.AndroidBridge.callPython("parse_range", JSON.stringify([value, pageCount]))));
-              },
-              log_client_error: function(message) {
-                return Promise.resolve(JSON.parse(window.AndroidBridge.callPython("log_client_error", JSON.stringify([message]))));
-              },
-              toggle_fullscreen: function() {
-                return Promise.resolve({ ok: true });
-              },
-              choose_pdfs: function() {
-                return new Promise(function(resolve) {
-                  window._androidFileCallback = function(res) {
-                    delete window._androidFileCallback;
-                    resolve(JSON.parse(res));
-                  };
-                  window.AndroidBridge.choosePdfs();
-                });
-              },
-              choose_handwriting_source: function() {
-                return new Promise(function(resolve) {
-                  window._androidFileCallback = function(res) {
-                    delete window._androidFileCallback;
-                    resolve(JSON.parse(res));
-                  };
-                  window.AndroidBridge.chooseHandwritingSource();
-                });
-              },
-              choose_handwriting_target: function() {
-                return new Promise(function(resolve) {
-                  window._androidFileCallback = function(res) {
-                    delete window._androidFileCallback;
-                    resolve(JSON.parse(res));
-                  };
-                  window.AndroidBridge.chooseHandwritingTarget();
-                });
-              },
-              save_result: function(order, suggestedName) {
-                return new Promise(function(resolve) {
-                  window._androidFileCallback = function(res) {
-                    delete window._androidFileCallback;
-                    resolve(JSON.parse(res));
-                  };
-                  window.AndroidBridge.saveResult(JSON.stringify(order), suggestedName || "merged.pdf");
-                });
-              },
-              save_handwriting_transfer: function(suggestedName, pagePlan, allowUnconfirmed) {
-                return new Promise(function(resolve) {
-                  window._androidFileCallback = function(res) {
-                    delete window._androidFileCallback;
-                    resolve(JSON.parse(res));
-                  };
-                  window.AndroidBridge.saveHandwriting(suggestedName || "result.sdocx", JSON.stringify(pagePlan || []), !!allowUnconfirmed);
-                });
-              }
-            }
-          };
-        }
-      })();
-    </script>
   </head>
   <body>
     <header class="topbar">
@@ -202,6 +111,25 @@
         </div>
       </section>
 
+      <section class="panel result-panel" aria-labelledby="resultHeading">
+        <div class="panel-header">
+          <div>
+            <span class="eyebrow">RESULT</span>
+            <h2 id="resultHeading">결과 순서</h2>
+          </div>
+          <div class="panel-header-actions">
+            <button id="resetOrderButton" class="text-button" type="button" disabled>순서 복원</button>
+            <span id="pageCount" class="count-badge accent">0쪽</span>
+          </div>
+        </div>
+        <div id="resultEmpty" class="empty-state compact">
+          <div class="empty-icon small">↗</div>
+          <h3>선택된 쪽이 없습니다</h3>
+          <p>왼쪽에서 포함할 쪽을 밝게 켜세요.</p>
+        </div>
+        <ol id="resultList" class="result-list" aria-label="드래그하여 바꿀 PDF 결과 순서" hidden></ol>
+      </section>
+
     </main>
 
     <main id="handwritingWorkspace" class="handwriting-workspace" role="tabpanel" aria-labelledby="handwritingButton" hidden>
@@ -244,6 +172,24 @@
           </div>
         </div>
 
+        <section id="goodnotesOutlineOptions" class="goodnotes-outline-options" hidden>
+          <div class="outline-actions">
+            <h3>Goodnotes 목차 추가</h3>
+            <button id="chooseOutlineJsonButton" class="button utility" type="button">목차 JSON 선택</button>
+            <button id="clearOutlineJsonButton" class="button utility" type="button">목차 입력 지우기</button>
+          </div>
+          <label class="outline-json-editor">
+            <span>목차 JSON</span>
+            <textarea id="outlineJsonText" rows="5" spellcheck="false" placeholder='[{"page": 1, "title": "목차 제목"}]'></textarea>
+          </label>
+          <fieldset class="outline-page-basis">
+            <legend>목차 쪽 번호 기준</legend>
+            <label><input type="radio" name="outlinePageBasis" value="target_pdf" checked /> 새 PDF</label>
+            <label><input type="radio" name="outlinePageBasis" value="source_goodnotes" /> 원본 Goodnotes</label>
+          </fieldset>
+          <div id="outlineJsonStatus" role="status" aria-live="polite"></div>
+        </section>
+
         <section id="handwritingReview" class="page-review" hidden>
           <div class="page-review-head">
             <div>
@@ -285,6 +231,7 @@
     <input id="webPdfInput" type="file" accept="application/pdf,.pdf" multiple hidden />
     <input id="webHandwritingInput" type="file" accept=".sdocx,.notewise,.goodnotes,application/zip" hidden />
     <input id="webTargetPdfInput" type="file" accept="application/pdf,.pdf" hidden />
+    <input id="outlineJsonInput" type="file" accept="application/json,.json" hidden />
 
     <div id="busyOverlay" class="busy-overlay" role="status" aria-live="polite" hidden>
       <div class="busy-card"><div class="loader"></div><strong id="busyText">처리 중…</strong></div>
@@ -301,6 +248,7 @@
     </dialog>
     <div id="toastRegion" class="toast-region" aria-live="polite"></div>
 
+    <script src="vendor/sortable-1.15.7.min.js"></script>
     <script src="app.js"></script>
   </body>
 </html>

@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import json
 import sys
 import tempfile
+import threading
 import time
 import types
 import unittest
 from pathlib import Path
+from concurrent.futures import Future
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -62,6 +65,62 @@ class ComposerApiTests(unittest.TestCase):
                 return status
             time.sleep(0.01)
         self.fail("필기 분석이 끝나지 않았습니다.")
+
+    def test_android_dispatch_selects_analyzes_and_saves_real_handwriting(self):
+        from tests.test_sdocx_transfer import make_sdocx
+
+        source = self.root / "annotated.sdocx"
+        output = self.root / "transferred.sdocx"
+        make_sdocx(source, self.source)
+        original = source.read_bytes()
+
+        def dispatch(method, *args):
+            return json.loads(self.api.dispatch_call(method, json.dumps(args)))
+
+        selected = dispatch("set_handwriting_source_path", str(source))
+        self.assertTrue(selected["ok"], selected)
+        target = dispatch("set_handwriting_target_path", str(self.source))
+        self.assertTrue(target["ok"], target)
+        status = self.wait_for_handwriting_analysis()
+        self.assertTrue(status["ready"], status)
+        saved = dispatch("transfer_handwriting_to_path", str(output))
+        self.assertTrue(saved["ok"], saved)
+        self.assertTrue(output.is_file())
+        self.assertEqual(source.read_bytes(), original)
+
+    def test_android_close_waits_for_analysis_before_removing_session_files(self):
+        future = Future()
+        future.set_running_or_notify_cancel()
+        self.api._handwriting_future = future
+        waiting = threading.Event()
+        original_result = future.result
+
+        def wait_for_result():
+            waiting.set()
+            return original_result(timeout=3)
+
+        folder = self.api._session.temp_dir
+        with patch.object(future, "result", side_effect=wait_for_result):
+            closing = threading.Thread(target=self.api._close, args=(True,))
+            closing.start()
+            try:
+                self.assertTrue(waiting.wait(2))
+                self.assertTrue(folder.exists())
+            finally:
+                future.set_result(None)
+                closing.join(timeout=3)
+        self.assertFalse(closing.is_alive())
+        self.assertFalse(folder.exists())
+
+    def test_android_selection_rejects_invalid_paths_without_losing_selection(self):
+        selected = self.api.set_handwriting_target_path(str(self.source))
+        self.assertTrue(selected["ok"], selected)
+        rejected = self.api.set_handwriting_target_path(str(self.root / "missing.pdf"))
+        self.assertFalse(rejected["ok"])
+        self.assertEqual(self.api.handwriting_status()["target_name"], self.source.name)
+        saved = self.api.transfer_handwriting_to_path(str(self.root / "out.sdocx"))
+        self.assertFalse(saved["ok"])
+        self.assertNotIn("AttributeError", saved["error"])
 
     def test_choose_parse_and_save_contract(self):
         output = self.root / "saved.pdf"

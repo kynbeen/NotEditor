@@ -2,10 +2,12 @@
 
 NotEditor는 PDF 문서 합치기와 Samsung Notes·Notewise·Goodnotes 6 필기 옮기기를 한 화면에서
 제공하는 도구입니다.
-Windows 데스크톱 앱과 Docker 기반 웹앱이 같은 PDF·필기 문서 처리 엔진을 사용합니다.
+Windows 데스크톱 앱, Android 앱과 Docker 기반 웹앱이 같은 PDF·필기 문서 처리 엔진을 사용합니다.
 
 > **처음 쓰시나요?** 설치부터 첫 사용까지 그대로 따라 할 수 있게 정리했습니다 →
 > **[설치와 첫 사용 안내](docs/설치와-첫-사용.md)**
+>
+> 구현 완료 범위와 아직 남은 실기 검증은 **[현재 상태](docs/current-status.md)** 에서 확인합니다.
 
 ## 기능
 
@@ -23,6 +25,8 @@ Windows 데스크톱 앱과 Docker 기반 웹앱이 같은 PDF·필기 문서 �
 - 필기가 들어 있는 Notewise `.notewise`를 새 PDF 배경으로 이전
 - 필기가 들어 있는 Goodnotes 6 `.goodnotes`를 새 PDF 배경으로 이전 (실험적, 아래 제한 참고)
 - 쪽 추가·삭제 시 본문 지문과 순서를 이용해 공통 쪽 자동 매칭
+- 대상 쪽을 드래그하거나 위·아래 버튼으로 옮겨 매칭 수정. 제외된 행은 그대로 보존하며
+  바뀐 대응은 다시 확인
 - 대상 PDF와 원본의 페이지 비율이 달라도 새 PDF 크기·비율을 온전히 보존하며 필기 좌표 자동 변환
 - 결과 문서에서 불필요한 쪽을 빼거나 다시 포함할 수 있는 선택적 쪽 제외
 - 페이지 크기나 여백 변경 시 본문 위치 기준 자동 정렬
@@ -30,6 +34,16 @@ Windows 데스크톱 앱과 Docker 기반 웹앱이 같은 PDF·필기 문서 �
 - 원본 SDOCX와 PDF를 수정하지 않고 새 `.sdocx`로 저장
 - 원본 Notewise와 PDF를 수정하지 않고 새 `.notewise`로 저장
 - 원본 Goodnotes 6 문서와 PDF를 수정하지 않고 새 `.goodnotes`로 저장
+
+#### Goodnotes 목차 (개발 중)
+
+Goodnotes를 선택하면 `목차 JSON 선택` 또는 JSON 입력란에
+`[{"page": 1, "title": "제목"}]` 형식으로 새 목차를 지정할 수 있습니다.
+쪽 번호는 1부터 시작하며 `새 PDF` 또는 `원본 Goodnotes` 기준을 선택합니다.
+재정렬한 결과 쪽으로 연결하고, 제외된 쪽을 가리키는 항목은 저장 전에 거절합니다.
+
+기존 원본 목차의 보존·병합과 실제 Goodnotes 앱에서의 목차 이동 검증은 아직 미완료입니다.
+기존 목차가 있는 노트에는 이 개발 중 기능을 사용하지 마세요.
 
 ## 가장 쉬운 Windows 설치
 
@@ -50,8 +64,8 @@ iwr https://raw.githubusercontent.com/kynbeen/NotEditor/main/install-online.ps1 
 ```
 
 [`install-online.ps1`](install-online.ps1)은 최신 릴리스 조회 → 설치 파일 내려받기 →
-실행, 이 세 가지만 합니다. 내려받은 파일 크기를 릴리스 정보와 대조한 뒤에만 실행하며,
-`-Wizard` 를 붙이면 설치 위치를 직접 고를 수 있습니다.
+실행, 이 세 가지만 합니다. 내려받은 파일 크기와 Windows 실행 파일의 `MZ` 헤더를 확인한 뒤에만
+실행하며, 기본값은 조용한 설치입니다. `-Wizard` 를 붙이면 설치 위치를 직접 고를 수 있습니다.
 
 ### 소스에서 설치 (개발자용)
 
@@ -99,6 +113,26 @@ noteditor --open-plan C:\경로\handoff.json
 `F11`로 테두리 없는 전체화면을 켜거나 끌 수 있습니다. 문서 선택과 저장은 기존처럼 로컬 네이티브
 대화상자와 Python 브리지를 사용합니다.
 
+## Android 개발 빌드
+
+Android 7.0(API 24) 이상을 대상으로 합니다. JDK 17과 Android SDK 34를 준비한 뒤 저장소
+루트에서 다음 명령을 실행합니다.
+
+```powershell
+$env:ANDROID_HOME = "$env:LOCALAPPDATA\Android\Sdk"
+$env:ANDROID_SDK_ROOT = $env:ANDROID_HOME
+cd android
+.\gradlew.bat clean testDebugUnitTest assembleDebug
+```
+
+APK는 `android/app/build/outputs/apk/debug/app-debug.apk`에 만들어집니다. Python 엔진과 UI는
+Gradle이 루트 `noteditor/` 패키지에서 `android/app/build/generated/`로 매번 동기화하므로
+`android/app/src/main`에 사본을 만들지 않습니다. Android는 플랫폼 `PdfRenderer`로 PDF를 읽고
+렌더링하며, `pypdf`로 쪽 복사와 배율·여백 변환을 수행합니다.
+
+컴파일·단위 테스트·APK 조립은 자동 검증하지만 실제 태블릿에서 세 필기 형식의 가져오기와 편집
+왕복은 아직 남아 있습니다. 검증 전에는 원본 문서를 별도로 보관합니다.
+
 ## 로컬 웹 앱 실행
 
 Windows 설치 후 `NotEditor 로컬 웹` 바로가기를 실행하면 배포 서버 대신 사용자 PC 안에서만
@@ -141,13 +175,14 @@ summary.ai 쪽입니다. 원본 비교 화면은 창 전체가 세로로 스크�
 자료라면 **합칠 때 고른 쪽 범위 안이나 바로 옆에서 생긴 변경**을 따로 강조합니다 — 앞에
 쪽이 하나 끼면 `30-50`이 통째로 밀리기 때문입니다.
 
-### 결과 순서는 항상 기록 가능한 상태로 유지됩니다
+### 현재 인계 규격의 순서 제한
 
 인계 규격은 **문서 하나당 한 구간, 구간 안은 오름차순**만 표현할 수 있습니다. 그래서 쪽을
 고르다 결과 순서가 `A…B…A`가 되면 저장이 막힙니다. 예전에는 새로 고른 쪽을 결과 목록 맨
 끝에 붙여서, A의 범위를 정하고 B를 만진 다음 A로 돌아와 범위를 넓히기만 해도 이 상태가
-됐습니다. 지금은 새 쪽을 **같은 문서의 기존 구간 안에 쪽 번호 순서대로** 끼웁니다
-(`insertNearOwnBlock`). 손으로 끌어 만든 순서는 여전히 규격대로 거절합니다.
+됐습니다. 지금은 직접 재정렬하기 전까지 문서·쪽 번호의 기본 순서를 따릅니다. 직접 재정렬한
+뒤 새로 선택한 쪽은 같은 문서의 기존 쪽 옆에 넣습니다(`insertNearOwnPages`). 일반 합치기는
+자유 순서로 저장할 수 있지만, 현재 판 1·2 인계에서는 표현할 수 없는 순서를 저장 전에 거절합니다.
 
 ## 웹앱 실행
 
@@ -230,9 +265,14 @@ docker run --rm -p 8000:8000 noteditor
 .\venv\Scripts\python.exe -m pip install -r requirements-dev.txt
 .\venv\Scripts\python.exe -m unittest discover -s tests
 node --check noteditor\static\app.js
+$env:ANDROID_HOME = "$env:LOCALAPPDATA\Android\Sdk"
+cd android
+.\gradlew.bat testDebugUnitTest assembleDebug
 ```
 
-## Windows 설치 파일 만들기
+## 릴리스 파일 만들기
+
+### Windows
 
 `v0.5.0` 같은 태그를 푸시하면 `.github/workflows/release.yml`이 다음 작업을 자동 수행합니다.
 
@@ -267,12 +307,29 @@ $version = .\venv\Scripts\python.exe -m noteditor.stamp_version
 & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DAppVersion=$version" "installer\NotEditor.iss"
 ```
 
+### Android
+
+`.github/workflows/android.yml`은 모든 변경에서 Python 회귀 테스트와 Android 단위 테스트를 실행하고
+debug APK를 Actions 산출물로 남깁니다. `v*` 태그에서는 아래 GitHub Actions secret으로 서명한
+release APK만 GitHub Release에 첨부합니다.
+
+| Secret | 내용 |
+| --- | --- |
+| `ANDROID_KEYSTORE_BASE64` | release keystore 파일의 Base64 문자열 |
+| `ANDROID_KEYSTORE_PASSWORD` | keystore 암호 |
+| `ANDROID_KEY_ALIAS` | 서명 키 별칭 |
+| `ANDROID_KEY_PASSWORD` | 서명 키 암호 |
+
+Android 앱과 내부 Python 엔진도 같은 태그에서 버전을 파생합니다. 서명 secret이 없으면 태그
+워크플로는 release APK를 만들지 않고 명시적으로 실패합니다.
+
 ## 폴더 구조
 
 ```text
 NotEditor/                 Git 저장소 루트
 ├─ noteditor/              import 가능한 Python 애플리케이션 패키지
 │  └─ static/              데스크톱과 웹이 함께 쓰는 UI
+├─ android/                Chaquopy 기반 Android 앱과 Gradle 빌드
 ├─ tests/                  엔진·UI·웹 API 테스트
 ├─ installer/              Windows 설치 프로그램 정의
 ├─ .github/workflows/      테스트 및 Release 자동화
@@ -291,9 +348,9 @@ NotEditor/                 Git 저장소 루트
 - 여러 원본을 합칠 때 책갈피, 문서 첨부, 문서 단위 서명은 복사하지 않고 경고합니다.
 - 필기 이전은 Samsung의 비공개 SDOCX 형식을 이용한 상호운용 기능입니다.
 - Notewise 이전은 공개되지 않은 내보내기 형식을 관찰해 구현한 상호운용 기능입니다. PDF 배경
-  교체, 페이지 추가·삭제, 본문 기준 자동 정렬, 펜·형광펜 미리보기를 지원합니다. 기존 쪽의 순서
-  변경은 잘못된 필기 매칭을 막기 위해 거부하며, 펜·형광펜 외 Notewise 객체의 미리보기 렌더링은
-  후속 지원 범위입니다.
+  교체, 페이지 추가·삭제, 본문 기준 자동 정렬, 펜·형광펜 미리보기를 지원합니다. 자동 매칭은
+  원본 순서를 보존하지만 사용자가 경고를 확인하면 대상 쪽을 직접 재정렬할 수 있습니다.
+  펜·형광펜 외 Notewise 객체의 미리보기 렌더링은 후속 지원 범위입니다.
 - **Goodnotes 6 이전은 실험 기능입니다.** 공개되지 않은 `.goodnotes` 형식을 실제 내보내기
   파일로 관찰해 구현했습니다. 동일 비율일 때는 필기 저널(`notes/`)을 원본 바이트 그대로 옮기고,
   비율이 달라질 때만 대상 캔버스에 맞추어 획 좌표계를 안전하게 변환합니다. 다음 경계를 알고 쓰세요.
@@ -308,5 +365,9 @@ NotEditor/                 Git 저장소 루트
 
 ## 라이선스
 
-이 프로젝트는 [MIT License](LICENSE)에 따라 배포됩니다.
+NotEditor 자체 코드는 [MIT License](LICENSE)로 제공됩니다.
+데스크톱·웹에서 사용하는 PyMuPDF는 [AGPL-3.0 또는 Artifex 상용 라이선스](https://pymupdf.readthedocs.io/en/latest/about.html)를 따릅니다.
+개인 기기에서 혼자 사용하는 데 상용 라이선스가 필수인 것은 아닙니다. 다만 무료 배포도
+배포이며, PyMuPDF를 포함한 프로그램의 배포·네트워크 제공에는 해당 라이선스의 소스 제공 등
+조건을 검토해야 합니다. 자체 코드의 MIT 표시는 포함된 모든 의존성의 조건을 대체하지 않습니다.
 제3자 코드 고지는 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)를 확인하세요.

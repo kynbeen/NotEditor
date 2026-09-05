@@ -71,9 +71,11 @@ class NotEditorBridge(
     }
 
     @JavascriptInterface
-    fun saveHandwriting(suggestedName: String, pagePlanJson: String, allowUnconfirmed: Boolean) {
+    fun saveHandwriting(suggestedName: String, pagePlanJson: String, allowUnconfirmed: Boolean,
+                        outlineEntriesJson: String, outlinePageBasis: String) {
         activity.runOnUiThread {
-            activity.saveHandwriting(suggestedName, pagePlanJson, allowUnconfirmed) { resultJson ->
+            activity.saveHandwriting(suggestedName, pagePlanJson, allowUnconfirmed,
+                outlineEntriesJson, outlinePageBasis) { resultJson ->
                 dispatchCallback(resultJson)
             }
         }
@@ -81,6 +83,7 @@ class NotEditorBridge(
 
     private fun dispatchCallback(resultJson: String) {
         activity.runOnUiThread {
+            if (activity.isDestroyed) return@runOnUiThread
             // 자바스크립트 따옴표 이스케이프 처리
             val escaped = JSONObject.quote(resultJson)
             val js = "if (window._androidFileCallback) { window._androidFileCallback($escaped); }"

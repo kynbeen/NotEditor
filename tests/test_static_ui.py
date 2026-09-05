@@ -13,10 +13,10 @@ class StaticUiContractTests(unittest.TestCase):
         cls.manifest = json.loads((static / "manifest.webmanifest").read_text(encoding="utf-8"))
         cls.service_worker = (static / "sw.js").read_text(encoding="utf-8")
 
-    def test_merge_workspace_has_source_and_preview_without_a_reorder_panel(self):
+    def test_merge_workspace_has_source_preview_and_reorder_panel(self):
         self.assertIn("source-panel", self.html)
         self.assertIn("preview-panel", self.html)
-        self.assertNotIn("result-panel", self.html)
+        self.assertIn("result-panel", self.html)
         self.assertIn("grid-template-columns", self.css)
 
     def test_selected_pages_are_bright_and_unselected_pages_dimmed(self):
@@ -48,18 +48,26 @@ class StaticUiContractTests(unittest.TestCase):
         self.assertNotIn("renderDocuments()", toggle_body)
         self.assertIn("updateDocumentSelectionUi(doc)", toggle_body)
 
-    def test_merge_order_is_fixed_to_document_and_page_order(self):
-        self.assertNotIn("item.draggable = true", self.js)
-        self.assertNotIn("resetOrderButton", self.html)
-        self.assertNotIn('class="drag-handle"', self.html)
-        self.assertIn("state.order = defaultOrder()", self.js)
+    def test_merge_order_supports_mouse_and_touch_reordering(self):
+        self.assertIn("resetOrderButton", self.html)
+        self.assertIn("vendor/sortable-1.15.7.min.js", self.html)
+        self.assertIn("window.Sortable.create", self.js)
+        self.assertIn('handle: ".drag-handle"', self.js)
+        self.assertIn("delayOnTouchOnly: true", self.js)
+        self.assertIn("state.order.splice(newIndex, 0, moved)", self.js)
+        self.assertIn("state.orderDirty = true", self.js)
+        self.assertIn("function insertNearOwnPages(ref)", self.js)
+
+    def test_javascript_source_contains_no_literal_nul_bytes(self):
+        self.assertNotIn("\x00", self.js)
+        self.assertIn(r'join("\u0000")', self.js)
 
     def test_file_buttons_wait_for_runtime_connection(self):
         self.assertIn('id="addPdfButton" class="button secondary" type="button" disabled', self.html)
         self.assertIn('id="emptyAddButton" class="button primary" type="button" disabled', self.html)
         self.assertIn('callApi("health")', self.js)
         self.assertIn("NotEditor 연결을 확인할 수 없습니다", self.js)
-        self.assertIn('runtime: window.location.hash === "#desktop"', self.js)
+        self.assertIn('window.location.hash === "#desktop"', self.js)
 
     def test_summary_ai_startup_plan_populates_the_desktop_merge_ui(self):
         self.assertIn("startup_plan: async () => ({ ok: true, plan: null })", self.js)
@@ -210,6 +218,9 @@ class StaticUiContractTests(unittest.TestCase):
         self.assertIn('id="handwritingReview"', self.html)
         self.assertIn("function shiftedTargetPlan", self.js)
         self.assertIn('target.addEventListener("dragstart"', self.js)
+        self.assertIn('button.className = "review-move"', self.js)
+        self.assertIn('button.setAttribute("aria-label", button.title)', self.js)
+        self.assertIn('moveReviewTarget(index, reviewMoveDestination(index, direction))', self.js)
         self.assertIn("개 대응이 달라집니다", self.js)
         self.assertIn("변경된 행은 다시 확인해야 합니다", self.js)
         self.assertIn('id="reviewReorderDialog"', self.html)
@@ -236,7 +247,25 @@ class StaticUiContractTests(unittest.TestCase):
         self.assertIn('window.location.hash === "#desktop"', self.js)
         self.assertIn('callApi("toggle_fullscreen")', self.js)
 
+    def test_android_bridge_maps_python_and_file_operations(self):
+        self.assertIn('runtime: window.AndroidBridge', self.js)
+        self.assertIn('window.AndroidBridge.callPython(method, JSON.stringify(args))', self.js)
+        self.assertIn('window.AndroidBridge.choosePdfs()', self.js)
+        self.assertIn('window.AndroidBridge.saveResult(JSON.stringify(order), suggestedName)', self.js)
+        self.assertIn('window.AndroidBridge.saveHandwriting(', self.js)
+        self.assertIn('JSON.stringify(outlineEntries), outlinePageBasis', self.js)
+        self.assertIn('if (androidApi) return androidApi', self.js)
+        self.assertIn('if (window.AndroidBridge || window.pywebview?.api', self.js)
+
+    def test_outline_controls_share_the_current_editor_value(self):
+        for name in ("outlineJsonInput", "outlineJsonText", "outlineJsonStatus", "goodnotesOutlineOptions"):
+            self.assertIn(f'id="{name}"', self.html)
+        self.assertIn('outline_entries: outlineEntries, outline_page_basis: outlinePageBasis', self.js)
+        self.assertIn('parseOutlineJson(refs.outlineJsonText.value)', self.js)
+        self.assertIn('revision !== state.outlineRevision', self.js)
+
     def test_service_worker_never_caches_api_or_upload_responses(self):
+        self.assertIn('"/vendor/sortable-1.15.7.min.js"', self.service_worker)
         self.assertIn('url.pathname.startsWith("/api/")', self.service_worker)
         self.assertIn('event.request.method !== "GET"', self.service_worker)
         self.assertIn('caches.match("/index.html")', self.service_worker)
