@@ -468,6 +468,25 @@ def inspect_transfer(
         page_sizes = [info.file_size for name, info in members.items() if name.lower().endswith(".page")]
         annotated_pages = sum(size > 358 for size in page_sizes)
         spi_count = sum(name.lower().endswith(".spi") for name in members)
+        source_order = []
+        try:
+            from .sdocx_page import is_blank_page
+
+            order_name = _find_suffix(members, "pageIdInfo.dat")
+            order = read_page_order(archive.read(order_name))
+            root = PurePosixPath(order_name).parent
+            for number, entry in enumerate(order.entries, 1):
+                blob = archive.read(str(root / f"{entry.uuid}.page"))
+                info = read_page(blob)
+                source_order.append({
+                    "page_id": entry.uuid,
+                    "page_number": number,
+                    "source_index": info.pdf.page_index if info.pdf else None,
+                    "blank": is_blank_page(blob),
+                })
+        except (SdocxTransferError, RuntimeError, KeyError, ValueError, struct.error):
+            # Legacy exports may have only a readable PDF, without page metadata.
+            source_order = []
     finally:
         archive.close()
 
@@ -491,7 +510,40 @@ def inspect_transfer(
         mode=mode,
         alignment=alignment,
         match=match,
+        source_order=tuple(source_order),
     )
+
+
+def preview_native_page(
+    source_sdocx: str | Path, page_id: str, *, max_side: int = 900,
+) -> tuple[bytes, bytes, bytes, int]:
+    """Preview a preserved non-PDF notebook page without changing its coordinates."""
+    source = Path(source_sdocx).expanduser().resolve()
+    if source.suffix.lower() != ".sdocx":
+        raise SdocxTransferError("별도 노트 쪽 미리보기는 Samsung Notes 문서에서만 지원합니다.")
+    archive, members, *_rest = _archive_context(source)
+    with archive:
+        order_name = _find_suffix(members, "pageIdInfo.dat")
+        order = read_page_order(archive.read(order_name))
+        if not any(entry.uuid == page_id for entry in order.entries):
+            raise SdocxTransferError("원본 문서에 없는 노트 쪽입니다.")
+        root = PurePosixPath(order_name).parent
+        blob = archive.read(str(root / f"{page_id}.page"))
+        info = read_page(blob)
+        if info.pdf is not None:
+            raise SdocxTransferError("PDF 배경이 있는 쪽은 PDF 쪽 번호로 요청해야 합니다.")
+        if info.property_mask & (0x4 | 0x8 | 0x200):
+            raise SdocxTransferError("이 노트 쪽의 템플릿·이미지 배경은 미리보기를 지원하지 않습니다. 저장 시 원본 쪽 전체는 그대로 보존됩니다.")
+        if min(info.canvas_width, info.canvas_height) <= 0:
+            raise SdocxTransferError("노트 쪽의 캔버스 크기가 올바르지 않습니다.")
+        scale = min(max_side / max(info.canvas_width, info.canvas_height), 3.0)
+        size = (max(1, round(info.canvas_width * scale)), max(1, round(info.canvas_height * scale)))
+        color = tuple((info.background_color >> shift) & 255 for shift in (16, 8, 0))
+        buffer = BytesIO()
+        with Image.new("RGB", size, color) as background:
+            background.save(buffer, "PNG")
+        ink, count = render_ink_png(blob, *size)
+        return buffer.getvalue(), buffer.getvalue(), ink, count
 
 
 def preview_transfer(
@@ -511,7 +563,8 @@ def preview_transfer(
     if inspection is None:
         inspection = inspect_transfer(source, target)
 
-    if not 0 <= page_index < inspection.page_count:
+    source_only = page_index == -1 and source_index_override >= 0
+    if not source_only and not 0 <= page_index < inspection.page_count:
         raise SdocxTransferError(f"{inspection.page_count}쪽 문서에 없는 쪽 번호입니다: {page_index + 1}")
 
     source_index: int | None = page_index
@@ -552,6 +605,16 @@ def preview_transfer(
                 page_blob = None
     finally:
         archive.close()
+
+    if source_only:
+        from .transfer_plan import render_source_background
+
+        background = render_source_background(
+            embedded_pdf, source_index, max_side=max_side, error=SdocxTransferError
+        )
+        with Image.open(BytesIO(background)) as image:
+            ink, count = render_ink_png(page_blob, image.width, image.height)
+        return background, background, ink, count
 
     source_document = _open_pdf(embedded_pdf, "SDOCX 내장 PDF")
     try:

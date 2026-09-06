@@ -232,6 +232,9 @@ class ComposerApi:
                 "order": order,
                 "recorded_ranges": recorded,
                 "auto_choose": plan.mode == "merge" and not candidates,
+                # 강의록을 함께 받았으면 족첵에서 이 강의 몫을 스스로 짚어 볼 수 있다.
+                # 화면은 이 값으로 [범위 자동 인식] 버튼을 켤지 정한다.
+                "can_suggest_ranges": plan.range_hint is not None,
             }
             if plan.mode == "review":
                 result["origin"] = plan.origin
@@ -481,6 +484,19 @@ class ComposerApi:
     def handwriting_status(self) -> dict:
         return self._ok(**self._handwriting_status())
 
+    def set_handwriting_source_path(self, path: str) -> dict:
+        return self._select_handwriting_path("source", path)
+
+    def set_handwriting_target_path(self, path: str) -> dict:
+        return self._select_handwriting_path("target", path)
+
+    def _select_handwriting_path(self, kind: str, path: str) -> dict:
+        try:
+            self._set_handwriting_path(kind, Path(path))
+            return self._ok(cancelled=False, **self._handwriting_status())
+        except Exception as exc:
+            return self._error(exc)
+
     def retry_handwriting_analysis(self) -> dict:
         try:
             if not self._handwriting_source or not self._handwriting_target:
@@ -490,17 +506,24 @@ class ComposerApi:
         except Exception as exc:
             return self._error(exc)
 
-    def handwriting_preview(self, page_index: int = 0, source_index: int = -2) -> dict:
+    def handwriting_preview(self, page_index: int = 0, source_index: int = -2, native_page_id: str = "") -> dict:
         try:
             inspection = self._inspection()
-            index = max(0, min(int(page_index), inspection.page_count - 1))
-            before, after, ink, stroke_count = preview_transfer(
-                self._handwriting_source,
-                self._handwriting_target,
-                index,
-                inspection,
-                source_index_override=int(source_index),
-            )
+            index = -1 if int(page_index) == -1 else max(0, min(int(page_index), inspection.page_count - 1))
+            if native_page_id:
+                from .sdocx_transfer import preview_native_page
+
+                before, after, ink, stroke_count = preview_native_page(
+                    self._handwriting_source, str(native_page_id)
+                )
+            else:
+                before, after, ink, stroke_count = preview_transfer(
+                    self._handwriting_source,
+                    self._handwriting_target,
+                    index,
+                    inspection,
+                    source_index_override=int(source_index),
+                )
             return self._ok(
                 index=index,
                 page_count=inspection.page_count,
@@ -580,61 +603,26 @@ class ComposerApi:
             output = self._dialog_path(selected)
             if output is None:
                 return self._ok(cancelled=True, inspection=inspection.as_dict())
-            if page_plan is not None and all(isinstance(item, dict) for item in page_plan):
-                plan = PagePlan.from_payload(
-                    inspection.source_page_count,
-                    inspection.page_count,
-                    page_plan,
-                    inspection.match,
-                )
-                if plan.unconfirmed and not allow_unconfirmed:
-                    raise PdfComposerError(
-                        f"확인하지 않은 쪽 대응이 {len(plan.unconfirmed)}개 남아 있습니다."
-                    )
-                result = transfer_handwriting(
-                    self._handwriting_source,
-                    self._handwriting_target,
-                    output,
-                    plan_override=plan,
-                )
-                if plan.unconfirmed:
-                    result.setdefault("warnings", []).append(
-                        f"확인하지 않은 쪽 대응 {len(plan.unconfirmed)}개를 사용자 승인으로 저장했습니다: "
-                        + ", ".join(plan.unconfirmed_labels)
-                    )
-            elif page_plan is not None and getattr(inspection, "mode", None) == "rebuild":
-                from .page_match import match_from_target_mapping
-
-                match = match_from_target_mapping(
-                    inspection.source_page_count,
-                    page_plan,
-                    inspection.match,
-                )
-                result = transfer_handwriting(
-                    self._handwriting_source,
-                    self._handwriting_target,
-                    output,
-                    match_override=match,
-                )
-            else:
-                result = transfer_handwriting(
-                    self._handwriting_source, self._handwriting_target, output
-                )
-            return self._ok(cancelled=False, result=result)
+            return self.transfer_handwriting_to_path(
+                str(output), page_plan, allow_unconfirmed
+            )
         except Exception as exc:
             return self._error(exc)
 
     def transfer_handwriting_to_path(
         self,
         output_path: str,
-        page_plan: list[dict] | None = None,
+        page_plan: list[dict] | list[int | None] | None = None,
         allow_unconfirmed: bool = False,
     ) -> dict:
         try:
-            inspection = self._handwriting_inspection
-            if inspection is None:
-                raise PdfComposerError("분석된 필기 정보가 없습니다.")
-            output = Path(output_path)
+            inspection = self._inspection()
+            output = Path(output_path).expanduser().resolve()
+            alignment = getattr(inspection, "alignment", None)
+            if (alignment is not None and alignment.requires_confirmation
+                    and not allow_unconfirmed
+                    and not (page_plan is not None and all(isinstance(item, dict) for item in page_plan))):
+                raise PdfComposerError("자동 정렬 품질이 낮습니다. 쪽 대응을 확인한 뒤 저장하세요.")
             if page_plan is not None and all(isinstance(item, dict) for item in page_plan):
                 plan = PagePlan.from_payload(
                     inspection.source_page_count,
@@ -729,6 +717,47 @@ class ComposerApi:
         except Exception as exc:
             return self._error(exc)
 
+    def suggest_ranges(self) -> dict:
+        """지금 올라온 족첵마다 **이 강의에 해당하는 쪽 범위**를 짚어 돌려준다.
+
+        LLM 을 쓰지 않는다. 족첵은 강의록 쪽을 그대로 싣고 그 뒤에 문제를 붙인 문서라,
+        강의록 쪽 그림을 찾으면 되는 문제다(`noteditor.exam_range`). 실측 12건 중 10건이
+        사용자가 손으로 고른 범위와 양끝까지 정확히 일치했다.
+
+        **제안일 뿐이다.** 결과를 바로 저장하지 않고 화면의 쪽 선택에 채워 넣어 사용자가
+        보고 고치게 한다 — 합치기 규격의 "판정은 자동, 갱신은 사람"을 여기서도 지킨다.
+        """
+        try:
+            plan = self._startup_plan
+            hint = plan.range_hint if plan else None
+            if hint is None:
+                raise PdfComposerError(
+                    "이 창에는 비교할 강의록이 없어 범위를 자동으로 짚을 수 없습니다.")
+            candidates = [source for source in self._session.sources
+                          if source.id != self._review_reference_id]
+            if not candidates:
+                raise PdfComposerError("먼저 족첵 PDF를 추가하세요.")
+
+            from .exam_range import locate
+
+            proposals = []
+            for source in candidates:
+                found = locate(source.path, hint.lecture, list(hint.others))
+                proposals.append({
+                    "document_id": source.id,
+                    "document_name": source.name,
+                    "page_count": source.page_count,
+                    "pages": found.pages if found else "",
+                    "matched": len(found.matched_pages) if found else 0,
+                    "confidence": round(found.confidence, 3) if found else 0.0,
+                    # 겨룰 다음 강의가 없어 문서 끝까지 간 경우에만 참이다. 화면은 이때만
+                    # "끝 쪽을 확인하세요"라고 말하면 된다.
+                    "uncertain": bool(found and found.uncertain),
+                })
+            return self._ok(proposals=proposals)
+        except Exception as exc:
+            return self._error(exc)
+
     def parse_range(self, text: str, page_count: int) -> dict:
         try:
             indices = parse_page_ranges(text, int(page_count))
@@ -784,7 +813,15 @@ class ComposerApi:
         except Exception as exc:
             return self._error(exc)
 
-    def finish_review(self, decision: str, order: list[dict] | None = None) -> dict:
+    def finish_review(self, decision: str, order: list[dict] | None = None,
+                      change: str = "both",
+                      changed_pages: list[int] | None = None) -> dict:
+        """Record what the reviewer decided.
+
+        ``decision`` says how the file is swapped, ``change`` says what actually
+        changed — see :mod:`noteditor.merge_handoff`. ``changed_pages`` come from
+        the comparison already on screen, so summary.ai never has to redo it.
+        """
         try:
             plan = self._review_plan
             if plan is None:
@@ -796,6 +833,7 @@ class ComposerApi:
                 )
             if plan.decision_path is not None:
                 plan.decision_path.unlink(missing_ok=True)
+            recorded = (decision, change, changed_pages)
             if decision == "merge":
                 actual_order = order or []
                 candidates = [source for source in self._session.sources
@@ -808,10 +846,12 @@ class ComposerApi:
                     noteditor_version=__version__, version=plan.version,
                 )
                 result["sidecar"] = str(sidecar)
-                decision_path = write_decision(plan, decision)
-                return self._ok(decision=decision, decision_path=str(decision_path), result=result)
-            decision_path = write_decision(plan, decision)
-            return self._ok(decision=decision, decision_path=str(decision_path), result=None)
+                decision_path = write_decision(plan, *recorded)
+                return self._ok(decision=decision, change=change,
+                                decision_path=str(decision_path), result=result)
+            decision_path = write_decision(plan, *recorded)
+            return self._ok(decision=decision, change=change,
+                            decision_path=str(decision_path), result=None)
         except Exception as exc:
             return self._error(exc)
 
@@ -832,14 +872,18 @@ class ComposerApi:
         except Exception as exc:
             return self._error(exc)
 
-    def _close(self) -> None:
+    def _close(self, wait_for_analysis: bool = False) -> None:
         if self._closed:
             return
         self._closed = True
         with self._handwriting_lock:
             self._handwriting_generation += 1
-            if self._handwriting_future is not None:
-                self._handwriting_future.cancel()
+            future = self._handwriting_future
+            if future is not None:
+                future.cancel()
+        if wait_for_analysis and future is not None and not future.cancelled():
+            # Android removes imported copies after this worker has released them.
+            future.result()
         self._session.close()
 
 

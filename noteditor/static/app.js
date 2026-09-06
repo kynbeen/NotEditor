@@ -14,13 +14,17 @@ const state = {
   thumbnailCacheBytes: 0,
   imageInflight: new Map(),
   sourceThumbnailObserver: null,
+  resultThumbnailObserver: null,
+  resultSortable: null,
   previewObserver: null,
   previewScrollFrame: 0,
   bridgeReady: false,
   bridgeFailed: false,
-  runtime: window.location.hash === "#desktop" || !window.location.protocol.startsWith("http")
-    ? "desktop"
-    : "web",
+  runtime: window.AndroidBridge
+    ? "android"
+    : (window.location.hash === "#desktop" || !window.location.protocol.startsWith("http")
+      ? "desktop"
+      : "web"),
   handwriting: {
     source_name: null, source_format: null, target_name: null,
     ready: false, inspection: null, plan: [],
@@ -37,9 +41,11 @@ let handwritingPollTimer = 0;
 const $ = (selector) => document.querySelector(selector);
 const refs = {
   add: $("#addPdfButton"), emptyAdd: $("#emptyAddButton"), save: $("#saveButton"),
+  suggestRanges: $("#suggestRangesButton"),
   mergeOutputName: $("#mergeOutputName"),
-  sourceEmpty: $("#sourceEmpty"), sourceHeading: $("#sourceHeading"),
+  resetOrder: $("#resetOrderButton"), sourceEmpty: $("#sourceEmpty"), sourceHeading: $("#sourceHeading"),
   documentList: $("#documentList"), documentCount: $("#documentCount"),
+  resultEmpty: $("#resultEmpty"), resultList: $("#resultList"), pageCount: $("#pageCount"),
   selectionSummary: $("#selectionSummary"), previewEmpty: $("#previewEmpty"),
   previewStage: $("#previewStage"), previewPages: $("#previewPages"),
   previewEyebrow: $("#previewEyebrow"), previewHeading: $("#previewHeading"),
@@ -69,6 +75,8 @@ const refs = {
   sourceReviewSummary: $("#sourceReviewSummary"),
   sourceReviewMessage: $("#sourceReviewMessage"),
   sourceReviewSkip: $("#sourceReviewSkip"), sourceReviewApply: $("#sourceReviewApply"),
+  sourceReviewQuestions: $("#sourceReviewQuestions"),
+  sourceReviewContent: $("#sourceReviewContent"),
   sourceReviewPrev: $("#sourceReviewPrev"), sourceReviewNext: $("#sourceReviewNext"),
   sourceReviewPosition: $("#sourceReviewPosition"),
   sourceReviewRangeNote: $("#sourceReviewRangeNote"),
@@ -208,7 +216,7 @@ const webApi = {
   choose_handwriting_target: () => uploadWebFiles(refs.webTargetPdfInput, "/api/handwriting/target", "file", "대상 PDF 업로드 중…"),
   handwriting_status: () => fetchJson("/api/handwriting/status"),
   retry_handwriting_analysis: () => fetchJson("/api/handwriting/retry", { method: "POST" }),
-  handwriting_preview: (pageIndex, sourceIndex) => fetchJson(`/api/handwriting/preview?page_index=${pageIndex}&source_index=${sourceIndex}`),
+  handwriting_preview: (pageIndex, sourceIndex, nativePageId = "") => fetchJson(`/api/handwriting/preview?page_index=${pageIndex}&source_index=${sourceIndex}&native_page_id=${encodeURIComponent(nativePageId)}`),
   reset_handwriting_transfer: () => fetchJson("/api/handwriting/reset", { method: "POST" }),
   reset_documents: () => fetchJson("/api/documents/reset", { method: "POST" }),
   save_handwriting_transfer: (suggestedName, pagePlan, allowUnconfirmed = false) => downloadWebResult("/api/handwriting/export", {
@@ -216,7 +224,77 @@ const webApi = {
   }),
 };
 
+function parseAndroidResponse(value) {
+  try {
+    return JSON.parse(value);
+  } catch (_error) {
+    return { ok: false, error: "안드로이드 앱 응답을 읽을 수 없습니다." };
+  }
+}
+
+function callAndroidPython(method, ...args) {
+  return Promise.resolve(parseAndroidResponse(
+    window.AndroidBridge.callPython(method, JSON.stringify(args)),
+  ));
+}
+
+let androidFileOperation = null;
+
+function callAndroidFileOperation(start) {
+  if (androidFileOperation) {
+    return Promise.resolve({ ok: false, error: "열려 있는 파일 선택 또는 저장을 먼저 마쳐 주세요." });
+  }
+  return new Promise((resolve) => {
+    androidFileOperation = resolve;
+    window._androidFileCallback = (value) => {
+      const finish = androidFileOperation;
+      androidFileOperation = null;
+      window._androidFileCallback = null;
+      finish(parseAndroidResponse(value));
+    };
+    try {
+      start();
+    } catch (error) {
+      androidFileOperation = null;
+      window._androidFileCallback = null;
+      resolve({ ok: false, error: error.message || String(error) });
+    }
+  });
+}
+
+const androidApi = window.AndroidBridge ? {
+  health: () => callAndroidPython("health"),
+  startup_plan: () => callAndroidPython("startup_plan"),
+  log_client_error: (message) => callAndroidPython("log_client_error", message),
+  choose_pdfs: () => callAndroidFileOperation(() => window.AndroidBridge.choosePdfs()),
+  remove_document: (documentId) => callAndroidPython("remove_document", documentId),
+  page_image: (documentId, pageIndex, kind) => callAndroidPython("page_image", documentId, pageIndex, kind),
+  parse_range: (value, pageCount) => callAndroidPython("parse_range", value, pageCount),
+  save_result: (order, suggestedName) => callAndroidFileOperation(
+    () => window.AndroidBridge.saveResult(JSON.stringify(order), suggestedName),
+  ),
+  choose_handwriting_source: () => callAndroidFileOperation(
+    () => window.AndroidBridge.chooseHandwritingSource(),
+  ),
+  choose_handwriting_target: () => callAndroidFileOperation(
+    () => window.AndroidBridge.chooseHandwritingTarget(),
+  ),
+  handwriting_status: () => callAndroidPython("handwriting_status"),
+  retry_handwriting_analysis: () => callAndroidPython("retry_handwriting_analysis"),
+  handwriting_preview: (pageIndex, sourceIndex, nativePageId = "") => callAndroidPython(
+    "handwriting_preview", pageIndex, sourceIndex, nativePageId,
+  ),
+  reset_handwriting_transfer: () => callAndroidPython("reset_handwriting_transfer"),
+  reset_documents: () => callAndroidPython("reset_documents"),
+  save_handwriting_transfer: (suggestedName, pagePlan, allowUnconfirmed = false) => (
+    callAndroidFileOperation(() => window.AndroidBridge.saveHandwriting(
+      suggestedName, JSON.stringify(pagePlan), allowUnconfirmed,
+    ))
+  ),
+} : null;
+
 function requireApi() {
+  if (androidApi) return androidApi;
   const bridge = window.pywebview?.api;
   if (bridge) return bridge;
   if (state.runtime === "web") return webApi;
@@ -285,13 +363,15 @@ function applyStartupPlan(plan) {
   state.selected = new Set(state.order.map(refKey));
   // 계획이 문서·쪽 순서 그대로면 사용자가 순서를 손댄 것이 아니다. 무조건 dirty 로 두면
   // 그 뒤 선택을 바꿀 때마다 새 쪽이 결과 목록 맨 끝으로 밀린다(빈 계획이 특히 그렇다).
-  state.orderDirty = state.order.map(refKey).join(" ")
-    !== defaultOrder().map(refKey).join(" ");
+  state.orderDirty = state.order.map(refKey).join("\u0000")
+    !== defaultOrder().map(refKey).join("\u0000");
   state.mergeOutputNameDirty = true;
   refs.mergeOutputName.value = withoutKnownExtension(plan.output_name || "merged.pdf");
   refs.mergeOutputName.title = `summary.ai 지정 저장 경로: ${plan.output_path}`;
   refs.mergeWorkspace.classList.toggle("review-mode", plan.mode === "review");
   refs.sourceReview.hidden = plan.mode !== "review";
+  // 강의록을 함께 받은 합치기 세션에서만 [범위 자동 인식]이 뜻이 있다.
+  refs.suggestRanges.hidden = !(plan.mode === "merge" && plan.can_suggest_ranges);
   // summary.ai 인계 창은 그 한 가지 일만 한다. 필기 옮기기로 새어 나가면 인계를 끝내지
   // 않은 채 창이 남고, summary.ai 는 결과를 영영 기다린다.
   lockToMergeTool();
@@ -303,7 +383,11 @@ function applyStartupPlan(plan) {
     refs.resetDocuments.hidden = true;
     refs.save.hidden = true;
     refs.sourceHeading.textContent = "수집함 PDF 쪽 선택";
-    refs.sourceReviewApply.textContent = plan.origin === "merged" ? "합쳐서 갱신" : "전체 갱신";
+    // 버튼 문구는 **무엇이 바뀌었는가**를 말한다. 파일을 어떻게 갈아 끼우는지(전체 갱신 /
+    // 합쳐서 갱신)는 자료 생성 방식이 이미 정해 놓은 것이라 사용자가 고를 일이 아니다.
+    refs.sourceReviewMessage.textContent = plan.origin === "merged"
+      ? "오른쪽에서 결과에 넣을 쪽을 확인한 뒤, 무엇이 달라졌는지 고르세요. 고른 쪽으로 다시 합쳐 갱신합니다."
+      : "무엇이 달라졌는지 고르면 summary.ai가 그만큼만 다시 실행합니다.";
     renderSourceReview();
   } else {
     // 인계 합치기는 여기서 파일을 내려받는 것이 아니라 summary.ai 로 돌아가는 일이다.
@@ -505,25 +589,60 @@ function jumpToChangedPage(step) {
   updateSourceReviewJump();
 }
 
-async function finishSourceReview(decision) {
+const REVIEW_BUTTONS = () => [
+  refs.sourceReviewSkip, refs.sourceReviewQuestions,
+  refs.sourceReviewContent, refs.sourceReviewApply,
+];
+
+const CHANGE_DONE_MESSAGE = {
+  none: "파일은 유지하고 현재 수집함 버전을 원본 최신으로 확인했습니다. summary.ai로 돌아갑니다.",
+  questions: "바뀐 쪽의 문제만 다시 뽑도록 전달했습니다. summary.ai가 이어서 처리합니다.",
+  content: "본문 갱신을 전달했습니다. 문제 추출과 예상문제는 건너뜁니다.",
+  both: "갱신 결정을 전달했습니다. summary.ai가 결과를 반영합니다.",
+};
+
+// summary.ai 가 "수정된 페이지만 대상으로" 다시 읽으려면 어느 쪽이 바뀌었는지 알아야 한다.
+// **그 계산은 이 화면이 이미 하고 있다** — 다시 계산하게 두면 사용자가 본 것과 어긋날 수 있다.
+//
+// 쪽 번호의 기준은 **갱신 뒤 summary.ai 가 갖게 될 파일**이다. 온전한 파일을 통째로 갈아
+// 끼우면 그건 수집함 파일이라 대상 쪽 번호를 그대로 쓰면 되고, 합쳐서 갱신하면 결과 PDF 의
+// 쪽 번호는 오른쪽에서 고른 순서라 그 자리를 찾아 줘야 한다.
+function changedPagesForSummaryAi() {
+  const comparison = state.sourceReview;
+  if (!comparison) return [];
+  const changed = comparison.pairs
+    .filter((pair) => pair.target_ref && !sourceReviewStatus(pair).same)
+    .map((pair) => pair.target_ref);
+  let pages;
+  if (state.mergePlan?.origin === "merged") {
+    const position = new Map(state.order.map((ref, index) => [refKey(ref), index + 1]));
+    pages = changed.map((ref) => position.get(refKey(ref))).filter(Boolean);
+  } else {
+    pages = changed.map((ref) => ref.page_index + 1);
+  }
+  return [...new Set(pages)].sort((a, b) => a - b);
+}
+
+async function finishSourceReview(change) {
   if (!state.mergePlan || state.mergePlan.mode !== "review") return;
+  // 파일을 어떻게 갈아 끼우는가는 자료 생성 방식이 정한다. 무엇이 바뀌었는가와 별개 축이다.
+  const decision = change === "none"
+    ? "skip"
+    : (state.mergePlan.origin === "merged" ? "merge" : "refresh");
+  const changedPages = change === "none" ? [] : changedPagesForSummaryAi();
   refs.sourceReviewMessage.className = "source-review-message";
   refs.sourceReviewMessage.textContent = "summary.ai에 결정을 전달하는 중…";
-  refs.sourceReviewApply.disabled = true;
-  refs.sourceReviewSkip.disabled = true;
+  REVIEW_BUTTONS().forEach((button) => { button.disabled = true; });
   try {
-    const response = await callApi("finish_review", decision, state.order);
+    const response = await callApi("finish_review", decision, state.order, change, changedPages);
     if (!response.ok) throw new Error(response.error);
     refs.sourceReviewMessage.classList.add("success");
-    refs.sourceReviewMessage.textContent = decision === "skip"
-      ? "파일은 유지하고 현재 수집함 버전을 원본 최신으로 확인했습니다. summary.ai로 돌아갑니다."
-      : "갱신 결정을 전달했습니다. summary.ai가 결과를 반영합니다.";
+    refs.sourceReviewMessage.textContent = CHANGE_DONE_MESSAGE[change] || CHANGE_DONE_MESSAGE.both;
     await returnToSummaryAi(refs.sourceReviewMessage.textContent);
   } catch (error) {
     refs.sourceReviewMessage.classList.add("error");
     refs.sourceReviewMessage.textContent = error.message;
-    refs.sourceReviewApply.disabled = false;
-    refs.sourceReviewSkip.disabled = false;
+    REVIEW_BUTTONS().forEach((button) => { button.disabled = false; });
   }
 }
 
@@ -586,7 +705,7 @@ function renderHandwritingStatus(error = "") {
   refs.saveHandwriting.disabled = !state.bridgeReady || !status.ready;
   refs.retryHandwriting.hidden = analysis.state !== "error";
   const card = refs.handwritingCompatibility;
-  card.classList.remove("waiting", "ready", "error");
+  card.classList.remove("waiting", "ready", "error", "review-required");
   const icon = card.querySelector(".compatibility-icon");
   const heading = card.querySelector("strong");
   const detail = card.querySelector("p");
@@ -618,10 +737,16 @@ function renderHandwritingStatus(error = "") {
     const common = `필기 데이터가 있는 페이지 ${info.annotated_page_count}쪽 · Samsung 펜 캐시 ${info.stroke_cache_count}개`;
     if (info.mode === "rebuild" && info.match) {
       const match = info.match;
+      const blankSources = new Set((info.source_order || [])
+        .filter((page) => page.blank && page.source_index !== null)
+        .map((page) => page.source_index));
+      const omittedBlank = match.source_only.filter((index) => blankSources.has(index)).length;
+      const preservedOld = match.source_only.length - omittedBlank;
       heading.textContent = `공통 ${match.matched_count}쪽을 찾아 새 PDF 기준으로 재조립합니다.`;
       detail.textContent = [
-        `새 PDF 전용 ${match.target_only.length}쪽 추가 · 구판 전용 ${match.source_only.length}쪽 검사 · 불확실 ${match.uncertain_count}쌍`,
+        `새 PDF 전용 ${match.target_only.length}쪽 추가 · 구판 전용 ${preservedOld}쪽 보존 검토${omittedBlank ? ` · 빈 원본 ${omittedBlank}쪽 자동 생략` : ""} · 불확실 ${match.uncertain_count}쌍`,
         info.alignment ? `본문 배율 ${info.alignment.scale.toFixed(3)}배 · 이동 ${info.alignment.offset_x_mm}, ${info.alignment.offset_y_mm}mm` : "공통 쪽의 페이지 좌표가 일치합니다.",
+        ...(info.alignment ? alignmentWarnings(info.alignment) : []),
         common,
       ].join("\n");
     } else if (info.mode === "aligned" && info.alignment) {
@@ -636,6 +761,12 @@ function renderHandwritingStatus(error = "") {
       heading.textContent = `${info.page_count}쪽의 페이지 좌표가 모두 일치합니다.`;
       detail.textContent = `${common} · 대상 PDF를 그대로 넣습니다.`;
     }
+    if (info.alignment?.requires_confirmation) {
+      card.classList.remove("ready");
+      card.classList.add("review-required");
+      icon.textContent = "!";
+      detail.textContent += "\n자동 정렬 품질이 낮아 모든 대응 쪽을 확인해야 합니다.";
+    }
     return;
   }
   card.classList.add("waiting");
@@ -644,21 +775,28 @@ function renderHandwritingStatus(error = "") {
   detail.textContent = "쪽이 추가·삭제됐으면 공통 쪽을 자동으로 찾고, 크기나 여백이 달라지면 본문을 기준으로 자동 정렬합니다.";
 }
 
-function clonePagePlan(plan) {
-  return (plan?.slots || []).map((slot) => ({
-    source_index: slot.source_index,
-    target_index: slot.target_index,
-    confirmed: Boolean(slot.confirmed),
-    manual: Boolean(slot.manual),
-    excluded: Boolean(slot.excluded),
-    attention: Boolean(slot.needs_confirmation || slot.kind !== "matched"),
-  }));
+function clonePagePlan(plan, sourceOrder = []) {
+  const blankSources = new Set(sourceOrder
+    .filter((page) => page.blank && page.source_index !== null)
+    .map((page) => page.source_index));
+  return (plan?.slots || []).map((slot) => {
+    const autoOmitted = slot.target_index === null && blankSources.has(slot.source_index);
+    return {
+      source_index: slot.source_index,
+      target_index: slot.target_index,
+      confirmed: autoOmitted || Boolean(slot.confirmed),
+      manual: Boolean(slot.manual),
+      excluded: autoOmitted || Boolean(slot.excluded),
+      auto_omitted: autoOmitted,
+      attention: !autoOmitted && Boolean(slot.needs_confirmation || slot.kind !== "matched"),
+    };
+  });
 }
 
 function reviewBadge(slot) {
   if (slot.excluded) return "결과에서 제외";
   if (slot.source_index === null) return "새 쪽";
-  if (slot.target_index === null) return "원본에만 있음";
+  if (slot.target_index === null) return "원본 쪽 보존";
   if (slot.manual) return "수동 정렬";
   if (slot.attention && slot.confirmed) return "확인 완료";
   return slot.confirmed ? "자동 매칭" : "확인 필요";
@@ -667,16 +805,21 @@ function reviewBadge(slot) {
 function renderReviewSummary() {
   const plan = state.handwriting.plan;
   const included = plan.filter((slot) => !slot.excluded);
-  const excluded = plan.length - included.length;
+  const excluded = plan.filter((slot) => slot.excluded && !slot.auto_omitted).length;
+  const omitted = plan.filter((slot) => slot.auto_omitted).length;
   const unconfirmed = included.filter((slot) => !slot.confirmed).length;
   const automatic = included.filter((slot) => (
     slot.source_index !== null && slot.target_index !== null && !slot.manual
   )).length;
   const targetOnly = included.filter((slot) => slot.source_index === null).length;
   const sourceOnly = included.filter((slot) => slot.target_index === null).length;
+  const nativeCount = (state.handwriting.inspection?.source_order || [])
+    .filter((page) => page.source_index === null).length;
   refs.handwritingReviewSummary.textContent = [
-    `결과 ${included.length}쪽`,
+    `결과 ${included.length + nativeCount}쪽`,
+    nativeCount ? `별도 노트 ${nativeCount}쪽 보존` : "",
     excluded ? `제외 ${excluded}행` : "",
+    omitted ? `빈 원본 ${omitted}쪽 자동 생략` : "",
     `자동 연결 ${automatic}`,
     `새 전용 ${targetOnly}`,
     `옛 전용 ${sourceOnly}`,
@@ -703,6 +846,11 @@ function setReviewRowState(row, slot) {
   if (exclude) exclude.textContent = slot.excluded ? "다시 포함" : "결과에서 제외";
   const target = row.querySelector(".target-cell");
   if (target) target.draggable = !slot.excluded && slot.target_index !== null;
+  row.querySelectorAll(".review-move").forEach((button) => {
+    const index = Number(row.dataset.slotIndex);
+    button.disabled = slot.excluded || slot.target_index === null
+      || reviewMoveDestination(index, Number(button.dataset.direction)) === -1;
+  });
 }
 
 function makeReviewPage(emptyMessage, alt) {
@@ -739,9 +887,14 @@ function describeChangedPages(before, after) {
 
 function shiftedTargetPlan(from, to) {
   const before = state.handwriting.plan;
+  const active = before.map((slot, index) => slot.excluded ? -1 : index)
+    .filter((index) => index !== -1);
   const targets = before.map((slot) => slot.target_index);
-  const [moved] = targets.splice(from, 1);
-  targets.splice(to, 0, moved);
+  const moving = active.map((index) => targets[index]);
+  if (!active.includes(from) || !active.includes(to)) return before;
+  const [moved] = moving.splice(active.indexOf(from), 1);
+  moving.splice(active.indexOf(to), 0, moved);
+  active.forEach((index, position) => { targets[index] = moving[position]; });
   const priorByPair = new Map(before.map((slot) => [
     `${slot.source_index}:${slot.target_index}`, slot,
   ]));
@@ -749,6 +902,7 @@ function shiftedTargetPlan(from, to) {
     const target = targets[index];
     const same = priorByPair.get(`${prior.source_index}:${target}`);
     return {
+      ...prior,
       source_index: prior.source_index,
       target_index: target,
       confirmed: same ? same.confirmed : false,
@@ -756,6 +910,14 @@ function shiftedTargetPlan(from, to) {
       attention: same ? same.attention : true,
     };
   }).filter((slot) => slot.source_index !== null || slot.target_index !== null);
+}
+
+function reviewMoveDestination(index, direction) {
+  const plan = state.handwriting.plan;
+  for (let next = index + direction; next >= 0 && next < plan.length; next += direction) {
+    if (!plan[next].excluded) return next;
+  }
+  return -1;
 }
 
 function confirmReviewReorder(message) {
@@ -780,8 +942,9 @@ function confirmReviewReorder(message) {
 async function moveReviewTarget(from, to) {
   if (!Number.isInteger(from) || !Number.isInteger(to) || from === to) return;
   const before = state.handwriting.plan;
-  if (!before[from] || before[from].target_index === null) return;
-  const next = shiftedTargetPlan(from, Math.max(0, Math.min(to, before.length - 1)));
+  if (!before[from] || before[from].excluded || before[from].target_index === null
+    || !before[to] || before[to].excluded) return;
+  const next = shiftedTargetPlan(from, to);
   const changed = describeChangedPages(before, next);
   const relationshipCount = next.filter((slot, index) => (
     before[index]?.source_index !== slot.source_index
@@ -794,6 +957,7 @@ async function moveReviewTarget(from, to) {
   if (details && !await confirmReviewReorder(
     `${relationshipCount}개 대응이 달라집니다 (${details}). 변경된 행은 다시 확인해야 합니다. 계속할까요?`,
   )) return;
+  if (state.handwriting.plan !== before) return;
   state.handwriting.plan = next;
   renderPageReview();
 }
@@ -801,13 +965,15 @@ async function moveReviewTarget(from, to) {
 async function loadReviewRow(row, slotIndex) {
   if (row.dataset.loaded === "true") return;
   row.dataset.loaded = "true";
-  const slot = state.handwriting.plan[slotIndex];
+  const slot = row.dataset.nativePageId
+    ? { source_index: -1, target_index: null }
+    : state.handwriting.plan[slotIndex];
   if (!slot) return;
-  const targetIndex = slot.target_index === null ? 0 : slot.target_index;
+  const targetIndex = slot.target_index === null ? -1 : slot.target_index;
   const sourceIndex = slot.source_index === null ? -1 : slot.source_index;
   try {
     const response = await queuePreviewRequest(() => callApi(
-      "handwriting_preview", targetIndex, sourceIndex,
+      "handwriting_preview", targetIndex, sourceIndex, row.dataset.nativePageId || "",
     ));
     if (!response.ok) throw new Error(response.error);
     const sourcePage = row.querySelector(".source-cell .review-page");
@@ -820,7 +986,7 @@ async function loadReviewRow(row, slotIndex) {
       sourcePage.classList.remove("loading");
       sourcePage.classList.add("loaded");
     }
-    if (slot.target_index !== null) {
+    if (slot.target_index !== null || slot.source_index !== null) {
       targetPage.querySelector(".review-background").src = response.after;
       targetPage.querySelector(".review-ink").src = response.ink;
       decodes.push(...targetPage.querySelectorAll("img"));
@@ -840,11 +1006,59 @@ async function loadReviewRow(row, slotIndex) {
       page.classList.remove("loading");
       page.classList.add("error");
       const placeholder = page.querySelector(".review-placeholder");
-      placeholder.textContent = "미리보기 실패 · 눌러서 다시 시도";
+      placeholder.textContent = row.dataset.nativePageId
+        ? `${error.message} · 눌러서 다시 시도`
+        : "미리보기 실패 · 눌러서 다시 시도";
       placeholder.onclick = () => loadReviewRow(row, slotIndex);
     });
     reportClientError(error);
   }
+}
+
+function nativeReviewPlacement(plan, sourceOrder) {
+  const entries = plan.map((slot, index) => ({
+    index,
+    page: sourceOrder.find((page) => page.source_index !== null
+      && page.source_index === slot.source_index),
+    retained: !slot.excluded,
+  }));
+  // Match SDOCX saving: each native page follows its nearest retained predecessor.
+  sourceOrder.forEach((page, position) => {
+    if (page.source_index !== null) return;
+    const retained = entries.filter((entry) => entry.retained && !(entry.page?.blank
+      && entry.index !== undefined && plan[entry.index].target_index === null));
+    const predecessor = sourceOrder.slice(0, position).reverse()
+      .find((prior) => retained.some((entry) => entry.page === prior));
+    const successor = sourceOrder.slice(position + 1)
+      .find((next) => retained.some((entry) => entry.page === next));
+    const insertion = predecessor ? entries.findIndex((entry) => entry.page === predecessor) + 1
+      : successor ? entries.findIndex((entry) => entry.page === successor) : 0;
+    entries.splice(insertion, 0, { page, retained: true });
+  });
+  return entries;
+}
+
+function makeNativeReviewRow(page) {
+  const row = document.createElement("article");
+  row.className = "review-row confirmed special-row";
+  row.dataset.nativePageId = page.page_id;
+  for (const side of ["source", "target"]) {
+    const cell = document.createElement("div");
+    cell.className = `review-cell ${side}-cell`;
+    const label = `원본 노트 ${page.page_number}쪽`;
+    cell.append(makeReviewPage("", label));
+    const meta = document.createElement("div");
+    meta.className = "review-meta";
+    const title = document.createElement("strong");
+    title.textContent = side === "source" ? label : `${label} 유지`;
+    const detail = document.createElement("span");
+    detail.className = side === "source" ? "review-ink-count" : "review-badge";
+    if (side === "target") detail.textContent = "별도 노트 쪽 보존";
+    meta.append(title, detail);
+    cell.append(meta);
+    row.append(cell);
+  }
+  return row;
 }
 
 function renderPageReview() {
@@ -862,6 +1076,7 @@ function renderPageReview() {
   }, { root: null, rootMargin: "600px 0px" });
 
   state.handwriting.plan.forEach((slot, index) => {
+    if (slot.auto_omitted) return;
     const row = document.createElement("article");
     row.className = "review-row";
     row.dataset.slotIndex = String(index);
@@ -882,14 +1097,14 @@ function renderPageReview() {
     target.className = "review-cell target-cell";
     target.draggable = slot.target_index !== null;
     target.append(makeReviewPage(
-      slot.target_index === null ? "새 PDF에서 빠진 쪽 · 원본 필기와 배경을 보존" : "",
-      slot.target_index === null ? "" : `새 PDF ${slot.target_index + 1}쪽`,
+      "",
+      slot.target_index === null ? `보존할 원본 ${slot.source_index + 1}쪽` : `새 PDF ${slot.target_index + 1}쪽`,
     ));
     const targetMeta = document.createElement("div");
     targetMeta.className = "review-meta";
     targetMeta.innerHTML = `<span class="review-meta-copy">${
       slot.target_index === null
-        ? "<strong>새 PDF 쪽 없음</strong>"
+        ? `<strong>원본 ${slot.source_index + 1}쪽 유지</strong>`
         : `<span class="review-drag-handle" aria-hidden="true">⠿</span><strong>새 PDF ${slot.target_index + 1}쪽</strong>`
     }<span class="review-badge${slot.manual ? " manual" : ""}">${reviewBadge(slot)}</span></span>`;
     const confirm = document.createElement("button");
@@ -905,9 +1120,26 @@ function renderPageReview() {
     exclude.className = "review-exclude";
     exclude.addEventListener("click", () => {
       slot.excluded = !slot.excluded;
-      setReviewRowState(row, slot);
-      renderReviewSummary();
+      renderPageReview();
     });
+    if (slot.target_index !== null) {
+      const moves = document.createElement("span");
+      moves.className = "review-moves";
+      for (const [direction, icon, label] of [[-1, "\u2191", "위로 이동"], [1, "\u2193", "아래로 이동"]]) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "review-move";
+        button.dataset.direction = String(direction);
+        button.textContent = icon;
+        button.title = `새 PDF ${slot.target_index + 1}쪽 ${label}`;
+        button.setAttribute("aria-label", button.title);
+        button.addEventListener("click", () => {
+          void moveReviewTarget(index, reviewMoveDestination(index, direction));
+        });
+        moves.append(button);
+      }
+      targetMeta.append(moves);
+    }
     targetMeta.append(exclude, confirm);
     target.append(targetMeta);
 
@@ -942,6 +1174,17 @@ function renderPageReview() {
     setReviewRowState(row, slot);
     refs.handwritingReviewRows.append(row);
     state.reviewObserver.observe(row);
+  });
+  const rows = new Map([...refs.handwritingReviewRows.children]
+    .map((row) => [Number(row.dataset.slotIndex), row]));
+  const placement = nativeReviewPlacement(
+    state.handwriting.plan, state.handwriting.inspection?.source_order || [],
+  );
+  placement.forEach((entry) => {
+    const row = entry.index === undefined ? makeNativeReviewRow(entry.page) : rows.get(entry.index);
+    if (!row) return;
+    refs.handwritingReviewRows.append(row);
+    if (entry.index === undefined) state.reviewObserver.observe(row);
   });
   renderReviewSummary();
 }
@@ -1010,7 +1253,7 @@ function applyHandwritingResponse(response) {
     ready: Boolean(response.ready),
     inspection: response.inspection || null,
     plan: (selectionChanged || becameReady || !previous.plan?.length)
-      ? clonePagePlan(response.inspection?.plan)
+      ? clonePagePlan(response.inspection?.plan, response.inspection?.source_order || [])
       : previous.plan,
     analysis: response.analysis || {
       state: response.ready ? "ready" : "waiting",
@@ -1140,8 +1383,29 @@ function defaultOrder() {
 }
 
 function syncOrder() {
-  // 수동 순서변경은 제거했다. 문서를 추가한 순서, 각 PDF의 원래 쪽 순서가 곧 결과 순서다.
-  state.order = defaultOrder();
+  const valid = new Set(defaultOrder().map(refKey));
+  state.order = state.order.filter((ref) => valid.has(refKey(ref)));
+  if (!state.orderDirty) {
+    state.order = defaultOrder();
+    return;
+  }
+  const present = new Set(state.order.map(refKey));
+  defaultOrder().forEach((ref) => {
+    if (!present.has(refKey(ref))) insertNearOwnPages(ref);
+  });
+}
+
+function insertNearOwnPages(ref) {
+  const positions = [];
+  state.order.forEach((item, index) => {
+    if (item.document_id === ref.document_id) positions.push(index);
+  });
+  if (!positions.length) {
+    state.order.push(ref);
+    return;
+  }
+  const before = positions.find((index) => state.order[index].page_index > ref.page_index);
+  state.order.splice(before === undefined ? positions[positions.length - 1] + 1 : before, 0, ref);
 }
 
 function formatRanges(indices) {
@@ -1243,13 +1507,14 @@ function showInlineImageError(node, placeholder, retry) {
 async function loadThumbnailNode(node) {
   if (!node?.isConnected || node.dataset.imageLoaded === "true" || node.dataset.imageLoading === "true") return;
   node.dataset.imageLoading = "true";
-  const placeholder = node.querySelector(".image-placeholder");
+  const placeholder = node.querySelector(".image-placeholder, .result-image-placeholder");
   try {
     const pageIndex = Number(node.dataset.pageIndex);
     const src = await loadImage(node.dataset.documentId, pageIndex, "thumbnail");
     if (!node.isConnected) return;
     const image = new Image();
-    image.alt = `${pageIndex + 1}쪽`;
+    image.className = node.classList.contains("result-item") ? "result-thumb" : "";
+    image.alt = node.classList.contains("result-item") ? "" : `${pageIndex + 1}쪽`;
     image.src = src;
     placeholder?.replaceWith(image);
     node.dataset.imageLoaded = "true";
@@ -1327,6 +1592,7 @@ function setDocumentSelection(doc, indices) {
   updateDocumentSelectionUi(doc);
   updatePreviewSelection();
   updateSourceReviewSelection();
+  renderResult();
   renderSummary();
 }
 
@@ -1369,6 +1635,7 @@ function togglePage(doc, page, tile) {
   updatePreviewSelection(key);
   updateSourceReviewSelection(key);
   showPreview(doc.id, page.index, "원본 미리보기");
+  renderResult();
   renderSummary();
 }
 
@@ -1387,6 +1654,9 @@ function setActivePreview(docId, pageIndex, origin = "전체 페이지 미리보
   refs.previewMeta.textContent = `${doc.name} · ${pageIndex + 1}쪽`;
   refs.previewPages.querySelectorAll(".preview-page.active").forEach((node) => node.classList.remove("active"));
   previewNode(docId, pageIndex)?.classList.add("active");
+  refs.resultList.querySelectorAll(".result-item").forEach((node) => {
+    node.classList.toggle("active", node.dataset.key === pageKey(docId, pageIndex));
+  });
 }
 
 async function loadPreviewPage(node) {
@@ -1511,6 +1781,53 @@ function showPreview(docId, pageIndex, origin = "원본 미리보기") {
   node.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
+function renderResult() {
+  const orderLocked = isHandoffSession();
+  state.resultThumbnailObserver?.disconnect();
+  state.resultSortable?.destroy();
+  state.resultSortable = null;
+  state.resultThumbnailObserver = lazyImageObserver(refs.resultList);
+  refs.pageCount.textContent = `${state.order.length}쪽`;
+  refs.resultEmpty.hidden = state.order.length > 0;
+  refs.resultList.hidden = state.order.length === 0;
+  refs.resultList.replaceChildren();
+  refs.resetOrder.hidden = orderLocked;
+  refs.resetOrder.disabled = orderLocked || !state.orderDirty || state.order.length < 2;
+
+  state.order.forEach((ref) => {
+    const doc = documentById(ref.document_id);
+    if (!doc) return;
+    const item = document.createElement("li");
+    item.className = `result-item${state.active?.document_id === ref.document_id && state.active?.page_index === ref.page_index ? " active" : ""}`;
+    item.dataset.key = refKey(ref);
+    item.dataset.documentId = ref.document_id;
+    item.dataset.pageIndex = String(ref.page_index);
+    item.innerHTML = `<span class="result-image-placeholder"></span><div class="result-label"><strong>${escapeHtml(doc.name)}</strong><span>원본 ${ref.page_index + 1}쪽</span></div><button class="drag-handle" type="button" aria-label="${escapeHtml(doc.name)} ${ref.page_index + 1}쪽 순서 이동" title="끌어서 순서 변경"${orderLocked ? " hidden disabled" : ""}>⠿</button>`;
+    item.addEventListener("click", () => showPreview(ref.document_id, ref.page_index, "결과 미리보기"));
+    refs.resultList.append(item);
+    state.resultThumbnailObserver.observe(item);
+  });
+
+  if (!orderLocked && state.order.length > 1 && window.Sortable) {
+    state.resultSortable = window.Sortable.create(refs.resultList, {
+      animation: 140,
+      handle: ".drag-handle",
+      ghostClass: "dragging",
+      chosenClass: "drag-chosen",
+      delay: 120,
+      delayOnTouchOnly: true,
+      touchStartThreshold: 4,
+      onEnd: ({ oldIndex, newIndex }) => {
+        if (!Number.isInteger(oldIndex) || !Number.isInteger(newIndex) || oldIndex === newIndex) return;
+        const [moved] = state.order.splice(oldIndex, 1);
+        state.order.splice(newIndex, 0, moved);
+        state.orderDirty = true;
+        renderResult();
+      },
+    });
+  }
+}
+
 function renderSummary() {
   refs.selectionSummary.textContent = !state.bridgeReady
     ? (state.bridgeFailed ? "바로가기로 다시 실행해 주세요" : "앱 연결 중…")
@@ -1522,10 +1839,11 @@ function renderSummary() {
   refs.resetDocuments.disabled = !state.bridgeReady || state.documents.length === 0 || state.mergePlan?.mode === "review";
 }
 
-function render() { renderDocuments(); renderPreviewPages(); renderSummary(); }
+function render() { renderDocuments(); renderPreviewPages(); renderResult(); renderSummary(); }
 
 async function addPdfs() {
   setBusy(true, "PDF를 확인하는 중…");
+  let added = false;
   try {
     const response = await callApi("choose_pdfs");
     if (!response.ok) throw new Error(response.error);
@@ -1537,8 +1855,42 @@ async function addPdfs() {
     render();
     const first = response.added[0];
     showPreview(first.id, 0, "원본 미리보기");
+    added = true;
   } catch (error) { toast(error.message, "error"); }
   finally { setBusy(false); }
+  // 강의록을 함께 받은 인계 세션이면 **묻지 않고 바로 짚어 준다.** 사용자가 원한 것은
+  // "넣으면 알아서 범위를 잡는 것"이고, 결과는 어차피 화면에서 확인하고 고칠 수 있다.
+  if (added && state.mergePlan?.can_suggest_ranges) await suggestRanges({auto: true});
+}
+
+// 족첵에서 이 강의에 해당하는 쪽을 골라 넣는다. **제안일 뿐이다** — 쪽 선택에 채워 넣어
+// 사용자가 보고 고치게 하고, 저장은 언제나 사람이 누른다.
+async function suggestRanges({auto = false} = {}) {
+  if (!state.mergePlan?.can_suggest_ranges) return;
+  setBusy(true, "강의록과 대조해 범위를 짚는 중…");
+  try {
+    const response = await callApi("suggest_ranges");
+    if (!response.ok) throw new Error(response.error);
+    const notes = [];
+    for (const proposal of response.proposals) {
+      const doc = documentById(proposal.document_id);
+      if (!doc) continue;
+      if (!proposal.pages) {
+        notes.push(`${doc.name}: 이 강의 쪽을 못 찾아 그대로 두었습니다`);
+        continue;
+      }
+      const parsed = await callApi("parse_range", proposal.pages, doc.page_count);
+      if (!parsed.ok) { notes.push(`${doc.name}: ${parsed.error}`); continue; }
+      setDocumentSelection(doc, parsed.indices);
+      notes.push(`${doc.name}: ${proposal.pages}`
+        + (proposal.uncertain ? " (뒤에 겨룰 다음 강의가 없어 끝 쪽을 확인해 주세요)" : ""));
+    }
+    toast(`범위 제안\n${notes.join("\n")}`,
+      response.proposals.some((p) => p.uncertain) ? "warn" : "success");
+  } catch (error) {
+    // 자동 실행이 실패했다고 합치기를 못 하게 만들지 않는다 — 손으로 고르면 된다.
+    toast(auto ? `범위 자동 인식을 건너뜁니다: ${error.message}` : error.message, "error");
+  } finally { setBusy(false); }
 }
 
 async function removeDocument(id) {
@@ -1586,12 +1938,11 @@ async function saveResult() {
 
 refs.add.addEventListener("click", addPdfs);
 refs.emptyAdd.addEventListener("click", addPdfs);
+refs.suggestRanges.addEventListener("click", () => { void suggestRanges(); });
 refs.save.addEventListener("click", saveResult);
-refs.sourceReviewApply.addEventListener("click", () => {
-  const decision = state.mergePlan?.origin === "merged" ? "merge" : "refresh";
-  void finishSourceReview(decision);
+REVIEW_BUTTONS().forEach((button) => {
+  button.addEventListener("click", () => { void finishSourceReview(button.dataset.change); });
 });
-refs.sourceReviewSkip.addEventListener("click", () => { void finishSourceReview("skip"); });
 refs.sourceReviewPrev.addEventListener("click", () => jumpToChangedPage(-1));
 refs.sourceReviewNext.addEventListener("click", () => jumpToChangedPage(1));
 refs.mergeOutputName.addEventListener("input", () => { state.mergeOutputNameDirty = true; });
@@ -1607,6 +1958,11 @@ refs.retryHandwriting.addEventListener("click", retryHandwritingAnalysis);
 refs.resetHandwriting.addEventListener("click", resetHandwritingTransfer);
 refs.resetDocuments.addEventListener("click", resetDocuments);
 refs.saveHandwriting.addEventListener("click", saveHandwritingTransfer);
+refs.resetOrder.addEventListener("click", () => {
+  state.orderDirty = false;
+  state.order = defaultOrder();
+  renderResult();
+});
 refs.previewStage.addEventListener("scroll", () => {
   if (state.previewScrollFrame) return;
   state.previewScrollFrame = requestAnimationFrame(updatePreviewFromScroll);
@@ -1626,7 +1982,7 @@ window.addEventListener("pywebviewready", initializeBridge);
 setBridgeState(false, false);
 showTool("merge");
 renderHandwritingStatus();
-if (window.pywebview?.api || state.runtime === "web") initializeBridge();
+if (window.AndroidBridge || window.pywebview?.api || state.runtime === "web") initializeBridge();
 setTimeout(() => {
   if (!state.bridgeReady) setBridgeState(false, true);
 }, 6000);

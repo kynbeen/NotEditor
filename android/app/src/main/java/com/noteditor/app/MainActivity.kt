@@ -3,6 +3,7 @@ package com.noteditor.app
 import android.net.Uri
 import android.os.Bundle
 import android.webkit.WebSettings
+import android.webkit.WebChromeClient
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.result.contract.ActivityResultContracts
@@ -15,6 +16,8 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
+import java.util.UUID
+import java.util.concurrent.Executors
 
 class MainActivity : AppCompatActivity() {
 
@@ -23,7 +26,8 @@ class MainActivity : AppCompatActivity() {
         private set
 
     private var genericFileCallback: ((String) -> Unit)? = null
-
+    private lateinit var sessionDir: File
+    private val fileWorker = Executors.newSingleThreadExecutor()
     // PDF 복수 선택 런처 (문서 합치기)
     private val openPdfsLauncher = registerForActivityResult(
         ActivityResultContracts.OpenMultipleDocuments()
@@ -41,16 +45,17 @@ class MainActivity : AppCompatActivity() {
             return@registerForActivityResult
         }
 
-        Thread {
+        fileWorker.execute {
             try {
                 val copiedPaths = mutableListOf<String>()
                 for (uri in uris) {
                     val name = getFileName(uri) ?: "document_${System.currentTimeMillis()}.pdf"
-                    val target = File(cacheDir, name)
+                    val target = newInputFile(name)
                     copyUriToFile(uri, target)
                     copiedPaths.add(target.absolutePath)
                 }
                 val jsonPaths = JSONArray().put(JSONArray(copiedPaths)).toString()
+                val api = pyApi ?: throw IllegalStateException("파이썬 엔진이 아직 초기화되지 않았습니다.")
                 val resultJson = api.callAttr("dispatch_call", "add_paths", jsonPaths).toString()
                 runOnUiThread { cb?.invoke(resultJson) }
             } catch (e: Exception) {
@@ -60,7 +65,7 @@ class MainActivity : AppCompatActivity() {
                 }.toString()
                 runOnUiThread { cb?.invoke(errJson) }
             }
-        }.start()
+        }
     }
 
     // 필기 원본 선택 런처 (.sdocx, .notewise, .goodnotes)
@@ -75,10 +80,10 @@ class MainActivity : AppCompatActivity() {
             return@registerForActivityResult
         }
 
-        Thread {
+        fileWorker.execute {
             try {
                 val name = getFileName(uri) ?: "source_notes.sdocx"
-                val target = File(cacheDir, name)
+                val target = newInputFile(name)
                 copyUriToFile(uri, target)
                 val argsJson = JSONArray().put(target.absolutePath).toString()
                 val api = pyApi ?: throw IllegalStateException("파이썬 엔진이 아직 초기화되지 않았습니다.")
@@ -91,7 +96,7 @@ class MainActivity : AppCompatActivity() {
                 }.toString()
                 runOnUiThread { cb?.invoke(errJson) }
             }
-        }.start()
+        }
     }
 
     // 필기 대상 PDF 선택 런처
@@ -106,10 +111,10 @@ class MainActivity : AppCompatActivity() {
             return@registerForActivityResult
         }
 
-        Thread {
+        fileWorker.execute {
             try {
                 val name = getFileName(uri) ?: "target_document.pdf"
-                val target = File(cacheDir, name)
+                val target = newInputFile(name)
                 copyUriToFile(uri, target)
                 val argsJson = JSONArray().put(target.absolutePath).toString()
                 val api = pyApi ?: throw IllegalStateException("파이썬 엔진이 아직 초기화되지 않았습니다.")
@@ -122,11 +127,12 @@ class MainActivity : AppCompatActivity() {
                 }.toString()
                 runOnUiThread { cb?.invoke(errJson) }
             }
-        }.start()
+        }
     }
 
     // 문서 합치기 결과 저장 런처
     private var pendingOrderJson: String = "[]"
+    private var pendingResultName: String = "merged.pdf"
     private val saveResultLauncher = registerForActivityResult(
         ActivityResultContracts.CreateDocument("application/pdf")
     ) { uri: Uri? ->
@@ -142,9 +148,10 @@ class MainActivity : AppCompatActivity() {
         }
 
         val order = pendingOrderJson
-        Thread {
+        val resultName = pendingResultName
+        fileWorker.execute {
             try {
-                val tempOutput = File(cacheDir, "merged_output_${System.currentTimeMillis()}.pdf")
+                val tempOutput = File(sessionDir, "merged_output_${System.currentTimeMillis()}.pdf")
                 val args = JSONArray().put(JSONArray(order)).put(tempOutput.absolutePath).toString()
                 val api = pyApi ?: throw IllegalStateException("파이썬 엔진이 아직 초기화되지 않았습니다.")
                 val resultRaw = api.callAttr("dispatch_call", "build_result_to_path", args).toString()
@@ -153,8 +160,9 @@ class MainActivity : AppCompatActivity() {
                 if (resultObj.optBoolean("ok", false)) {
                     copyFileToUri(tempOutput, uri)
                     tempOutput.delete()
+                    resultObj.optJSONObject("result")?.put("path", resultName)
                 }
-                runOnUiThread { cb?.invoke(resultRaw) }
+                runOnUiThread { cb?.invoke(resultObj.toString()) }
             } catch (e: Exception) {
                 val errJson = JSONObject().apply {
                     put("ok", false)
@@ -162,11 +170,14 @@ class MainActivity : AppCompatActivity() {
                 }.toString()
                 runOnUiThread { cb?.invoke(errJson) }
             }
-        }.start()
+        }
     }
 
     // 필기 옮기기 결과 저장 런처
-    private var pendingHandwritingArgs: Triple<String, String, Boolean>? = null
+    private data class HandwritingSaveArgs(
+        val suggestedName: String, val pagePlanJson: String, val allowUnconfirmed: Boolean
+    )
+    private var pendingHandwritingArgs: HandwritingSaveArgs? = null
     private val saveHandwritingLauncher = registerForActivityResult(
         ActivityResultContracts.CreateDocument("*/*")
     ) { uri: Uri? ->
@@ -184,14 +195,14 @@ class MainActivity : AppCompatActivity() {
             return@registerForActivityResult
         }
 
-        Thread {
+        fileWorker.execute {
             try {
-                val suggestedName = args.first
-                val pagePlanJson = args.second
-                val allowUnconfirmed = args.third
+                val suggestedName = args.suggestedName
+                val pagePlanJson = args.pagePlanJson
+                val allowUnconfirmed = args.allowUnconfirmed
 
                 val ext = if (suggestedName.contains(".")) suggestedName.substringAfterLast(".") else "sdocx"
-                val tempOutput = File(cacheDir, "transfer_output_${System.currentTimeMillis()}.$ext")
+                val tempOutput = File(sessionDir, "transfer_output_${System.currentTimeMillis()}.$ext")
 
                 val pyArgs = JSONArray().apply {
                     put(tempOutput.absolutePath)
@@ -206,8 +217,9 @@ class MainActivity : AppCompatActivity() {
                 if (resultObj.optBoolean("ok", false)) {
                     copyFileToUri(tempOutput, uri)
                     tempOutput.delete()
+                    resultObj.optJSONObject("result")?.put("path", suggestedName)
                 }
-                runOnUiThread { cb?.invoke(resultRaw) }
+                runOnUiThread { cb?.invoke(resultObj.toString()) }
             } catch (e: Exception) {
                 val errJson = JSONObject().apply {
                     put("ok", false)
@@ -215,11 +227,15 @@ class MainActivity : AppCompatActivity() {
                 }.toString()
                 runOnUiThread { cb?.invoke(errJson) }
             }
-        }.start()
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        sessionDir = File(cacheDir, "session-${UUID.randomUUID()}").apply {
+            check(mkdirs()) { "임시 작업 폴더를 만들 수 없습니다." }
+        }
 
         webView = WebView(this)
         setContentView(webView)
@@ -235,6 +251,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         webView.webViewClient = object : WebViewClient() {}
+        webView.webChromeClient = WebChromeClient()
 
         // JavaScript 브리지 등록
         webView.addJavascriptInterface(NotEditorBridge(this, webView), "AndroidBridge")
@@ -261,46 +278,81 @@ class MainActivity : AppCompatActivity() {
     }
 
     fun choosePdfs(callback: (String) -> Unit) {
-        this.genericFileCallback = callback
+        beginFileOperation(callback)
         openPdfsLauncher.launch(arrayOf("application/pdf"))
     }
 
     fun chooseHandwritingSource(callback: (String) -> Unit) {
-        this.genericFileCallback = callback
+        beginFileOperation(callback)
         openHandwritingSourceLauncher.launch(arrayOf("*/*"))
     }
 
     fun chooseHandwritingTarget(callback: (String) -> Unit) {
-        this.genericFileCallback = callback
+        beginFileOperation(callback)
         openHandwritingTargetLauncher.launch(arrayOf("application/pdf"))
     }
 
     fun saveResult(orderJson: String, suggestedName: String, callback: (String) -> Unit) {
-        this.genericFileCallback = callback
+        beginFileOperation(callback)
         this.pendingOrderJson = orderJson
+        this.pendingResultName = suggestedName
         saveResultLauncher.launch(suggestedName)
     }
 
-    fun saveHandwriting(suggestedName: String, pagePlanJson: String, allowUnconfirmed: Boolean, callback: (String) -> Unit) {
-        this.genericFileCallback = callback
-        this.pendingHandwritingArgs = Triple(suggestedName, pagePlanJson, allowUnconfirmed)
+    fun saveHandwriting(suggestedName: String, pagePlanJson: String, allowUnconfirmed: Boolean,
+                        callback: (String) -> Unit) {
+        beginFileOperation(callback)
+        this.pendingHandwritingArgs = HandwritingSaveArgs(
+            suggestedName, pagePlanJson, allowUnconfirmed
+        )
         saveHandwritingLauncher.launch(suggestedName)
     }
 
     private fun copyUriToFile(uri: Uri, destFile: File) {
-        contentResolver.openInputStream(uri)?.use { input ->
+        val inputStream = contentResolver.openInputStream(uri)
+            ?: throw IllegalStateException("선택한 파일을 열 수 없습니다.")
+        inputStream.use { input ->
             FileOutputStream(destFile).use { output ->
                 input.copyTo(output)
             }
         }
     }
 
+    private fun newInputFile(displayName: String): File {
+        val directory = File(sessionDir, UUID.randomUUID().toString()).apply {
+            check(mkdirs()) { "임시 파일 폴더를 만들 수 없습니다." }
+        }
+        val safeName = File(displayName).name.ifBlank { "input" }
+        return File(directory, safeName)
+    }
+
     private fun copyFileToUri(sourceFile: File, destUri: Uri) {
-        contentResolver.openOutputStream(destUri)?.use { output ->
+        val outputStream = contentResolver.openOutputStream(destUri)
+            ?: throw IllegalStateException("선택한 위치에 파일을 쓸 수 없습니다.")
+        outputStream.use { output ->
             sourceFile.inputStream().use { input ->
                 input.copyTo(output)
             }
         }
+    }
+
+    private fun beginFileOperation(callback: (String) -> Unit) {
+        check(genericFileCallback == null) { "이미 파일 선택 또는 저장 창이 열려 있습니다." }
+        genericFileCallback = callback
+    }
+
+    override fun onDestroy() {
+        genericFileCallback = null
+        if (::webView.isInitialized) webView.destroy()
+        fileWorker.execute {
+            try {
+                pyApi?.callAttr("_close", true)
+            } finally {
+                if (::sessionDir.isInitialized) sessionDir.deleteRecursively()
+            }
+        }
+        fileWorker.shutdown()
+        super.onDestroy()
     }
 
     private fun getFileName(uri: Uri): String? {

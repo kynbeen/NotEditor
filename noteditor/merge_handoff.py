@@ -1,4 +1,23 @@
-"""summary.ai ↔ NotEditor merge/review handoff contracts (versions 1 and 2)."""
+"""summary.ai ↔ NotEditor merge/review handoff contracts (versions 1, 2 and 3).
+
+Version 3 splits the review outcome into two independent axes. ``decision`` still
+says **how the file is swapped** (``refresh`` / ``merge`` / ``skip``); the new
+``change`` says **what actually changed**, which is what decides how much of
+summary.ai's eight-step pipeline has to run again:
+
+===============  ==========================================================
+``change``       what summary.ai does
+===============  ==========================================================
+``none``         nothing — the reviewer confirmed the pages look the same
+``questions``    re-reads only ``changed_pages`` of the exam PDF and re-uploads
+``content``      re-runs from step 1 but keeps the question steps
+``both``         re-runs everything (this is also how version 2 is read)
+===============  ==========================================================
+
+``changed_pages`` are 1-based page numbers **in the current collection file**.
+The review screen already computes them, so summary.ai never recomputes the
+comparison — that would risk disagreeing with what the reviewer saw.
+"""
 from __future__ import annotations
 
 import json
@@ -14,15 +33,33 @@ from .ranges import format_page_ranges
 
 
 LEGACY_CONTRACT_VERSION = 1
-CONTRACT_VERSION = 2
-SUPPORTED_CONTRACT_VERSIONS = (LEGACY_CONTRACT_VERSION, CONTRACT_VERSION)
+REVIEW_CONTRACT_VERSION = 2      # collection-started merges and source page review
+CONTRACT_VERSION = 3             # review outcome split into decision + change
+SUPPORTED_CONTRACT_VERSIONS = (
+    LEGACY_CONTRACT_VERSION, REVIEW_CONTRACT_VERSION, CONTRACT_VERSION,
+)
 SIDECAR_SUFFIX = ".merge.json"
+
+DECISIONS = ("refresh", "merge", "skip")
+CHANGES = ("none", "questions", "content", "both")
 
 
 @dataclass(frozen=True)
 class MergePlanPart:
     path: Path
     pages: str
+
+
+@dataclass(frozen=True)
+class RangeHint:
+    """족첵에서 이 강의 몫을 자동으로 짚어 보라는 힌트.
+
+    ``lecture`` 는 이 강의의 강의록, ``others`` 는 같은 족첵을 나눠 쓰는 이웃 강의들의
+    강의록이다. 이웃을 함께 넣어야 경계가 선다 — :mod:`noteditor.exam_range` 참고.
+    """
+
+    lecture: Path
+    others: tuple[Path, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -36,6 +73,7 @@ class MergePlan:
     reference_path: Path | None = None
     origin: str | None = None
     decision_path: Path | None = None
+    range_hint: RangeHint | None = None
 
 
 def paths_refer_to_same_file(left: Path, right: Path) -> bool:
@@ -76,6 +114,30 @@ def _absolute_json(value: object, label: str) -> Path:
     return path.resolve()
 
 
+def _range_hint(value: object) -> RangeHint | None:
+    """범위 힌트는 **있으면 좋은 것**이라 조용히 없는 셈 칠 수 있다.
+
+    강의록을 못 읽는다고 합치기 자체를 막지 않는다 — 사용자는 늘 손으로 고를 수 있고,
+    자동 제안이 안 되는 것과 창이 안 열리는 것은 무게가 전혀 다르다.
+    """
+    if not isinstance(value, dict):
+        return None
+    raw_lecture = value.get("lecture_path")
+    if not isinstance(raw_lecture, str) or not raw_lecture.strip():
+        return None
+    lecture = Path(raw_lecture).expanduser()
+    if not lecture.is_absolute() or not lecture.is_file():
+        return None
+    others: list[Path] = []
+    for raw in value.get("other_lecture_paths") or []:
+        if not isinstance(raw, str) or not raw.strip():
+            continue
+        candidate = Path(raw).expanduser()
+        if candidate.is_absolute() and candidate.is_file():
+            others.append(candidate.resolve())
+    return RangeHint(lecture.resolve(), tuple(others))
+
+
 def load_merge_plan(path: str | Path) -> MergePlan:
     plan_path = Path(path).expanduser().resolve()
     if not plan_path.is_file():
@@ -102,7 +164,9 @@ def load_merge_plan(path: str | Path) -> MergePlan:
     reference_path: Path | None = None
     origin: str | None = None
     decision_path: Path | None = None
-    if version == CONTRACT_VERSION:
+    # 판 2 에서 들어온 칸들은 판 3 에도 그대로 있다. `== CONTRACT_VERSION` 으로 물으면
+    # 판을 올릴 때마다 옛 판이 조용히 이 블록을 건너뛰어 input_root 검사가 사라진다.
+    if version >= REVIEW_CONTRACT_VERSION:
         raw_root = payload.get("input_root")
         if not isinstance(raw_root, str) or not raw_root.strip():
             raise PdfComposerError("판 2 계획에 input_root가 없습니다.")
@@ -120,6 +184,8 @@ def load_merge_plan(path: str | Path) -> MergePlan:
             decision_path = _absolute_json(
                 payload.get("decision_path"), "비교 계획의 decision_path"
             )
+
+    range_hint = _range_hint(payload.get("range_hint")) if version >= CONTRACT_VERSION else None
 
     raw_parts = payload.get("parts")
     if not isinstance(raw_parts, list):
@@ -162,6 +228,7 @@ def load_merge_plan(path: str | Path) -> MergePlan:
         reference_path=reference_path,
         origin=origin,
         decision_path=decision_path,
+        range_hint=range_hint,
     )
 
 
@@ -252,13 +319,41 @@ def write_sidecar(
     return target
 
 
-def write_decision(plan: MergePlan, decision: str) -> Path:
+def normalize_changed_pages(value: object) -> list[int]:
+    """1-based page numbers, sorted and de-duplicated. Junk entries are dropped.
+
+    A bad entry must not sink the whole decision: the page list only narrows the
+    work, and an empty list makes summary.ai fall back to reading the whole file.
+    """
+    if not isinstance(value, (list, tuple, set)):
+        return []
+    pages = set()
+    for item in value:
+        try:
+            number = int(item)
+        except (TypeError, ValueError):
+            continue
+        if number >= 1:
+            pages.add(number)
+    return sorted(pages)
+
+
+def write_decision(plan: MergePlan, decision: str, change: str = "both",
+                   changed_pages: object = None) -> Path:
     if plan.mode != "review" or plan.decision_path is None or plan.origin is None:
         raise PdfComposerError("비교 계획이 아니어서 갱신 결정을 기록할 수 없습니다.")
     allowed = {"selected": {"refresh", "skip"}, "merged": {"merge", "skip"}}
     if decision not in allowed[plan.origin]:
         raise PdfComposerError(
             f"{plan.origin} 자료에서 허용하지 않는 갱신 결정입니다: {decision}"
+        )
+    if change not in CHANGES:
+        raise PdfComposerError(f"알 수 없는 변경 종류입니다: {change}")
+    # `넘어가기` 와 `변화 없음` 은 같은 것을 말한다. 어긋난 조합을 쓰면 읽는 쪽이 어느 쪽이
+    # 진짜였는지 알 수 없어 결정 파일을 통째로 버린다.
+    if (decision == "skip") != (change == "none"):
+        raise PdfComposerError(
+            f"`{decision}` 과 `{change}` 는 함께 기록할 수 없습니다."
         )
     if decision == "merge":
         if not plan.output_path.is_file() or not sidecar_path(plan.output_path).is_file():
@@ -269,6 +364,8 @@ def write_decision(plan: MergePlan, decision: str) -> Path:
     payload = {
         "version": CONTRACT_VERSION,
         "decision": decision,
+        "change": change,
+        "changed_pages": normalize_changed_pages(changed_pages),
         "saved_at": datetime.now(timezone.utc).isoformat(),
     }
     descriptor, temporary_name = tempfile.mkstemp(

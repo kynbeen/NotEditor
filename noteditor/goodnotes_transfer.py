@@ -4,10 +4,8 @@
 ``attachments/<첨부 ID>`` PDF에 들어 있다. 둘을 이어 주는 것은 ``index.events.pb`` 의
 용지·쪽 생성·쪽 연결 기록이다(자세한 구조는 ``goodnotes_archive``).
 
-**필기 저널은 바이트 하나 건드리지 않고 옮긴다.** 획의 좌표는 쪽 캔버스 기준이라 캔버스
-크기만 그대로 두면 필기는 제자리에 남는다. 그래서 다시 쓰는 것은 배경 첨부와 그것을
-가리키는 참조, 그리고 쪽 순서뿐이다. 획을 다시 인코딩하면 앱이 알아보지 못하는 모양으로
-번지는 것이 알려져 있어, 이 경계를 넘지 않는 것이 이 형식 지원의 핵심이다.
+필기 저널의 알려진 획 좌표는 새 PDF의 캔버스에 맞춰 변환하며, 알 수 없는 데이터는
+보존한다. 저장 뒤 배경 참조·캔버스 비율·필기 수를 다시 읽어 검증한다.
 
 쪽을 더하거나 지우거나 순서를 바꾸면 쪽 ID가 새로 필요하므로 아카이브를 다시 만든다.
 """
@@ -41,7 +39,7 @@ from .goodnotes_ink import (
     render_goodnotes_ink,
     transform_goodnotes_journal,
 )
-from .goodnotes_proto import GoodnotesTransferError
+from .goodnotes_proto import GoodnotesTransferError, field_values, split_delimited
 from .page_match import MatchResult
 from .page_plan import PagePlan
 from .transfer_plan import (
@@ -203,6 +201,12 @@ def transfer_goodnotes_handwriting(
     try:
         with _open_archive(source) as archive:
             members = safe_members(archive)
+            if any(65 in field_values(record)
+                   for record in split_delimited(archive.read("index.events.pb"))):
+                raise GoodnotesTransferError(
+                    "기존 Goodnotes 목차의 보존·병합은 아직 지원하지 않습니다. "
+                    "목차가 사라지지 않도록 저장을 중단했습니다."
+                )
             document = read_document(archive, members)
             embedded_pdf = background_pdf(archive, document)
             alignment = inspection.alignment
@@ -428,6 +432,16 @@ def preview_goodnotes_transfer(
             canvas = page.canvas
             if page.notes_member:
                 notes = archive.read(page.notes_member)
+
+    if page_index == -1:
+        from .transfer_plan import render_source_background
+
+        if source_index is None:
+            raise GoodnotesTransferError("보존할 원본 쪽을 지정하세요.")
+        background = render_source_background(embedded_pdf, source_index, error=GoodnotesTransferError)
+        with Image.open(BytesIO(background)) as image:
+            ink, count = render_goodnotes_ink(notes, image.size, canvas)
+        return background, background, ink, count
 
     preview_transform = None
     with pymupdf.open(target) as new_document:

@@ -13,10 +13,10 @@ class StaticUiContractTests(unittest.TestCase):
         cls.manifest = json.loads((static / "manifest.webmanifest").read_text(encoding="utf-8"))
         cls.service_worker = (static / "sw.js").read_text(encoding="utf-8")
 
-    def test_merge_workspace_has_source_and_preview_without_a_reorder_panel(self):
+    def test_merge_workspace_has_source_preview_and_reorder_panel(self):
         self.assertIn("source-panel", self.html)
         self.assertIn("preview-panel", self.html)
-        self.assertNotIn("result-panel", self.html)
+        self.assertIn("result-panel", self.html)
         self.assertIn("grid-template-columns", self.css)
 
     def test_selected_pages_are_bright_and_unselected_pages_dimmed(self):
@@ -48,18 +48,35 @@ class StaticUiContractTests(unittest.TestCase):
         self.assertNotIn("renderDocuments()", toggle_body)
         self.assertIn("updateDocumentSelectionUi(doc)", toggle_body)
 
-    def test_merge_order_is_fixed_to_document_and_page_order(self):
-        self.assertNotIn("item.draggable = true", self.js)
-        self.assertNotIn("resetOrderButton", self.html)
-        self.assertNotIn('class="drag-handle"', self.html)
-        self.assertIn("state.order = defaultOrder()", self.js)
+    def test_merge_order_supports_mouse_and_touch_reordering(self):
+        self.assertIn("resetOrderButton", self.html)
+        self.assertIn("vendor/sortable-1.15.7.min.js", self.html)
+        self.assertIn("window.Sortable.create", self.js)
+        self.assertIn('handle: ".drag-handle"', self.js)
+        self.assertIn("delayOnTouchOnly: true", self.js)
+        self.assertIn("state.order.splice(newIndex, 0, moved)", self.js)
+        self.assertIn("state.orderDirty = true", self.js)
+        self.assertIn("function insertNearOwnPages(ref)", self.js)
+
+    def test_summary_ai_handoff_keeps_the_reproducible_contract_order(self):
+        render_result = self.js.split("function renderResult()", 1)[1].split(
+            "function renderSummary()", 1
+        )[0]
+        self.assertIn("const orderLocked = isHandoffSession()", render_result)
+        self.assertIn("refs.resetOrder.hidden = orderLocked", render_result)
+        self.assertIn("!orderLocked && state.order.length > 1", render_result)
+        self.assertIn('orderLocked ? " hidden disabled" : ""', render_result)
+
+    def test_javascript_source_contains_no_literal_nul_bytes(self):
+        self.assertNotIn("\x00", self.js)
+        self.assertIn(r'join("\u0000")', self.js)
 
     def test_file_buttons_wait_for_runtime_connection(self):
         self.assertIn('id="addPdfButton" class="button secondary" type="button" disabled', self.html)
         self.assertIn('id="emptyAddButton" class="button primary" type="button" disabled', self.html)
         self.assertIn('callApi("health")', self.js)
         self.assertIn("NotEditor 연결을 확인할 수 없습니다", self.js)
-        self.assertIn('runtime: window.location.hash === "#desktop"', self.js)
+        self.assertIn('window.location.hash === "#desktop"', self.js)
 
     def test_summary_ai_startup_plan_populates_the_desktop_merge_ui(self):
         self.assertIn("startup_plan: async () => ({ ok: true, plan: null })", self.js)
@@ -75,18 +92,48 @@ class StaticUiContractTests(unittest.TestCase):
         self.assertIn("현재 수집함 파일", self.html)
         self.assertIn("function renderSourceReview()", self.js)
         self.assertIn('callApi("page_image", pageRef.document_id', self.js)
-        self.assertIn('callApi("finish_review", decision, state.order)', self.js)
-        self.assertIn('plan.origin === "merged" ? "합쳐서 갱신" : "전체 갱신"', self.js)
-        self.assertIn("넘어가기", self.html)
+        self.assertIn(
+            'callApi("finish_review", decision, state.order, change, changedPages)', self.js)
+        self.assertIn("function changedPagesForSummaryAi()", self.js)
+        self.assertIn("변화 없음", self.html)
         self.assertIn(".workspace.review-mode", self.css)
         self.assertIn("수집함 PDF 쪽 선택", self.js)
+
+    def test_exam_ranges_are_proposed_automatically_after_adding_files(self):
+        """사용자가 원한 것은 "넣으면 알아서 범위를 잡는 것"이다 — 묻지 않고 바로 짚는다."""
+        self.assertIn('id="suggestRangesButton"', self.html)
+        self.assertIn("범위 자동 인식", self.html)
+        self.assertIn("if (added && state.mergePlan?.can_suggest_ranges)", self.js)
+        self.assertIn('callApi("suggest_ranges")', self.js)
+        # 제안일 뿐이다 — 쪽 선택에 채워 넣어 사용자가 보고 고치게 한다.
+        self.assertIn("setDocumentSelection(doc, parsed.indices)", self.js)
+        # 겨룰 다음 강의가 없어 끝 경계를 믿기 어려운 경우에만 그렇게 말한다.
+        self.assertIn("끝 쪽을 확인해 주세요", self.js)
+        self.assertIn(".toast.warn", self.css)
+
+    def test_both_change_explains_partial_question_rebuild(self):
+        button = self.html.split('id="sourceReviewApply"', 1)[1].split(">", 1)[0]
+        self.assertIn("본문 영향 단계부터", button)
+        self.assertIn("바뀐 쪽만", button)
+        self.assertNotIn("처음부터 전부", button)
+
+    def test_review_layout_never_pushes_the_decision_row_off_the_window(self):
+        """낮은 창에서 결정 버튼이 화면 밖으로 밀려 사용자가 스크롤해야 했다.
+
+        실측(Playwright, 1240x640): 고정 바닥 588px 때문에 버튼 줄 바닥이 651px 로 나갔다.
+        안쪽에서 스크롤하라고 만든 화면인데 바깥이 스크롤된 것이다.
+        """
+        self.assertIn("min-height: min(588px, calc(100vh - 92px))", self.css)
+        self.assertNotIn("height: calc(100vh - 92px); min-height: 588px", self.css)
+        # 비교 칸의 바닥이 높으면 그것만으로 버튼 줄을 밀어낸다.
+        self.assertIn("height: clamp(220px, 57vh, 650px)", self.css)
 
     def test_source_review_uses_a_large_left_comparison_and_right_page_picker(self):
         self.assertIn("grid-template-columns: minmax(650px, 2.7fr) minmax(300px, .8fr)", self.css)
         self.assertIn(".workspace.review-mode .source-panel { grid-column: 2", self.css)
         self.assertIn(".workspace.review-mode .preview-panel { display: none; }", self.css)
         self.assertIn(".source-review .page-review-rows { min-height: 0; flex: 1; overflow-y: auto;", self.css)
-        self.assertIn(".source-review .review-page { height: clamp(360px", self.css)
+        self.assertIn(".source-review .review-page { height: clamp(220px", self.css)
         self.assertIn("position: sticky; top: 0; z-index: 30;", self.css)   # 도구 막대 고정
         self.assertIn('{ root: refs.sourceReview, rootMargin: "600px 0px" }', self.js)
 
@@ -97,8 +144,13 @@ class StaticUiContractTests(unittest.TestCase):
         self.assertIn("updateSourceReviewSelection(key)", self.js)
         self.assertIn(".source-review .review-cell.target-cell.excluded .review-page", self.css)
 
-    def test_source_review_skip_explains_that_it_keeps_the_file_and_accepts_the_source(self):
-        self.assertIn("파일은 유지하고 현재 수집함 버전을 원본 최신으로 확인합니다", self.html)
+    def test_source_review_offers_four_outcomes_instead_of_a_yes_or_no(self):
+        """무엇이 바뀌었는지에 따라 summary.ai 가 다시 도는 범위가 달라진다."""
+        for label in ("변화 없음", "문제 수정됨", "내용 수정됨", "문제와 내용 수정됨"):
+            self.assertIn(label, self.html)
+        for change in ("none", "questions", "content", "both"):
+            self.assertIn(f'data-change="{change}"', self.html)
+        self.assertIn("파일을 그대로 두고 현재 수집함 버전을 확인한 것으로 기록합니다", self.html)
         self.assertIn("파일은 유지하고 현재 수집함 버전을 원본 최신으로 확인했습니다", self.js)
 
     def test_changed_pages_can_be_jumped_to_directly(self):
@@ -177,7 +229,10 @@ class StaticUiContractTests(unittest.TestCase):
         self.assertIn('id="handwritingReviewRows"', self.html)
         self.assertIn('id="reviewInkToggle"', self.html)
         self.assertIn("옛 문서 · 필기 원본", self.html)
-        self.assertIn("새 PDF · 드래그하여 순서 수정", self.html)
+        self.assertIn("결과 문서", self.html)
+        self.assertIn('slot.target_index === null ? -1 : slot.target_index', self.js)
+        self.assertIn('원본 쪽 보존', self.js)
+        self.assertIn('보존할 원본 ${slot.source_index + 1}쪽', self.js)
         self.assertIn('"handwriting_preview", targetIndex, sourceIndex', self.js)
         self.assertIn("sourcePage.querySelector(\".review-ink\").src = response.ink", self.js)
         self.assertIn("targetPage.querySelector(\".review-ink\").src = response.ink", self.js)
@@ -210,6 +265,9 @@ class StaticUiContractTests(unittest.TestCase):
         self.assertIn('id="handwritingReview"', self.html)
         self.assertIn("function shiftedTargetPlan", self.js)
         self.assertIn('target.addEventListener("dragstart"', self.js)
+        self.assertIn('button.className = "review-move"', self.js)
+        self.assertIn('button.setAttribute("aria-label", button.title)', self.js)
+        self.assertIn('moveReviewTarget(index, reviewMoveDestination(index, direction))', self.js)
         self.assertIn("개 대응이 달라집니다", self.js)
         self.assertIn("변경된 행은 다시 확인해야 합니다", self.js)
         self.assertIn('id="reviewReorderDialog"', self.html)
@@ -236,7 +294,17 @@ class StaticUiContractTests(unittest.TestCase):
         self.assertIn('window.location.hash === "#desktop"', self.js)
         self.assertIn('callApi("toggle_fullscreen")', self.js)
 
+    def test_android_bridge_maps_python_and_file_operations(self):
+        self.assertIn('runtime: window.AndroidBridge', self.js)
+        self.assertIn('window.AndroidBridge.callPython(method, JSON.stringify(args))', self.js)
+        self.assertIn('window.AndroidBridge.choosePdfs()', self.js)
+        self.assertIn('window.AndroidBridge.saveResult(JSON.stringify(order), suggestedName)', self.js)
+        self.assertIn('window.AndroidBridge.saveHandwriting(', self.js)
+        self.assertIn('if (androidApi) return androidApi', self.js)
+        self.assertIn('if (window.AndroidBridge || window.pywebview?.api', self.js)
+
     def test_service_worker_never_caches_api_or_upload_responses(self):
+        self.assertIn('"/vendor/sortable-1.15.7.min.js"', self.service_worker)
         self.assertIn('url.pathname.startsWith("/api/")', self.service_worker)
         self.assertIn('event.request.method !== "GET"', self.service_worker)
         self.assertIn('caches.match("/index.html")', self.service_worker)

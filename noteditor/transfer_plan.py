@@ -9,7 +9,7 @@ Samsung Notes(SDOCX)든 Notewise든 "문서에 들어 있는 PDF를 새 PDF로 �
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from collections.abc import Callable, Sequence
@@ -36,13 +36,20 @@ class TransferInspection:
     mode: str = "exact"
     alignment: Alignment | None = None
     match: MatchResult | None = None
+    source_order: tuple[dict, ...] = ()
 
     def as_dict(self) -> dict:
         plan = None
         if self.match is not None and self.source_page_count is not None:
-            plan = PagePlan.from_match(
+            page_plan = PagePlan.from_match(
                 self.match, self.source_page_count, self.page_count
-            ).as_dict()
+            )
+            if self.alignment is not None and self.alignment.requires_confirmation:
+                page_plan = replace(page_plan, slots=tuple(
+                    replace(slot, confirmed=False) if slot.kind == "matched" else slot
+                    for slot in page_plan.slots
+                ))
+            plan = page_plan.as_dict()
         return {
             "source_name": self.source_name,
             "target_name": self.target_name,
@@ -56,6 +63,7 @@ class TransferInspection:
             "alignment": self.alignment.as_dict() if self.alignment else None,
             "match": self.match.as_dict() if self.match else None,
             "plan": plan,
+            "source_order": list(self.source_order),
         }
 
 
@@ -81,6 +89,21 @@ def open_pdf(
         document.close()
         raise
     return document
+
+
+def render_source_background(
+    embedded_pdf: bytes, source_index: int, *, max_side: int = 900,
+    error: type[Exception] = HandwritingTransferError,
+) -> bytes:
+    """Render an unmatched source page in its own, unchanged coordinates."""
+    from . import pdf as pymupdf
+
+    with open_pdf(embedded_pdf, "원본 배경 PDF", error=error) as document:
+        if not 0 <= source_index < document.page_count:
+            raise error(f"원본 문서에 없는 쪽 번호입니다: {source_index + 1}")
+        page = document[source_index]
+        scale = min(max_side / max(page.rect.width, page.rect.height), 3.0)
+        return page.get_pixmap(matrix=pymupdf.Matrix(scale, scale), alpha=False).tobytes("png")
 
 
 def geometry(document) -> list[tuple[float, float, int]]:

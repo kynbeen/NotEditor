@@ -678,6 +678,15 @@ def preview_notewise_transfer(
     with _archive_context(source) as (archive, _members, pdf_name, page_names):
         embedded_pdf = archive.read(pdf_name)
         page_payload = archive.read(page_names[source_index]) if source_index is not None else None
+    if page_index == -1:
+        from .transfer_plan import render_source_background
+
+        if source_index is None:
+            raise NotewiseTransferError("보존할 원본 쪽을 지정하세요.")
+        background = render_source_background(embedded_pdf, source_index, error=NotewiseTransferError)
+        with Image.open(BytesIO(background)) as image:
+            ink, count = render_notewise_ink(page_payload, image.size)
+        return background, background, ink, count
     preview_transform = None
     with pymupdf.open(target) as new_document:
         if source_index is None:

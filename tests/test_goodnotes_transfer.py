@@ -180,6 +180,25 @@ class GoodnotesTransferTest(unittest.TestCase):
             member = next(n for n in archive.namelist() if n.startswith("notes/"))
             return archive.read(member)
 
+    def test_existing_outline_rejects_without_replacing_output(self):
+        from noteditor.goodnotes_proto import encode_field, encode_varint
+
+        source = self.directory / "with-outline.goodnotes"
+        with zipfile.ZipFile(FIXTURE) as archive, zipfile.ZipFile(source, "w") as result:
+            for member in archive.infolist():
+                payload = archive.read(member)
+                if member.filename == "index.events.pb":
+                    event = encode_field(65, 2, b"")
+                    payload += encode_varint(len(event)) + event
+                result.writestr(member, payload)
+        _make_pdf(self.target, "Lecture", pages=1)
+        original = source.read_bytes()
+        self.output.write_bytes(b"previous output")
+        with self.assertRaisesRegex(GoodnotesTransferError, "목차"):
+            transfer_goodnotes_handwriting(source, self.target, self.output)
+        self.assertEqual(source.read_bytes(), original)
+        self.assertEqual(self.output.read_bytes(), b"previous output")
+
     def test_inspection_reports_the_source_page_and_strokes(self) -> None:
         _make_pdf(self.target, "Slide", pages=1)
         inspection = inspect_goodnotes_transfer(FIXTURE, self.target)

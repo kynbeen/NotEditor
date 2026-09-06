@@ -92,6 +92,26 @@ class RebuildHandwritingTests(unittest.TestCase):
     def tearDown(self):
         self.folder.cleanup()
 
+    def test_native_note_page_stays_between_its_original_neighbors(self):
+        from noteditor.sdocx_transfer import _rewrite_archive
+        order = read_page_order(self.payloads["pageIdInfo.dat"])
+        entries = list(order.entries)
+        native = entries.pop()
+        entries.insert(2, native)
+        reordered = self.root / "native-in-middle.sdocx"
+        _rewrite_archive(self.source_sdocx, reordered, {
+            "pageIdInfo.dat": PageOrder(order.file_hash, tuple(entries)).to_bytes(),
+        })
+        match = MatchResult((PagePair(0, 0), PagePair(1, None),
+                             PagePair(2, None), PagePair(None, 1), PagePair(3, 2)))
+        output = self.root / "native-preserved.sdocx"
+        rebuild_handwriting(reordered, self.target_pdf, output, match)
+        with ZipFile(output) as archive:
+            result = read_page_order(archive.read("pageIdInfo.dat"))
+            names = [entry.uuid for entry in result.entries]
+            self.assertEqual(names[:3], [UUIDS[0], UUIDS[4], UUIDS[2]])
+            self.assertEqual(archive.read(f"{UUIDS[4]}.page"), self.payloads[f"{UUIDS[4]}.page"])
+
     def test_rebuild_keeps_annotated_source_page_and_all_target_pages(self):
         match = MatchResult(
             pairs=(
@@ -224,7 +244,7 @@ class RebuildHandwritingTests(unittest.TestCase):
             order = read_page_order(archive.read("pageIdInfo.dat"))
             self.assertEqual(
                 [entry.uuid for entry in order.entries],
-                [UUIDS[3], UUIDS[0], UUIDS[2], NEW_UUID, UUIDS[4]],
+                [UUIDS[3], UUIDS[4], UUIDS[0], UUIDS[2], NEW_UUID],
             )
             self.assertEqual(read_page(archive.read(f"{UUIDS[3]}.page")).pdf.page_index, 0)
             self.assertEqual(read_page(archive.read(f"{UUIDS[0]}.page")).pdf.page_index, 1)

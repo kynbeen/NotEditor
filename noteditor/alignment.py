@@ -63,6 +63,14 @@ class Alignment:
         return abs(self.aspect_scale - self.scale) <= _AXIS_TOLERANCE * self.scale
 
     @property
+    def requires_confirmation(self) -> bool:
+        return (
+            not self.axes_agree
+            or self.residual > 50.0 * _POINTS_PER_MM
+            or self.clipped >= 5.0 * _POINTS_PER_MM
+        )
+
+    @property
     def improves(self) -> bool:
         """변환이 '그대로 두기'보다 본문을 실제로 더 잘 맞추는지."""
         return (
@@ -102,6 +110,7 @@ class Alignment:
             "clipped_mm": round(points_to_mm(self.clipped), 2),
             "identity": self.identity,
             "axes_agree": self.axes_agree,
+            "requires_confirmation": self.requires_confirmation,
             "improves": self.improves,
         }
 
@@ -233,7 +242,7 @@ def place_page(output_document, source_page, target_document, page_index: int, a
     source_rect = source_page.rect
     page = output_document.new_page(width=source_rect.width, height=source_rect.height)
     destination = pymupdf.Rect(*alignment.place(target_document[page_index].rect))
-    page.show_pdf_page(destination, target_document, page_index, keep_proportion=True, clip=None)
+    pymupdf.show_pdf_page(page, destination, target_document, page_index)
     return page
 
 
@@ -270,7 +279,7 @@ def render_comparison(
     with pymupdf.open() as staged:
         page = staged.new_page(width=rect.width, height=rect.height)
         destination = rect if alignment is None else pymupdf.Rect(*alignment.inverse_place(source_page.rect))
-        page.show_pdf_page(destination, source_document, page_index, keep_proportion=True, clip=None)
+        pymupdf.show_pdf_page(page, destination, source_document, page_index)
         before = page.get_pixmap(matrix=matrix, alpha=False).tobytes("png")
     after = target_page.get_pixmap(matrix=matrix, alpha=False).tobytes("png")
     return before, after

@@ -81,6 +81,7 @@ class NotEditorBridge(
 
     private fun dispatchCallback(resultJson: String) {
         activity.runOnUiThread {
+            if (activity.isDestroyed) return@runOnUiThread
             // 자바스크립트 따옴표 이스케이프 처리
             val escaped = JSONObject.quote(resultJson)
             val js = "if (window._androidFileCallback) { window._androidFileCallback($escaped); }"

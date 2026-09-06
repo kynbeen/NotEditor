@@ -76,6 +76,35 @@ class MergeHandoffTests(unittest.TestCase):
         path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
         return path
 
+    def test_range_hint_carries_the_lecture_and_its_neighbours(self):
+        plan = load_merge_plan(self.write_v2_plan(range_hint={
+            "lecture_path": str(self.reference.resolve()),
+            "other_lecture_paths": [str(self.second.resolve()), "상대경로.pdf",
+                                    str(self.root / "없는파일.pdf")],
+        }))
+        self.assertIsNotNone(plan.range_hint)
+        self.assertEqual(self.reference.resolve(), plan.range_hint.lecture)
+        # 없는 파일과 상대경로는 조용히 버린다 — 있으면 좋은 값이지 필수가 아니다.
+        self.assertEqual((self.second.resolve(),), plan.range_hint.others)
+
+    def test_a_broken_range_hint_does_not_stop_the_merge(self):
+        """자동 제안이 안 되는 것과 창이 안 열리는 것은 무게가 전혀 다르다."""
+        for bad in ("not-a-dict", {}, {"lecture_path": ""},
+                    {"lecture_path": "상대경로.pdf"},
+                    {"lecture_path": str(self.root / "없는파일.pdf")}):
+            plan = load_merge_plan(self.write_v2_plan(range_hint=bad))
+            self.assertIsNone(plan.range_hint, str(bad))
+
+    def test_version_2_plans_still_get_their_own_fields_checked(self):
+        """`== CONTRACT_VERSION` 으로 물으면 판을 올릴 때마다 옛 판의 검사가 사라진다."""
+        payload = json.loads(self.write_v2_plan().read_text(encoding="utf-8"))
+        payload["version"] = 2
+        payload.pop("input_root")
+        path = self.root / "handoff-old.json"
+        path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        with self.assertRaisesRegex(Exception, "input_root"):
+            load_merge_plan(path)
+
     def test_load_rejects_unknown_versions_and_source_overwrite(self):
         with self.subTest("unknown version"):
             with self.assertRaisesRegex(Exception, "지원하지 않는"):
@@ -251,12 +280,97 @@ class MergeHandoffTests(unittest.TestCase):
             self.assertEqual(review["origin"], "selected")
             self.assertEqual(review["comparison"]["matched_count"], 2)
             self.assertEqual(len(review["sources"]), 1)
-            finished = api.finish_review("skip")
+            finished = api.finish_review("skip", None, "none")
             self.assertTrue(finished["ok"], finished)
             payload = json.loads(decision.read_text(encoding="utf-8"))
             self.assertEqual(payload["version"], CONTRACT_VERSION)
             self.assertEqual(payload["decision"], "skip")
+            self.assertEqual(payload["change"], "none")
+            self.assertEqual(payload["changed_pages"], [])
             self.assertFalse(self.output.exists())
+        finally:
+            api._close()
+
+    def test_suggest_ranges_picks_this_lectures_pages_out_of_the_exam(self):
+        """족첵은 강의록 쪽을 그대로 싣고 뒤에 문제를 붙인다 — 그 그림을 찾으면 된다."""
+        lecture = self.root / "bundle" / "this-lecture.pdf"
+        make_pdf(lecture, ["LEC-1", "LEC-2", "LEC-3"])
+        previous = self.root / "bundle" / "prev-lecture.pdf"
+        make_pdf(previous, ["PREV-1"])
+        following = self.root / "bundle" / "next-lecture.pdf"
+        make_pdf(following, ["NEXT-1", "NEXT-2"])
+        exam = self.input_root / "족첵.pdf"
+        # 앞 강의 강의록·문제 → 내 강의록 3쪽 → 내 문제 2쪽 → 다음 강의 강의록
+        make_pdf(exam, ["PREV-1", "PREV-Q", "LEC-1", "LEC-2", "LEC-3",
+                        "Q-1", "Q-2", "NEXT-1", "NEXT-2"])
+
+        path = self.write_v2_plan(range_hint={
+            "lecture_path": str(lecture.resolve()),
+            "other_lecture_paths": [str(previous.resolve()), str(following.resolve())],
+        })
+        api = ComposerApi(ComposerSession(), path,
+                          preloaded_startup_plan=load_merge_plan(path))
+        try:
+            self.assertTrue(api.startup_plan()["ok"])
+            self.assertTrue(api.add_paths([str(exam.resolve())])["ok"])
+            response = api.suggest_ranges()
+            self.assertTrue(response["ok"], response)
+            proposal = response["proposals"][0]
+            # 내 강의록 쪽(3-5)에 뒤따르는 문제 쪽(6-7)까지. 앞으로는 늘리지 않는다 —
+            # 2쪽은 앞 강의의 문제다. 뒤는 다음 강의가 시작되는 8쪽에서 끊긴다.
+            self.assertEqual("3-7", proposal["pages"])
+            self.assertFalse(proposal["uncertain"])
+        finally:
+            api._close()
+
+    def test_suggest_ranges_needs_a_lecture_and_some_documents(self):
+        path = self.write_v2_plan()
+        api = ComposerApi(ComposerSession(), path,
+                          preloaded_startup_plan=load_merge_plan(path))
+        try:
+            self.assertTrue(api.startup_plan()["ok"])
+            response = api.suggest_ranges()
+            self.assertFalse(response["ok"])
+            self.assertIn("강의록", response["error"])
+        finally:
+            api._close()
+
+    def test_review_records_what_changed_and_which_pages(self):
+        """`decision` 은 파일을 어떻게 갈아 끼우는가, `change` 는 무엇이 바뀌었는가다."""
+        decision = self.root / "result" / "decision.json"
+        plan = self.write_v2_plan(
+            mode="review", origin="selected",
+            reference_path=str(self.reference.resolve()),
+            decision_path=str(decision.resolve()),
+            parts=[{"path": str(self.first.resolve()), "pages": ""}],
+        )
+        api = ComposerApi(ComposerSession(), plan)
+        try:
+            self.assertTrue(api.startup_plan()["ok"])
+            finished = api.finish_review("refresh", None, "questions", [4, 3, 3, 0])
+            self.assertTrue(finished["ok"], finished)
+            payload = json.loads(decision.read_text(encoding="utf-8"))
+            self.assertEqual(payload["change"], "questions")
+            self.assertEqual(payload["changed_pages"], [3, 4])
+        finally:
+            api._close()
+
+    def test_skip_and_no_change_have_to_agree(self):
+        """어긋난 조합을 남기면 읽는 쪽이 어느 쪽이 진짜였는지 알 수 없다."""
+        decision = self.root / "result" / "decision.json"
+        plan = self.write_v2_plan(
+            mode="review", origin="selected",
+            reference_path=str(self.reference.resolve()),
+            decision_path=str(decision.resolve()),
+            parts=[{"path": str(self.first.resolve()), "pages": ""}],
+        )
+        api = ComposerApi(ComposerSession(), plan)
+        try:
+            self.assertTrue(api.startup_plan()["ok"])
+            self.assertFalse(api.finish_review("skip", None, "content")["ok"])
+            self.assertFalse(api.finish_review("refresh", None, "none")["ok"])
+            self.assertFalse(api.finish_review("refresh", None, "nope")["ok"])
+            self.assertFalse(decision.exists())
         finally:
             api._close()
 

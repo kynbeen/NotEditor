@@ -133,6 +133,8 @@ class ExportRequest(BaseModel):
 
 
 class HandwritingExportRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
     suggested_name: str = "필기-이전.sdocx"
     target_mapping: list[int | None] | None = None
     page_plan: list[dict] | None = None
@@ -402,9 +404,9 @@ async def retry_handwriting_analysis(request: Request):
 
 
 @app.get("/api/handwriting/preview")
-async def handwriting_preview(request: Request, page_index: int = 0, source_index: int = -2):
+async def handwriting_preview(request: Request, page_index: int = 0, source_index: int = -2, native_page_id: str = ""):
     return _json_result(
-        await run_in_threadpool(_api(request).handwriting_preview, page_index, source_index)
+        await run_in_threadpool(_api(request).handwriting_preview, page_index, source_index, native_page_id)
     )
 
 
@@ -420,6 +422,10 @@ async def reset_handwriting(request: Request):
 
 def _export_handwriting(api: ComposerApi, payload: HandwritingExportRequest, output: Path) -> dict:
     inspection = api._inspection()
+    alignment = getattr(inspection, "alignment", None)
+    if (alignment is not None and alignment.requires_confirmation
+            and payload.page_plan is None and not payload.allow_unconfirmed):
+        raise ValueError("자동 정렬 품질이 낮습니다. 쪽 대응을 확인한 뒤 저장하세요.")
     if payload.page_plan is not None:
         plan = PagePlan.from_payload(
             inspection.source_page_count,
@@ -455,7 +461,9 @@ def _export_handwriting(api: ComposerApi, payload: HandwritingExportRequest, out
             output,
             match_override=match,
         )
-    return transfer_handwriting(api._handwriting_source, api._handwriting_target, output)
+    return transfer_handwriting(
+        api._handwriting_source, api._handwriting_target, output
+    )
 
 
 @app.post("/api/handwriting/export")

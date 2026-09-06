@@ -149,6 +149,26 @@ class ComposerEngineTests(unittest.TestCase):
         self.assertTrue(first.startswith("data:image/png;base64,"))
         self.assertIs(first, second)
 
+    def test_large_preview_is_jpeg_so_the_bridge_carries_less(self):
+        """큰 미리보기는 JPEG 다 — 화면으로 가는 값이 base64 문자열이라 크기가 곧 지연이다.
+
+        썸네일은 작아서 병목이 아니고 작은 글자에 JPEG 링잉이 생기므로 PNG 그대로 둔다.
+        """
+        path = self.root / "encoding.pdf"
+        make_source(path, ["PREVIEW ENCODING"])
+        source = self.session.add_files([path])[0]
+        preview = self.session.page_image(source["id"], 0, "preview")
+        thumbnail = self.session.page_image(source["id"], 0, "thumbnail")
+        self.assertTrue(preview.startswith("data:image/jpeg;base64,"))
+        self.assertTrue(thumbnail.startswith("data:image/png;base64,"))
+
+    def test_preview_renders_more_than_two_pages_at_once_on_a_multicore_machine(self):
+        """동시 렌더 2 는 코어가 몇 개든 2 였다 — 큰 PDF 를 넘길 때 그만큼 줄을 섰다."""
+        if (os_cpu := __import__("os").cpu_count() or 1) < 4:
+            self.skipTest(f"코어가 {os_cpu}개라 늘릴 여지가 없습니다")
+        self.assertGreater(engine_module.PREVIEW_RENDER_CONCURRENCY, 2)
+        self.assertLessEqual(engine_module.PREVIEW_RENDER_CONCURRENCY, 4)
+
     def test_concurrent_duplicate_preview_requests_share_one_render(self):
         path = self.root / "shared.pdf"
         make_source(path, ["SHARED"])
