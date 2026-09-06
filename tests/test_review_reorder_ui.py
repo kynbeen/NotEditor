@@ -59,6 +59,33 @@ def run_move(plan, **options):
 
 
 class ReviewReorderTests(unittest.TestCase):
+    def test_native_pages_follow_retained_neighbors_including_other_native_pages(self):
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("Node is required to execute app.js")
+        source_order = [dict(page_id="a", source_index=0, blank=False),
+                        dict(page_id="b", source_index=1, blank=True),
+                        dict(page_id="n1", source_index=None, blank=False),
+                        dict(page_id="n2", source_index=None, blank=False),
+                        dict(page_id="c", source_index=2, blank=False)]
+        cases = [
+            ([slot(0, 0), slot(1, None), slot(2, 1)], ["a", "n1", "n2", "b", "c"]),
+            ([slot(2, 0), slot(0, 1)], ["c", "a", "n1", "n2"]),
+            ([slot(0, 0, excluded=True), slot(2, 1)], ["a", "n1", "n2", "c"]),
+            ([slot(None, 0)], ["n1", "n2", None]),
+        ]
+        driver = DRIVER.split("const state =", 1)[0] + r'''
+const place = new Function(grab("nativeReviewPlacement") + "\nreturn nativeReviewPlacement;")();
+process.stdout.write(JSON.stringify(place(scenario.plan, scenario.sourceOrder)
+  .map(entry => entry.page?.page_id || null)));
+'''
+        for plan, expected in cases:
+            with self.subTest(plan=plan):
+                result = subprocess.run([node, "-e", driver, str(APP_JS),
+                    json.dumps(dict(plan=plan, sourceOrder=source_order))],
+                    capture_output=True, text=True, check=True)
+                self.assertEqual(json.loads(result.stdout), expected)
+
     def test_move_changes_targets_and_requires_reconfirmation(self):
         before = [slot(i, i) for i in range(3)]
         result = run_move(before, **{"from": 0, "direction": 1})

@@ -251,12 +251,53 @@ class MergeHandoffTests(unittest.TestCase):
             self.assertEqual(review["origin"], "selected")
             self.assertEqual(review["comparison"]["matched_count"], 2)
             self.assertEqual(len(review["sources"]), 1)
-            finished = api.finish_review("skip")
+            finished = api.finish_review("skip", None, "none")
             self.assertTrue(finished["ok"], finished)
             payload = json.loads(decision.read_text(encoding="utf-8"))
             self.assertEqual(payload["version"], CONTRACT_VERSION)
             self.assertEqual(payload["decision"], "skip")
+            self.assertEqual(payload["change"], "none")
+            self.assertEqual(payload["changed_pages"], [])
             self.assertFalse(self.output.exists())
+        finally:
+            api._close()
+
+    def test_review_records_what_changed_and_which_pages(self):
+        """`decision` 은 파일을 어떻게 갈아 끼우는가, `change` 는 무엇이 바뀌었는가다."""
+        decision = self.root / "result" / "decision.json"
+        plan = self.write_v2_plan(
+            mode="review", origin="selected",
+            reference_path=str(self.reference.resolve()),
+            decision_path=str(decision.resolve()),
+            parts=[{"path": str(self.first.resolve()), "pages": ""}],
+        )
+        api = ComposerApi(ComposerSession(), plan)
+        try:
+            self.assertTrue(api.startup_plan()["ok"])
+            finished = api.finish_review("refresh", None, "questions", [4, 3, 3, 0])
+            self.assertTrue(finished["ok"], finished)
+            payload = json.loads(decision.read_text(encoding="utf-8"))
+            self.assertEqual(payload["change"], "questions")
+            self.assertEqual(payload["changed_pages"], [3, 4])
+        finally:
+            api._close()
+
+    def test_skip_and_no_change_have_to_agree(self):
+        """어긋난 조합을 남기면 읽는 쪽이 어느 쪽이 진짜였는지 알 수 없다."""
+        decision = self.root / "result" / "decision.json"
+        plan = self.write_v2_plan(
+            mode="review", origin="selected",
+            reference_path=str(self.reference.resolve()),
+            decision_path=str(decision.resolve()),
+            parts=[{"path": str(self.first.resolve()), "pages": ""}],
+        )
+        api = ComposerApi(ComposerSession(), plan)
+        try:
+            self.assertTrue(api.startup_plan()["ok"])
+            self.assertFalse(api.finish_review("skip", None, "content")["ok"])
+            self.assertFalse(api.finish_review("refresh", None, "none")["ok"])
+            self.assertFalse(api.finish_review("refresh", None, "nope")["ok"])
+            self.assertFalse(decision.exists())
         finally:
             api._close()
 

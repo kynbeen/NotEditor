@@ -354,7 +354,19 @@ def rebuild_handwriting(
             target_document.close()
 
         ordered_pages = [(slot.page_name, slot.page_blob) for slot in slots]
-        ordered_pages.extend((page.name, page.blob) for page in supplemental)
+        original_names = [_page_name(page_root, entry.uuid) for entry in order.entries]
+        for page in supplemental:
+            position = original_names.index(page.name)
+            kept_names = [name for name, _blob in ordered_pages]
+            # Native note pages follow the closest retained predecessor. If it
+            # was removed, use the next retained source page as the anchor.
+            predecessor = next((name for name in reversed(original_names[:position])
+                                if name in kept_names), None)
+            successor = next((name for name in original_names[position + 1:]
+                              if name in kept_names), None)
+            insertion = (kept_names.index(predecessor) + 1 if predecessor is not None
+                         else kept_names.index(successor) if successor is not None else 0)
+            ordered_pages.insert(insertion, (page.name, page.blob))
         rebuilt_order = PageOrder(
             file_hash=order.file_hash,
             entries=tuple(

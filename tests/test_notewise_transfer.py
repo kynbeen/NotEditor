@@ -51,10 +51,11 @@ def _page_id(index: int) -> bytes:
     return b"page-id" if index == 0 else f"page-id-{index}".encode()
 
 
-def _make_notewise(path: Path, pdf: Path, annotated: bool = True, pages: int = 1) -> None:
+def _make_notewise(path: Path, pdf: Path, annotated: bool = True, pages: int = 1,
+                   canvas: tuple[int, int] = (300, 400)) -> None:
     pdf_id = b"pdf-id"
     relation_id = b"relation-id"
-    dimensions = _number(3, 300) + _number(4, 400)
+    dimensions = _number(3, canvas[0]) + _number(4, canvas[1])
     page_ids = [_page_id(index) for index in range(pages)]
     payloads = []
     for index, page_id in enumerate(page_ids):

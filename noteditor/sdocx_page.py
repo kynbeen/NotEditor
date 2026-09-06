@@ -74,6 +74,7 @@ class PageInfo:
     pdf: PdfReference | None
     background_width_offset: int | None
     page_hash: bytes
+    background_color: int = 0xFFFFFFFF
 
     @property
     def has_pdf_background(self) -> bool:
@@ -92,7 +93,7 @@ def _skip_utf16(blob: bytes, position: int) -> int:
 
 def _walk_properties(
     blob: bytes, mask: int, start: int, format_version: int
-) -> tuple[int, PdfReference | None, int | None]:
+) -> tuple[int, PdfReference | None, int | None, int]:
     """속성 블록을 순서대로 훑어 끝 위치와 PDF 참조를 돌려준다."""
     unknown = mask & ~_KNOWN_MASK
     _require(not unknown, f"모르는 페이지 속성 비트가 있습니다: 0x{unknown:08x}")
@@ -100,6 +101,7 @@ def _walk_properties(
     position = start
     reference: PdfReference | None = None
     background_width_offset: int | None = None
+    background_color = 0xFFFFFFFF
     if mask & _MASK_DRAWN_RECT:
         position += 32                       # float64 4개
     if mask & _MASK_TAG_LIST:
@@ -114,6 +116,8 @@ def _walk_properties(
         if mask & bit:
             if bit == _MASK_BG_WIDTH:
                 background_width_offset = position
+            if bit == _MASK_BG_COLOR:
+                background_color = struct.unpack_from("<I", blob, position)[0]
             position += 4
     if mask & _MASK_PDF_DATA_LIST:
         count = struct.unpack_from("<H", blob, position)[0]
@@ -145,7 +149,7 @@ def _walk_properties(
     if mask & _MASK_RESERVED_1000:
         position += 4
     _require(position <= len(blob), "페이지 속성 블록이 파일 끝을 넘어갑니다.")
-    return position, reference, background_width_offset
+    return position, reference, background_width_offset, background_color
 
 
 def read_page(blob: bytes) -> PageInfo:
@@ -168,7 +172,7 @@ def read_page(blob: bytes) -> PageInfo:
         property_offset >= position + 8,
         "페이지 속성 블록 위치가 메타데이터와 겹칩니다.",
     )
-    property_end, reference, background_width_offset = _walk_properties(
+    property_end, reference, background_width_offset, background_color = _walk_properties(
         blob, mask, property_offset, format_version
     )
     # 속성 블록의 끝이 레이어 구간의 시작과 정확히 맞아야 해석이 옳다.
@@ -189,6 +193,7 @@ def read_page(blob: bytes) -> PageInfo:
         pdf=reference,
         background_width_offset=background_width_offset,
         page_hash=blob[-(_HASH_SIZE + len(PAGE_FOOTER)):-len(PAGE_FOOTER)],
+        background_color=background_color,
     )
 
 

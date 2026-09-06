@@ -458,6 +458,16 @@ def preview_goodnotes_transfer(
             if page.notes_member:
                 notes = archive.read(page.notes_member)
 
+    if page_index == -1:
+        from .transfer_plan import render_source_background
+
+        if source_index is None:
+            raise GoodnotesTransferError("보존할 원본 쪽을 지정하세요.")
+        background = render_source_background(embedded_pdf, source_index, error=GoodnotesTransferError)
+        with Image.open(BytesIO(background)) as image:
+            ink, count = render_goodnotes_ink(notes, image.size, canvas)
+        return background, background, ink, count
+
     preview_transform = None
     with pymupdf.open(target) as new_document:
         if source_index is None:

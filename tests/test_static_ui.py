@@ -83,18 +83,30 @@ class StaticUiContractTests(unittest.TestCase):
         self.assertIn("현재 수집함 파일", self.html)
         self.assertIn("function renderSourceReview()", self.js)
         self.assertIn('callApi("page_image", pageRef.document_id', self.js)
-        self.assertIn('callApi("finish_review", decision, state.order)', self.js)
-        self.assertIn('plan.origin === "merged" ? "합쳐서 갱신" : "전체 갱신"', self.js)
-        self.assertIn("넘어가기", self.html)
+        self.assertIn(
+            'callApi("finish_review", decision, state.order, change, changedPages)', self.js)
+        self.assertIn("function changedPagesForSummaryAi()", self.js)
+        self.assertIn("변화 없음", self.html)
         self.assertIn(".workspace.review-mode", self.css)
         self.assertIn("수집함 PDF 쪽 선택", self.js)
+
+    def test_review_layout_never_pushes_the_decision_row_off_the_window(self):
+        """낮은 창에서 결정 버튼이 화면 밖으로 밀려 사용자가 스크롤해야 했다.
+
+        실측(Playwright, 1240x640): 고정 바닥 588px 때문에 버튼 줄 바닥이 651px 로 나갔다.
+        안쪽에서 스크롤하라고 만든 화면인데 바깥이 스크롤된 것이다.
+        """
+        self.assertIn("min-height: min(588px, calc(100vh - 92px))", self.css)
+        self.assertNotIn("height: calc(100vh - 92px); min-height: 588px", self.css)
+        # 비교 칸의 바닥이 높으면 그것만으로 버튼 줄을 밀어낸다.
+        self.assertIn("height: clamp(220px, 57vh, 650px)", self.css)
 
     def test_source_review_uses_a_large_left_comparison_and_right_page_picker(self):
         self.assertIn("grid-template-columns: minmax(650px, 2.7fr) minmax(300px, .8fr)", self.css)
         self.assertIn(".workspace.review-mode .source-panel { grid-column: 2", self.css)
         self.assertIn(".workspace.review-mode .preview-panel { display: none; }", self.css)
         self.assertIn(".source-review .page-review-rows { min-height: 0; flex: 1; overflow-y: auto;", self.css)
-        self.assertIn(".source-review .review-page { height: clamp(360px", self.css)
+        self.assertIn(".source-review .review-page { height: clamp(220px", self.css)
         self.assertIn("position: sticky; top: 0; z-index: 30;", self.css)   # 도구 막대 고정
         self.assertIn('{ root: refs.sourceReview, rootMargin: "600px 0px" }', self.js)
 
@@ -105,8 +117,13 @@ class StaticUiContractTests(unittest.TestCase):
         self.assertIn("updateSourceReviewSelection(key)", self.js)
         self.assertIn(".source-review .review-cell.target-cell.excluded .review-page", self.css)
 
-    def test_source_review_skip_explains_that_it_keeps_the_file_and_accepts_the_source(self):
-        self.assertIn("파일은 유지하고 현재 수집함 버전을 원본 최신으로 확인합니다", self.html)
+    def test_source_review_offers_four_outcomes_instead_of_a_yes_or_no(self):
+        """무엇이 바뀌었는지에 따라 summary.ai 가 다시 도는 범위가 달라진다."""
+        for label in ("변화 없음", "문제 수정됨", "내용 수정됨", "문제와 내용 수정됨"):
+            self.assertIn(label, self.html)
+        for change in ("none", "questions", "content", "both"):
+            self.assertIn(f'data-change="{change}"', self.html)
+        self.assertIn("파일을 그대로 두고 현재 수집함 버전을 확인한 것으로 기록합니다", self.html)
         self.assertIn("파일은 유지하고 현재 수집함 버전을 원본 최신으로 확인했습니다", self.js)
 
     def test_changed_pages_can_be_jumped_to_directly(self):
@@ -185,7 +202,10 @@ class StaticUiContractTests(unittest.TestCase):
         self.assertIn('id="handwritingReviewRows"', self.html)
         self.assertIn('id="reviewInkToggle"', self.html)
         self.assertIn("옛 문서 · 필기 원본", self.html)
-        self.assertIn("새 PDF · 드래그하여 순서 수정", self.html)
+        self.assertIn("결과 문서", self.html)
+        self.assertIn('slot.target_index === null ? -1 : slot.target_index', self.js)
+        self.assertIn('원본 쪽 보존', self.js)
+        self.assertIn('보존할 원본 ${slot.source_index + 1}쪽', self.js)
         self.assertIn('"handwriting_preview", targetIndex, sourceIndex', self.js)
         self.assertIn("sourcePage.querySelector(\".review-ink\").src = response.ink", self.js)
         self.assertIn("targetPage.querySelector(\".review-ink\").src = response.ink", self.js)

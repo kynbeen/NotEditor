@@ -196,6 +196,8 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent-2); 
 .toast { max-width: 390px; padding: 12px 15px; border: 1px solid var(--line-strong); border-radius: 11px; color: var(--text); background: #1b233b; box-shadow: var(--shadow); font-size: 11px; line-height: 1.45; animation: toast-in .2s ease-out; }
 .toast.error { border-color: rgba(255,113,139,.38); }
 .toast.success { border-color: rgba(86,211,165,.38); }
+/* 제안은 맞았지만 끝 쪽을 사람이 봐야 할 때 — 실패도 성공도 아니라 따로 둔다. */
+.toast.warn { border-color: rgba(255,190,92,.45); }
 .confirm-dialog { width: min(430px, calc(100vw - 32px)); padding: 0; border: 1px solid var(--line-strong); border-radius: 15px; color: var(--text); background: #151c31; box-shadow: var(--shadow); }
 .confirm-dialog::backdrop { background: rgba(3,5,12,.72); backdrop-filter: blur(7px); }
 .confirm-dialog form { padding: 22px; }
@@ -290,7 +292,11 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent-2); 
 /* 원본 검토는 세 패널을 한 줄에 욱여넣지 않는다. 왼쪽은 큰 실제 페이지 비교, 오른쪽은
    수집함 PDF 쪽 선택만 담당한다. 두 영역은 창 높이를 모두 쓰고 각각 내부에서 스크롤한다. */
 .workspace.review-mode {
-  height: calc(100vh - 92px); min-height: 588px;
+  height: calc(100vh - 92px);
+  /* 바닥을 화면보다 크게 두면 **결정 버튼 줄이 창 밖으로 밀린다.** 실측: 창 안쪽 높이
+     640px(노트북 화면 125% 배율)에서 버튼 줄 바닥이 651px 로 나가 사용자가 아래로
+     스크롤해야 보였다. 안쪽에서 스크롤하라고 만든 화면인데 바깥이 스크롤된 것이다. */
+  min-height: min(588px, calc(100vh - 92px));
   grid-template-columns: minmax(650px, 2.7fr) minmax(300px, .8fr);
   grid-template-rows: minmax(0, 1fr);
 }
@@ -304,8 +310,10 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent-2); 
 .workspace.review-mode .thumbnail-grid { max-height: min(48vh, 460px); }
 .source-review .page-review-columns { flex: 0 0 auto; margin-top: 9px; padding: 6px 0; background: var(--panel); }
 .source-review .page-review-rows { min-height: 0; flex: 1; overflow-y: auto; padding: 2px 7px 2px 0; scrollbar-gutter: stable; }
-/* 한 쌍을 창 높이 대부분으로 키워 본문을 읽을 수 있게 한다. */
-.source-review .review-page { height: clamp(360px, 57vh, 650px); }
+/* 한 쌍을 창 높이 대부분으로 키워 본문을 읽을 수 있게 한다. 바닥(220px)은 낮은 창에서만
+   쓰인다 — 큰 창에서는 57vh 가 이기므로 낮춰도 평소 크기가 줄지 않고, 낮은 창에서 이
+   바닥이 높으면 비교 칸이 결정 버튼 줄을 밀어낸다. */
+.source-review .review-page { height: clamp(220px, 57vh, 650px); }
 .source-review .review-cell.target-cell .review-page { transition: opacity .18s, filter .18s; }
 .source-review .review-cell.target-cell.excluded .review-page { opacity: .27; filter: grayscale(1) brightness(.68); }
 .review-jump { display: flex; align-items: center; gap: 6px; }

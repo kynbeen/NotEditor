@@ -36,6 +36,7 @@ class TransferInspection:
     mode: str = "exact"
     alignment: Alignment | None = None
     match: MatchResult | None = None
+    source_order: tuple[dict, ...] = ()
 
     def as_dict(self) -> dict:
         plan = None
@@ -56,6 +57,7 @@ class TransferInspection:
             "alignment": self.alignment.as_dict() if self.alignment else None,
             "match": self.match.as_dict() if self.match else None,
             "plan": plan,
+            "source_order": list(self.source_order),
         }
 
 
@@ -81,6 +83,21 @@ def open_pdf(
         document.close()
         raise
     return document
+
+
+def render_source_background(
+    embedded_pdf: bytes, source_index: int, *, max_side: int = 900,
+    error: type[Exception] = HandwritingTransferError,
+) -> bytes:
+    """Render an unmatched source page in its own, unchanged coordinates."""
+    from . import pdf as pymupdf
+
+    with open_pdf(embedded_pdf, "원본 배경 PDF", error=error) as document:
+        if not 0 <= source_index < document.page_count:
+            raise error(f"원본 문서에 없는 쪽 번호입니다: {source_index + 1}")
+        page = document[source_index]
+        scale = min(max_side / max(page.rect.width, page.rect.height), 3.0)
+        return page.get_pixmap(matrix=pymupdf.Matrix(scale, scale), alpha=False).tobytes("png")
 
 
 def geometry(document) -> list[tuple[float, float, int]]:

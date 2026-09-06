@@ -1,6 +1,6 @@
 "use strict";
 
-const CACHE_NAME = "noteditor-shell-v6";
+const CACHE_NAME = "noteditor-shell-v8";
 const APP_SHELL = [
   "/index.html",
   "/app.css",
