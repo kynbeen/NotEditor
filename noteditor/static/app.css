@@ -231,6 +231,8 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent-2); 
 .analysis-retry[hidden] { display: none; }
 .compatibility-card.ready { border-color: rgba(86,211,165,.32); background: rgba(86,211,165,.065); }
 .compatibility-card.ready .compatibility-icon { color: #08261c; background: var(--success); }
+.compatibility-card.review-required { border-color: rgba(255,190,92,.56); background: rgba(255,190,92,.07); }
+.compatibility-card.review-required .compatibility-icon { color: #302008; background: #ffbe5c; }
 .compatibility-card.error { border-color: rgba(255,113,139,.38); background: rgba(255,113,139,.07); }
 .compatibility-card.error .compatibility-icon { color: white; background: var(--danger); }
 .page-review { margin-top: 14px; padding: 14px 16px 16px; border: 1px solid var(--line); border-radius: 14px; background: rgba(255,255,255,.023); }
@@ -243,13 +245,6 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent-2); 
 .ink-toggle { display: flex; align-items: center; gap: 6px; color: var(--text); cursor: pointer; }
 .ink-toggle input { accent-color: var(--accent-2); }
 .page-review-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 14px 0 7px; color: var(--muted); font-size: 9px; font-weight: 750; text-align: center; }
-.goodnotes-outline-options { padding: 18px 0; border-top: 1px solid var(--muted); }
-.outline-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
-.outline-actions h3 { flex: 1 0 100%; margin: 0; font-size: 14px; }
-.outline-json-editor { display: grid; gap: 6px; font-size: 12px; }
-.outline-json-editor textarea { box-sizing: border-box; width: 100%; min-width: 0; resize: vertical; padding: 10px; border: 1px solid var(--muted); border-radius: 6px; background: transparent; color: var(--text); font: 12px/1.5 monospace; }
-.outline-page-basis { display: flex; flex-wrap: wrap; gap: 16px; margin: 12px 0; padding: 8px 0; border: 0; font-size: 12px; }
-#outlineJsonStatus { min-height: 20px; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
 .page-review-rows { display: grid; gap: 8px; }
 .review-row { position: relative; display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 10px; padding: 9px; border: 1px solid rgba(169,156,255,.13); border-radius: 12px; background: rgba(255,255,255,.016); scroll-margin-top: 12px; }
 .review-row.needs-confirmation { border-color: rgba(255,190,92,.56); background: rgba(255,190,92,.07); box-shadow: inset 3px 0 0 rgba(255,190,92,.72); }

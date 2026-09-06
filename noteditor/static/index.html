@@ -176,24 +176,6 @@
           </div>
         </div>
 
-        <section id="goodnotesOutlineOptions" class="goodnotes-outline-options" hidden>
-          <div class="outline-actions">
-            <h3>Goodnotes 목차 추가</h3>
-            <button id="chooseOutlineJsonButton" class="button utility" type="button">목차 JSON 선택</button>
-            <button id="clearOutlineJsonButton" class="button utility" type="button">목차 입력 지우기</button>
-          </div>
-          <label class="outline-json-editor">
-            <span>목차 JSON</span>
-            <textarea id="outlineJsonText" rows="5" spellcheck="false" placeholder='[{"page": 1, "title": "목차 제목"}]'></textarea>
-          </label>
-          <fieldset class="outline-page-basis">
-            <legend>목차 쪽 번호 기준</legend>
-            <label><input type="radio" name="outlinePageBasis" value="target_pdf" checked /> 새 PDF</label>
-            <label><input type="radio" name="outlinePageBasis" value="source_goodnotes" /> 원본 Goodnotes</label>
-          </fieldset>
-          <div id="outlineJsonStatus" role="status" aria-live="polite"></div>
-        </section>
-
         <section id="handwritingReview" class="page-review" hidden>
           <div class="page-review-head">
             <div>
@@ -235,7 +217,6 @@
     <input id="webPdfInput" type="file" accept="application/pdf,.pdf" multiple hidden />
     <input id="webHandwritingInput" type="file" accept=".sdocx,.notewise,.goodnotes,application/zip" hidden />
     <input id="webTargetPdfInput" type="file" accept="application/pdf,.pdf" hidden />
-    <input id="outlineJsonInput" type="file" accept="application/json,.json" hidden />
 
     <div id="busyOverlay" class="busy-overlay" role="status" aria-live="polite" hidden>
       <div class="busy-card"><div class="loader"></div><strong id="busyText">처리 중…</strong></div>

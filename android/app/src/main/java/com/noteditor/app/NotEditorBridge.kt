@@ -71,11 +71,9 @@ class NotEditorBridge(
     }
 
     @JavascriptInterface
-    fun saveHandwriting(suggestedName: String, pagePlanJson: String, allowUnconfirmed: Boolean,
-                        outlineEntriesJson: String, outlinePageBasis: String) {
+    fun saveHandwriting(suggestedName: String, pagePlanJson: String, allowUnconfirmed: Boolean) {
         activity.runOnUiThread {
-            activity.saveHandwriting(suggestedName, pagePlanJson, allowUnconfirmed,
-                outlineEntriesJson, outlinePageBasis) { resultJson ->
+            activity.saveHandwriting(suggestedName, pagePlanJson, allowUnconfirmed) { resultJson ->
                 dispatchCallback(resultJson)
             }
         }

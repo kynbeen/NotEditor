@@ -585,8 +585,6 @@ class ComposerApi:
         suggested_name: str = "필기-이전.sdocx",
         page_plan: list[dict] | list[int | None] | None = None,
         allow_unconfirmed: bool = False,
-        outline_entries: list[dict] | None = None,
-        outline_page_basis: str = "target_pdf",
     ) -> dict:
         try:
             if self._window is None:
@@ -606,7 +604,7 @@ class ComposerApi:
             if output is None:
                 return self._ok(cancelled=True, inspection=inspection.as_dict())
             return self.transfer_handwriting_to_path(
-                str(output), page_plan, allow_unconfirmed, outline_entries, outline_page_basis
+                str(output), page_plan, allow_unconfirmed
             )
         except Exception as exc:
             return self._error(exc)
@@ -616,17 +614,15 @@ class ComposerApi:
         output_path: str,
         page_plan: list[dict] | list[int | None] | None = None,
         allow_unconfirmed: bool = False,
-        outline_entries: list[dict] | None = None,
-        outline_page_basis: str = "target_pdf",
     ) -> dict:
         try:
             inspection = self._inspection()
             output = Path(output_path).expanduser().resolve()
-            outline_options = {}
-            if outline_entries is not None:
-                outline_options = dict(
-                    outline_entries=outline_entries, outline_page_basis=outline_page_basis
-                )
+            alignment = getattr(inspection, "alignment", None)
+            if (alignment is not None and alignment.requires_confirmation
+                    and not allow_unconfirmed
+                    and not (page_plan is not None and all(isinstance(item, dict) for item in page_plan))):
+                raise PdfComposerError("자동 정렬 품질이 낮습니다. 쪽 대응을 확인한 뒤 저장하세요.")
             if page_plan is not None and all(isinstance(item, dict) for item in page_plan):
                 plan = PagePlan.from_payload(
                     inspection.source_page_count,
@@ -643,7 +639,6 @@ class ComposerApi:
                     self._handwriting_target,
                     output,
                     plan_override=plan,
-                    **outline_options,
                 )
                 if plan.unconfirmed:
                     result.setdefault("warnings", []).append(
@@ -663,11 +658,10 @@ class ComposerApi:
                     self._handwriting_target,
                     output,
                     match_override=match,
-                    **outline_options,
                 )
             else:
                 result = transfer_handwriting(
-                    self._handwriting_source, self._handwriting_target, output, **outline_options
+                    self._handwriting_source, self._handwriting_target, output
                 )
             return self._ok(cancelled=False, result=result)
         except Exception as exc:

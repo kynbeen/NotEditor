@@ -365,8 +365,6 @@ class WebAppTests(unittest.TestCase):
             "/api/handwriting/export",
             json={
                 "suggested_name": "ratio.goodnotes",
-                "outline_entries": [{"page": 1, "title": "Ratio and outline"}],
-                "outline_page_basis": "source_goodnotes",
                 "page_plan": [{
                     "source_index": 0,
                     "target_index": 0,
@@ -380,9 +378,6 @@ class WebAppTests(unittest.TestCase):
             result = read_document(archive, safe_members(archive))
             page = result.pages[0]
             attachment = archive.read(result.attachments[page.attachment_id])
-            from noteditor.goodnotes_outline import OutlineEntry, verify_outline_events
-            verify_outline_events(archive.read("index.events.pb"), [page.entity_id],
-                                  (OutlineEntry(1, "Ratio and outline"),))
         self.assertEqual(attachment, target_pdf.read_bytes())
         self.assertAlmostEqual(page.canvas[0] / page.canvas[1], rect.width / (rect.height + 120), places=3)
 

@@ -4,7 +4,6 @@ import android.net.Uri
 import android.os.Bundle
 import android.webkit.WebSettings
 import android.webkit.WebChromeClient
-import android.webkit.ValueCallback
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.result.contract.ActivityResultContracts
@@ -29,14 +28,6 @@ class MainActivity : AppCompatActivity() {
     private var genericFileCallback: ((String) -> Unit)? = null
     private lateinit var sessionDir: File
     private val fileWorker = Executors.newSingleThreadExecutor()
-    private var webFileCallback: ValueCallback<Array<Uri>>? = null
-    private val openOutlineLauncher = registerForActivityResult(
-        ActivityResultContracts.OpenDocument()
-    ) { uri ->
-        webFileCallback?.onReceiveValue(uri?.let { arrayOf(it) })
-        webFileCallback = null
-    }
-
     // PDF 복수 선택 런처 (문서 합치기)
     private val openPdfsLauncher = registerForActivityResult(
         ActivityResultContracts.OpenMultipleDocuments()
@@ -184,8 +175,7 @@ class MainActivity : AppCompatActivity() {
 
     // 필기 옮기기 결과 저장 런처
     private data class HandwritingSaveArgs(
-        val suggestedName: String, val pagePlanJson: String, val allowUnconfirmed: Boolean,
-        val outlineEntriesJson: String, val outlinePageBasis: String
+        val suggestedName: String, val pagePlanJson: String, val allowUnconfirmed: Boolean
     )
     private var pendingHandwritingArgs: HandwritingSaveArgs? = null
     private val saveHandwritingLauncher = registerForActivityResult(
@@ -218,8 +208,6 @@ class MainActivity : AppCompatActivity() {
                     put(tempOutput.absolutePath)
                     put(JSONArray(pagePlanJson))
                     put(allowUnconfirmed)
-                    put(if (args.outlineEntriesJson == "null") JSONObject.NULL else JSONArray(args.outlineEntriesJson))
-                    put(args.outlinePageBasis)
                 }.toString()
 
                 val api = pyApi ?: throw IllegalStateException("파이썬 엔진이 아직 초기화되지 않았습니다.")
@@ -263,20 +251,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         webView.webViewClient = object : WebViewClient() {}
-        webView.webChromeClient = object : WebChromeClient() {
-            override fun onShowFileChooser(view: WebView?, callback: ValueCallback<Array<Uri>>?,
-                                           params: FileChooserParams?): Boolean {
-                webFileCallback?.onReceiveValue(null)
-                webFileCallback = callback
-                try {
-                    openOutlineLauncher.launch(arrayOf("application/json", "text/plain"))
-                } catch (error: Exception) {
-                    webFileCallback?.onReceiveValue(null)
-                    webFileCallback = null
-                }
-                return true
-            }
-        }
+        webView.webChromeClient = WebChromeClient()
 
         // JavaScript 브리지 등록
         webView.addJavascriptInterface(NotEditorBridge(this, webView), "AndroidBridge")
@@ -325,10 +300,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     fun saveHandwriting(suggestedName: String, pagePlanJson: String, allowUnconfirmed: Boolean,
-                        outlineEntriesJson: String, outlinePageBasis: String, callback: (String) -> Unit) {
+                        callback: (String) -> Unit) {
         beginFileOperation(callback)
         this.pendingHandwritingArgs = HandwritingSaveArgs(
-            suggestedName, pagePlanJson, allowUnconfirmed, outlineEntriesJson, outlinePageBasis
+            suggestedName, pagePlanJson, allowUnconfirmed
         )
         saveHandwritingLauncher.launch(suggestedName)
     }
@@ -367,8 +342,6 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
-        webFileCallback?.onReceiveValue(null)
-        webFileCallback = null
         genericFileCallback = null
         if (::webView.isInitialized) webView.destroy()
         fileWorker.execute {

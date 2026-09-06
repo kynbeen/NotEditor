@@ -5,7 +5,7 @@
 용지·쪽 생성·쪽 연결 기록이다(자세한 구조는 ``goodnotes_archive``).
 
 필기 저널의 알려진 획 좌표는 새 PDF의 캔버스에 맞춰 변환하며, 알 수 없는 데이터는
-보존한다. 저장 뒤 배경 참조·캔버스 비율·필기 수와 선택적으로 추가한 목차를 다시 읽어 검증한다.
+보존한다. 저장 뒤 배경 참조·캔버스 비율·필기 수를 다시 읽어 검증한다.
 
 쪽을 더하거나 지우거나 순서를 바꾸면 쪽 ID가 새로 필요하므로 아카이브를 다시 만든다.
 """
@@ -40,11 +40,6 @@ from .goodnotes_ink import (
     transform_goodnotes_journal,
 )
 from .goodnotes_proto import GoodnotesTransferError, field_values, split_delimited
-from .goodnotes_outline import (
-    PAGE_BASIS_SOURCE, PAGE_BASIS_TARGET, OutlineEntry,
-    append_outline_events, load_outline, map_outline_to_result,
-    validate_outline, verify_outline_events,
-)
 from .page_match import MatchResult
 from .page_plan import PagePlan
 from .transfer_plan import (
@@ -183,9 +178,6 @@ def transfer_goodnotes_handwriting(
     *,
     match_override: MatchResult | None = None,
     plan_override: PagePlan | None = None,
-    outline_path: str | Path | None = None,
-    outline_entries: list[dict] | None = None,
-    outline_page_basis: str = PAGE_BASIS_TARGET,
 ) -> dict:
     source, target = _checked_paths(source_goodnotes, target_pdf)
     output = Path(output_goodnotes).expanduser().resolve()
@@ -199,15 +191,6 @@ def transfer_goodnotes_handwriting(
     plan = plan_override or PagePlan.from_match(
         match, inspection.source_page_count, inspection.page_count
     )
-    if outline_path is not None and outline_entries is not None:
-        raise GoodnotesTransferError("목차 파일과 목차 항목 중 하나만 지정하세요.")
-    mapped_outline = ()
-    if outline_path is not None or outline_entries is not None:
-        page_count = (inspection.source_page_count if outline_page_basis == PAGE_BASIS_SOURCE
-                      else inspection.page_count)
-        entries = (load_outline(outline_path, page_count) if outline_path is not None
-                   else validate_outline(outline_entries, page_count))
-        mapped_outline = map_outline_to_result(entries, plan.slots, outline_page_basis)
 
     output.parent.mkdir(parents=True, exist_ok=True)
     fd, temp_name = tempfile.mkstemp(
@@ -314,9 +297,6 @@ def transfer_goodnotes_handwriting(
                 len(attachment),
                 target.stem,
             )
-            events = append_outline_events(
-                events, [entity_id for _page, entity_id, _content_id in slots], mapped_outline
-            )
             search_blob = b""
             for identifier, member in document.attachments.items():
                 candidate = f"search/{identifier}"
@@ -350,7 +330,7 @@ def transfer_goodnotes_handwriting(
                     result.writestr(member, payload)
                 result.writestr("thumbnail.jpg", thumbnail)
 
-        _validate_output(temporary, plan, attachment, expected_stroke_counts, mapped_outline)
+        _validate_output(temporary, plan, attachment, expected_stroke_counts)
         os.replace(temporary, output)
     finally:
         temporary.unlink(missing_ok=True)
@@ -363,7 +343,6 @@ def transfer_goodnotes_handwriting(
         "mode": inspection.mode,
         "new_page_count": sum(slot.source_index is None for slot in plan.slots),
         "source_only_count": sum(slot.target_index is None for slot in plan.slots),
-        "outline_count": len(mapped_outline),
     }
 
 
@@ -372,7 +351,6 @@ def _validate_output(
     plan: PagePlan,
     attachment: bytes,
     expected_stroke_counts: list[int],
-    outline: tuple[OutlineEntry, ...] = (),
 ) -> None:
     """저장한 파일을 다시 읽어 배경·캔버스·필기 수를 함께 확인한다."""
     from . import pdf as pymupdf
@@ -382,9 +360,6 @@ def _validate_output(
         document = read_document(archive, members)
         if len(document.pages) != len(plan.slots):
             raise GoodnotesTransferError("저장된 Goodnotes의 페이지 수가 달라졌습니다.")
-        verify_outline_events(
-            archive.read("index.events.pb"), [page.entity_id for page in document.pages], outline
-        )
         if len(document.attachments) != 1:
             raise GoodnotesTransferError("저장된 Goodnotes의 배경 첨부가 하나가 아닙니다.")
         attachment_id, member = next(iter(document.attachments.items()))

@@ -63,6 +63,14 @@ class Alignment:
         return abs(self.aspect_scale - self.scale) <= _AXIS_TOLERANCE * self.scale
 
     @property
+    def requires_confirmation(self) -> bool:
+        return (
+            not self.axes_agree
+            or self.residual > 50.0 * _POINTS_PER_MM
+            or self.clipped >= 5.0 * _POINTS_PER_MM
+        )
+
+    @property
     def improves(self) -> bool:
         """변환이 '그대로 두기'보다 본문을 실제로 더 잘 맞추는지."""
         return (
@@ -102,6 +110,7 @@ class Alignment:
             "clipped_mm": round(points_to_mm(self.clipped), 2),
             "identity": self.identity,
             "axes_agree": self.axes_agree,
+            "requires_confirmation": self.requires_confirmation,
             "improves": self.improves,
         }
 

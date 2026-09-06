@@ -9,7 +9,7 @@ Samsung Notes(SDOCX)든 Notewise든 "문서에 들어 있는 PDF를 새 PDF로 �
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from collections.abc import Callable, Sequence
@@ -41,9 +41,15 @@ class TransferInspection:
     def as_dict(self) -> dict:
         plan = None
         if self.match is not None and self.source_page_count is not None:
-            plan = PagePlan.from_match(
+            page_plan = PagePlan.from_match(
                 self.match, self.source_page_count, self.page_count
-            ).as_dict()
+            )
+            if self.alignment is not None and self.alignment.requires_confirmation:
+                page_plan = replace(page_plan, slots=tuple(
+                    replace(slot, confirmed=False) if slot.kind == "matched" else slot
+                    for slot in page_plan.slots
+                ))
+            plan = page_plan.as_dict()
         return {
             "source_name": self.source_name,
             "target_name": self.target_name,

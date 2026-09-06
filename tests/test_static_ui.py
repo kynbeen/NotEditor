@@ -300,16 +300,8 @@ class StaticUiContractTests(unittest.TestCase):
         self.assertIn('window.AndroidBridge.choosePdfs()', self.js)
         self.assertIn('window.AndroidBridge.saveResult(JSON.stringify(order), suggestedName)', self.js)
         self.assertIn('window.AndroidBridge.saveHandwriting(', self.js)
-        self.assertIn('JSON.stringify(outlineEntries), outlinePageBasis', self.js)
         self.assertIn('if (androidApi) return androidApi', self.js)
         self.assertIn('if (window.AndroidBridge || window.pywebview?.api', self.js)
-
-    def test_outline_controls_share_the_current_editor_value(self):
-        for name in ("outlineJsonInput", "outlineJsonText", "outlineJsonStatus", "goodnotesOutlineOptions"):
-            self.assertIn(f'id="{name}"', self.html)
-        self.assertIn('outline_entries: outlineEntries, outline_page_basis: outlinePageBasis', self.js)
-        self.assertIn('parseOutlineJson(refs.outlineJsonText.value)', self.js)
-        self.assertIn('revision !== state.outlineRevision', self.js)
 
     def test_service_worker_never_caches_api_or_upload_responses(self):
         self.assertIn('"/vendor/sortable-1.15.7.min.js"', self.service_worker)

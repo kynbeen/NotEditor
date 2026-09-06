@@ -87,22 +87,14 @@ def transfer_handwriting(
     *,
     match_override=None,
     plan_override=None,
-    outline_entries: list[dict] | None = None,
-    outline_page_basis: str = "target_pdf",
 ) -> dict:
     _inspect, _preview, transfer = _handlers(source)
-    options = {}
-    if outline_entries is not None:
-        if _suffix(source) != ".goodnotes":
-            raise HandwritingTransferError("목차 추가는 Goodnotes 문서에서만 지원합니다.")
-        options.update(outline_entries=outline_entries, outline_page_basis=outline_page_basis)
     return transfer(
         source,
         target_pdf,
         output,
         match_override=match_override,
         plan_override=plan_override,
-        **options,
     )
 
 

@@ -9,7 +9,6 @@ const state = {
   mergePlan: null,
   sourceReview: null,
   handwritingOutputNameDirty: false,
-  outlineRevision: 0,
   active: null,
   thumbnailCache: new Map(),
   thumbnailCacheBytes: 0,
@@ -41,10 +40,6 @@ let handwritingPollTimer = 0;
 
 const $ = (selector) => document.querySelector(selector);
 const refs = {
-  goodnotesOutlineOptions: $("#goodnotesOutlineOptions"),
-  outlineJsonInput: $("#outlineJsonInput"), outlineJsonText: $("#outlineJsonText"),
-  outlineJsonStatus: $("#outlineJsonStatus"),
-  chooseOutlineJson: $("#chooseOutlineJsonButton"), clearOutlineJson: $("#clearOutlineJsonButton"),
   add: $("#addPdfButton"), emptyAdd: $("#emptyAddButton"), save: $("#saveButton"),
   suggestRanges: $("#suggestRangesButton"),
   mergeOutputName: $("#mergeOutputName"),
@@ -224,9 +219,8 @@ const webApi = {
   handwriting_preview: (pageIndex, sourceIndex, nativePageId = "") => fetchJson(`/api/handwriting/preview?page_index=${pageIndex}&source_index=${sourceIndex}&native_page_id=${encodeURIComponent(nativePageId)}`),
   reset_handwriting_transfer: () => fetchJson("/api/handwriting/reset", { method: "POST" }),
   reset_documents: () => fetchJson("/api/documents/reset", { method: "POST" }),
-  save_handwriting_transfer: (suggestedName, pagePlan, allowUnconfirmed = false, outlineEntries = null, outlinePageBasis = "target_pdf") => downloadWebResult("/api/handwriting/export", {
+  save_handwriting_transfer: (suggestedName, pagePlan, allowUnconfirmed = false) => downloadWebResult("/api/handwriting/export", {
     suggested_name: suggestedName, page_plan: pagePlan, allow_unconfirmed: allowUnconfirmed,
-    outline_entries: outlineEntries, outline_page_basis: outlinePageBasis,
   }),
 };
 
@@ -292,10 +286,9 @@ const androidApi = window.AndroidBridge ? {
   ),
   reset_handwriting_transfer: () => callAndroidPython("reset_handwriting_transfer"),
   reset_documents: () => callAndroidPython("reset_documents"),
-  save_handwriting_transfer: (suggestedName, pagePlan, allowUnconfirmed = false, outlineEntries = null, outlinePageBasis = "target_pdf") => (
+  save_handwriting_transfer: (suggestedName, pagePlan, allowUnconfirmed = false) => (
     callAndroidFileOperation(() => window.AndroidBridge.saveHandwriting(
       suggestedName, JSON.stringify(pagePlan), allowUnconfirmed,
-      JSON.stringify(outlineEntries), outlinePageBasis,
     ))
   ),
 } : null;
@@ -706,14 +699,13 @@ function showTool(tool) {
 
 function renderHandwritingStatus(error = "") {
   const status = state.handwriting;
-  refs.goodnotesOutlineOptions.hidden = status.source_format !== "goodnotes";
   const analysis = status.analysis || {};
   refs.handwritingSourceName.textContent = status.source_name || ".sdocx · .notewise · .goodnotes 파일 선택";
   refs.handwritingTargetName.textContent = status.target_name || ".pdf 파일 선택";
   refs.saveHandwriting.disabled = !state.bridgeReady || !status.ready;
   refs.retryHandwriting.hidden = analysis.state !== "error";
   const card = refs.handwritingCompatibility;
-  card.classList.remove("waiting", "ready", "error");
+  card.classList.remove("waiting", "ready", "error", "review-required");
   const icon = card.querySelector(".compatibility-icon");
   const heading = card.querySelector("strong");
   const detail = card.querySelector("p");
@@ -754,6 +746,7 @@ function renderHandwritingStatus(error = "") {
       detail.textContent = [
         `새 PDF 전용 ${match.target_only.length}쪽 추가 · 구판 전용 ${preservedOld}쪽 보존 검토${omittedBlank ? ` · 빈 원본 ${omittedBlank}쪽 자동 생략` : ""} · 불확실 ${match.uncertain_count}쌍`,
         info.alignment ? `본문 배율 ${info.alignment.scale.toFixed(3)}배 · 이동 ${info.alignment.offset_x_mm}, ${info.alignment.offset_y_mm}mm` : "공통 쪽의 페이지 좌표가 일치합니다.",
+        ...(info.alignment ? alignmentWarnings(info.alignment) : []),
         common,
       ].join("\n");
     } else if (info.mode === "aligned" && info.alignment) {
@@ -767,6 +760,12 @@ function renderHandwritingStatus(error = "") {
     } else {
       heading.textContent = `${info.page_count}쪽의 페이지 좌표가 모두 일치합니다.`;
       detail.textContent = `${common} · 대상 PDF를 그대로 넣습니다.`;
+    }
+    if (info.alignment?.requires_confirmation) {
+      card.classList.remove("ready");
+      card.classList.add("review-required");
+      icon.textContent = "!";
+      detail.textContent += "\n자동 정렬 품질이 낮아 모든 대응 쪽을 확인해야 합니다.";
     }
     return;
   }
@@ -1243,9 +1242,6 @@ function applyHandwritingResponse(response) {
     return false;
   }
   const previous = state.handwriting;
-  if (previous.source_name !== (response.source_name || null)
-    || previous.target_name !== (response.target_name || null)
-    || response.source_format !== "goodnotes") clearOutlineJson();
   const selectionChanged = previous.source_name !== (response.source_name || null)
     || previous.target_name !== (response.target_name || null);
   const becameReady = !previous.ready && Boolean(response.ready);
@@ -1349,41 +1345,6 @@ async function resetDocuments() {
   } finally { setBusy(false); }
 }
 
-function clearOutlineJson() {
-  state.outlineRevision += 1;
-  refs.outlineJsonText.value = "";
-  refs.outlineJsonInput.value = "";
-  refs.outlineJsonStatus.textContent = "";
-}
-
-async function loadOutlineJson() {
-  const file = refs.outlineJsonInput.files?.[0];
-  if (!file) return;
-  const revision = ++state.outlineRevision;
-  try {
-    const text = await file.text();
-    if (revision !== state.outlineRevision) return;
-    const entries = parseOutlineJson(text);
-    refs.outlineJsonText.value = text;
-    refs.outlineJsonStatus.textContent = `${file.name} · ${entries?.length || 0}개 항목`;
-  } catch (error) {
-    if (revision === state.outlineRevision) refs.outlineJsonStatus.textContent = error.message;
-  } finally {
-    if (revision === state.outlineRevision) refs.outlineJsonInput.value = "";
-  }
-}
-
-function parseOutlineJson(text) {
-  if (!text.trim()) return null;
-  const entries = JSON.parse(text);
-  if (!Array.isArray(entries) || !entries.length || entries.some((entry) => (
-    !entry || typeof entry !== "object" || Object.keys(entry).sort().join(",") !== "page,title"
-    || !Number.isSafeInteger(entry.page) || entry.page < 1
-    || typeof entry.title !== "string" || !entry.title.trim()
-  ))) throw new Error("목차는 양의 정수 page와 비어 있지 않은 title을 가진 항목의 배열이어야 합니다.");
-  return entries;
-}
-
 async function saveHandwritingTransfer() {
   if (!state.handwriting.ready) return;
   const base = (state.handwriting.target_name || "새-문서.pdf").replace(/\.pdf$/i, "");
@@ -1400,14 +1361,10 @@ async function saveHandwritingTransfer() {
   )) return;
   setBusy(true, "필기와 형광펜을 새 PDF로 옮기는 중…");
   try {
-    const outlineEntries = state.handwriting.source_format === "goodnotes"
-      ? parseOutlineJson(refs.outlineJsonText.value) : null;
     const response = await callApi("save_handwriting_transfer",
       `${requestedName}${outputExtension}`,
       state.handwriting.plan,
       unconfirmed > 0,
-      outlineEntries,
-      document.querySelector('input[name="outlinePageBasis"]:checked').value,
     );
     if (!response.ok) throw new Error(response.error);
     if (response.cancelled) return;
@@ -1997,13 +1954,6 @@ refs.reviewInkToggle.addEventListener("change", () => {
 });
 refs.chooseHandwritingSource.addEventListener("click", () => chooseHandwriting("source"));
 refs.chooseHandwritingTarget.addEventListener("click", () => chooseHandwriting("target"));
-refs.chooseOutlineJson.addEventListener("click", () => refs.outlineJsonInput.click());
-refs.outlineJsonInput.addEventListener("change", loadOutlineJson);
-refs.clearOutlineJson.addEventListener("click", clearOutlineJson);
-refs.outlineJsonText.addEventListener("input", () => {
-  state.outlineRevision += 1;
-  refs.outlineJsonStatus.textContent = "";
-});
 refs.retryHandwriting.addEventListener("click", retryHandwritingAnalysis);
 refs.resetHandwriting.addEventListener("click", resetHandwritingTransfer);
 refs.resetDocuments.addEventListener("click", resetDocuments);
