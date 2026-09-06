@@ -111,6 +111,12 @@ class StaticUiContractTests(unittest.TestCase):
         self.assertIn("끝 쪽을 확인해 주세요", self.js)
         self.assertIn(".toast.warn", self.css)
 
+    def test_both_change_explains_partial_question_rebuild(self):
+        button = self.html.split('id="sourceReviewApply"', 1)[1].split(">", 1)[0]
+        self.assertIn("본문 영향 단계부터", button)
+        self.assertIn("바뀐 쪽만", button)
+        self.assertNotIn("처음부터 전부", button)
+
     def test_review_layout_never_pushes_the_decision_row_off_the_window(self):
         """낮은 창에서 결정 버튼이 화면 밖으로 밀려 사용자가 스크롤해야 했다.
 
