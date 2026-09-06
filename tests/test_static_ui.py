@@ -58,6 +58,15 @@ class StaticUiContractTests(unittest.TestCase):
         self.assertIn("state.orderDirty = true", self.js)
         self.assertIn("function insertNearOwnPages(ref)", self.js)
 
+    def test_summary_ai_handoff_keeps_the_reproducible_contract_order(self):
+        render_result = self.js.split("function renderResult()", 1)[1].split(
+            "function renderSummary()", 1
+        )[0]
+        self.assertIn("const orderLocked = isHandoffSession()", render_result)
+        self.assertIn("refs.resetOrder.hidden = orderLocked", render_result)
+        self.assertIn("!orderLocked && state.order.length > 1", render_result)
+        self.assertIn('orderLocked ? " hidden disabled" : ""', render_result)
+
     def test_javascript_source_contains_no_literal_nul_bytes(self):
         self.assertNotIn("\x00", self.js)
         self.assertIn(r'join("\u0000")', self.js)
@@ -89,6 +98,18 @@ class StaticUiContractTests(unittest.TestCase):
         self.assertIn("변화 없음", self.html)
         self.assertIn(".workspace.review-mode", self.css)
         self.assertIn("수집함 PDF 쪽 선택", self.js)
+
+    def test_exam_ranges_are_proposed_automatically_after_adding_files(self):
+        """사용자가 원한 것은 "넣으면 알아서 범위를 잡는 것"이다 — 묻지 않고 바로 짚는다."""
+        self.assertIn('id="suggestRangesButton"', self.html)
+        self.assertIn("범위 자동 인식", self.html)
+        self.assertIn("if (added && state.mergePlan?.can_suggest_ranges)", self.js)
+        self.assertIn('callApi("suggest_ranges")', self.js)
+        # 제안일 뿐이다 — 쪽 선택에 채워 넣어 사용자가 보고 고치게 한다.
+        self.assertIn("setDocumentSelection(doc, parsed.indices)", self.js)
+        # 겨룰 다음 강의가 없어 끝 경계를 믿기 어려운 경우에만 그렇게 말한다.
+        self.assertIn("끝 쪽을 확인해 주세요", self.js)
+        self.assertIn(".toast.warn", self.css)
 
     def test_review_layout_never_pushes_the_decision_row_off_the_window(self):
         """낮은 창에서 결정 버튼이 화면 밖으로 밀려 사용자가 스크롤해야 했다.

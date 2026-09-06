@@ -59,6 +59,39 @@ def run_move(plan, **options):
 
 
 class ReviewReorderTests(unittest.TestCase):
+    def test_blank_unmatched_sdocx_page_is_automatically_omitted(self):
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("Node is required to execute app.js")
+        plan = {"slots": [
+            {"source_index": 0, "target_index": 0, "confirmed": True,
+             "manual": False, "needs_confirmation": False, "kind": "matched"},
+            {"source_index": 1, "target_index": None, "confirmed": False,
+             "manual": False, "needs_confirmation": True, "kind": "source_only"},
+            {"source_index": 2, "target_index": None, "confirmed": False,
+             "manual": False, "needs_confirmation": True, "kind": "source_only"},
+        ]}
+        source_order = [
+            {"source_index": 0, "blank": False},
+            {"source_index": 1, "blank": True},
+            {"source_index": 2, "blank": False},
+        ]
+        driver = DRIVER.split("const state =", 1)[0] + r'''
+const clone = new Function(grab("clonePagePlan") + "\nreturn clonePagePlan;")();
+process.stdout.write(JSON.stringify(clone(scenario.plan, scenario.sourceOrder)));
+'''
+        result = subprocess.run([node, "-e", driver, str(APP_JS),
+            json.dumps(dict(plan=plan, sourceOrder=source_order))],
+            capture_output=True, text=True, check=True)
+        slots = json.loads(result.stdout)
+        self.assertFalse(slots[0]["excluded"])
+        self.assertTrue(slots[1]["excluded"])
+        self.assertTrue(slots[1]["auto_omitted"])
+        self.assertTrue(slots[1]["confirmed"])
+        self.assertFalse(slots[1]["attention"])
+        self.assertFalse(slots[2]["excluded"])
+        self.assertFalse(slots[2]["confirmed"])
+
     def test_native_pages_follow_retained_neighbors_including_other_native_pages(self):
         node = shutil.which("node")
         if not node:

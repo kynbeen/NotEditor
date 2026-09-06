@@ -745,9 +745,14 @@ function renderHandwritingStatus(error = "") {
     const common = `필기 데이터가 있는 페이지 ${info.annotated_page_count}쪽 · Samsung 펜 캐시 ${info.stroke_cache_count}개`;
     if (info.mode === "rebuild" && info.match) {
       const match = info.match;
+      const blankSources = new Set((info.source_order || [])
+        .filter((page) => page.blank && page.source_index !== null)
+        .map((page) => page.source_index));
+      const omittedBlank = match.source_only.filter((index) => blankSources.has(index)).length;
+      const preservedOld = match.source_only.length - omittedBlank;
       heading.textContent = `공통 ${match.matched_count}쪽을 찾아 새 PDF 기준으로 재조립합니다.`;
       detail.textContent = [
-        `새 PDF 전용 ${match.target_only.length}쪽 추가 · 구판 전용 ${match.source_only.length}쪽 검사 · 불확실 ${match.uncertain_count}쌍`,
+        `새 PDF 전용 ${match.target_only.length}쪽 추가 · 구판 전용 ${preservedOld}쪽 보존 검토${omittedBlank ? ` · 빈 원본 ${omittedBlank}쪽 자동 생략` : ""} · 불확실 ${match.uncertain_count}쌍`,
         info.alignment ? `본문 배율 ${info.alignment.scale.toFixed(3)}배 · 이동 ${info.alignment.offset_x_mm}, ${info.alignment.offset_y_mm}mm` : "공통 쪽의 페이지 좌표가 일치합니다.",
         common,
       ].join("\n");
@@ -771,15 +776,22 @@ function renderHandwritingStatus(error = "") {
   detail.textContent = "쪽이 추가·삭제됐으면 공통 쪽을 자동으로 찾고, 크기나 여백이 달라지면 본문을 기준으로 자동 정렬합니다.";
 }
 
-function clonePagePlan(plan) {
-  return (plan?.slots || []).map((slot) => ({
-    source_index: slot.source_index,
-    target_index: slot.target_index,
-    confirmed: Boolean(slot.confirmed),
-    manual: Boolean(slot.manual),
-    excluded: Boolean(slot.excluded),
-    attention: Boolean(slot.needs_confirmation || slot.kind !== "matched"),
-  }));
+function clonePagePlan(plan, sourceOrder = []) {
+  const blankSources = new Set(sourceOrder
+    .filter((page) => page.blank && page.source_index !== null)
+    .map((page) => page.source_index));
+  return (plan?.slots || []).map((slot) => {
+    const autoOmitted = slot.target_index === null && blankSources.has(slot.source_index);
+    return {
+      source_index: slot.source_index,
+      target_index: slot.target_index,
+      confirmed: autoOmitted || Boolean(slot.confirmed),
+      manual: Boolean(slot.manual),
+      excluded: autoOmitted || Boolean(slot.excluded),
+      auto_omitted: autoOmitted,
+      attention: !autoOmitted && Boolean(slot.needs_confirmation || slot.kind !== "matched"),
+    };
+  });
 }
 
 function reviewBadge(slot) {
@@ -794,7 +806,8 @@ function reviewBadge(slot) {
 function renderReviewSummary() {
   const plan = state.handwriting.plan;
   const included = plan.filter((slot) => !slot.excluded);
-  const excluded = plan.length - included.length;
+  const excluded = plan.filter((slot) => slot.excluded && !slot.auto_omitted).length;
+  const omitted = plan.filter((slot) => slot.auto_omitted).length;
   const unconfirmed = included.filter((slot) => !slot.confirmed).length;
   const automatic = included.filter((slot) => (
     slot.source_index !== null && slot.target_index !== null && !slot.manual
@@ -807,6 +820,7 @@ function renderReviewSummary() {
     `결과 ${included.length + nativeCount}쪽`,
     nativeCount ? `별도 노트 ${nativeCount}쪽 보존` : "",
     excluded ? `제외 ${excluded}행` : "",
+    omitted ? `빈 원본 ${omitted}쪽 자동 생략` : "",
     `자동 연결 ${automatic}`,
     `새 전용 ${targetOnly}`,
     `옛 전용 ${sourceOnly}`,
@@ -1063,6 +1077,7 @@ function renderPageReview() {
   }, { root: null, rootMargin: "600px 0px" });
 
   state.handwriting.plan.forEach((slot, index) => {
+    if (slot.auto_omitted) return;
     const row = document.createElement("article");
     row.className = "review-row";
     row.dataset.slotIndex = String(index);
@@ -1161,12 +1176,14 @@ function renderPageReview() {
     refs.handwritingReviewRows.append(row);
     state.reviewObserver.observe(row);
   });
-  const rows = [...refs.handwritingReviewRows.children];
+  const rows = new Map([...refs.handwritingReviewRows.children]
+    .map((row) => [Number(row.dataset.slotIndex), row]));
   const placement = nativeReviewPlacement(
     state.handwriting.plan, state.handwriting.inspection?.source_order || [],
   );
   placement.forEach((entry) => {
-    const row = entry.index === undefined ? makeNativeReviewRow(entry.page) : rows[entry.index];
+    const row = entry.index === undefined ? makeNativeReviewRow(entry.page) : rows.get(entry.index);
+    if (!row) return;
     refs.handwritingReviewRows.append(row);
     if (entry.index === undefined) state.reviewObserver.observe(row);
   });
@@ -1240,7 +1257,7 @@ function applyHandwritingResponse(response) {
     ready: Boolean(response.ready),
     inspection: response.inspection || null,
     plan: (selectionChanged || becameReady || !previous.plan?.length)
-      ? clonePagePlan(response.inspection?.plan)
+      ? clonePagePlan(response.inspection?.plan, response.inspection?.source_order || [])
       : previous.plan,
     analysis: response.analysis || {
       state: response.ready ? "ready" : "waiting",
@@ -1808,6 +1825,7 @@ function showPreview(docId, pageIndex, origin = "원본 미리보기") {
 }
 
 function renderResult() {
+  const orderLocked = isHandoffSession();
   state.resultThumbnailObserver?.disconnect();
   state.resultSortable?.destroy();
   state.resultSortable = null;
@@ -1816,7 +1834,8 @@ function renderResult() {
   refs.resultEmpty.hidden = state.order.length > 0;
   refs.resultList.hidden = state.order.length === 0;
   refs.resultList.replaceChildren();
-  refs.resetOrder.disabled = !state.orderDirty || state.order.length < 2;
+  refs.resetOrder.hidden = orderLocked;
+  refs.resetOrder.disabled = orderLocked || !state.orderDirty || state.order.length < 2;
 
   state.order.forEach((ref) => {
     const doc = documentById(ref.document_id);
@@ -1826,13 +1845,13 @@ function renderResult() {
     item.dataset.key = refKey(ref);
     item.dataset.documentId = ref.document_id;
     item.dataset.pageIndex = String(ref.page_index);
-    item.innerHTML = `<span class="result-image-placeholder"></span><div class="result-label"><strong>${escapeHtml(doc.name)}</strong><span>원본 ${ref.page_index + 1}쪽</span></div><button class="drag-handle" type="button" aria-label="${escapeHtml(doc.name)} ${ref.page_index + 1}쪽 순서 이동" title="끌어서 순서 변경">⠿</button>`;
+    item.innerHTML = `<span class="result-image-placeholder"></span><div class="result-label"><strong>${escapeHtml(doc.name)}</strong><span>원본 ${ref.page_index + 1}쪽</span></div><button class="drag-handle" type="button" aria-label="${escapeHtml(doc.name)} ${ref.page_index + 1}쪽 순서 이동" title="끌어서 순서 변경"${orderLocked ? " hidden disabled" : ""}>⠿</button>`;
     item.addEventListener("click", () => showPreview(ref.document_id, ref.page_index, "결과 미리보기"));
     refs.resultList.append(item);
     state.resultThumbnailObserver.observe(item);
   });
 
-  if (state.order.length > 1 && window.Sortable) {
+  if (!orderLocked && state.order.length > 1 && window.Sortable) {
     state.resultSortable = window.Sortable.create(refs.resultList, {
       animation: 140,
       handle: ".drag-handle",
