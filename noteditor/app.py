@@ -23,6 +23,7 @@ from .merge_handoff import (
     path_is_within,
     parts_from_order,
     paths_refer_to_same_file,
+    request_scope,
     sidecar_path,
     write_decision,
     write_sidecar,
@@ -235,6 +236,9 @@ class ComposerApi:
                 # 강의록을 함께 받았으면 족첵에서 이 강의 몫을 스스로 짚어 볼 수 있다.
                 # 화면은 이 값으로 [범위 자동 인식] 버튼을 켤지 정한다.
                 "can_suggest_ranges": plan.range_hint is not None,
+                # 강의록 진도 범위는 summary.ai 에 물어본다(판 4). 이 값으로 화면이
+                # [범위 자동 인식] 을 켤지 정한다 — 족첵 쪽과 같은 버튼을 쓴다.
+                "can_suggest_scope": plan.scope_api is not None,
             }
             if plan.mode == "review":
                 result["origin"] = plan.origin
@@ -755,6 +759,33 @@ class ComposerApi:
                     "uncertain": bool(found and found.uncertain),
                 })
             return self._ok(proposals=proposals)
+        except Exception as exc:
+            return self._error(exc)
+
+    def suggest_scope(self, document_id: str) -> dict:
+        """올린 **강의록**에서 이번 차시가 나간 쪽 범위를 summary.ai 에 물어 돌려준다.
+
+        여기서 계산하지 않는다. 전사본을 읽고 강의의 흐름을 판단하는 일이라 LLM 이 필요하고,
+        그 호출은 summary.ai 만 한다(인증·사용량 관리가 거기 있다). 실측으로 통계 방식이
+        크게 빗나가던 세 건에서 이 방식은 2쪽 안에 들어왔다.
+
+        **제안일 뿐이다.** 결과를 바로 저장하지 않고 화면의 쪽 선택에 채워 넣는다.
+        """
+        try:
+            plan = self._startup_plan
+            api = plan.scope_api if plan else None
+            if api is None:
+                raise PdfComposerError(
+                    "이 창에는 진도 범위를 물어볼 곳이 없습니다(전사본을 함께 받지 못했습니다).")
+            source = next((item for item in self._session.sources
+                           if item.id == document_id), None)
+            if source is None:
+                raise PdfComposerError("올린 PDF를 찾지 못했습니다.")
+            answer = request_scope(api, source.path)
+            return self._ok(document_id=document_id,
+                            document_name=source.name,
+                            page_count=source.page_count,
+                            **answer)
         except Exception as exc:
             return self._error(exc)
 

@@ -370,8 +370,14 @@ function applyStartupPlan(plan) {
   refs.mergeOutputName.title = `summary.ai 지정 저장 경로: ${plan.output_path}`;
   refs.mergeWorkspace.classList.toggle("review-mode", plan.mode === "review");
   refs.sourceReview.hidden = plan.mode !== "review";
-  // 강의록을 함께 받은 합치기 세션에서만 [범위 자동 인식]이 뜻이 있다.
-  refs.suggestRanges.hidden = !(plan.mode === "merge" && plan.can_suggest_ranges);
+  // 강의록(또는 전사본)을 함께 받은 합치기 세션에서만 [범위 자동 인식]이 뜻이 있다.
+  // 족첵이면 여기서 직접 짚고, 강의록이면 summary.ai 에 물어본다 — 버튼은 하나다.
+  refs.suggestRanges.hidden = !(plan.mode === "merge"
+    && (plan.can_suggest_ranges || plan.can_suggest_scope));
+  if (plan.can_suggest_scope && !plan.can_suggest_ranges) {
+    refs.suggestRanges.title = "전사본과 대조해 이번 차시가 나간 강의록 쪽을 골라 줍니다."
+      + " summary.ai 가 판단하며 수십 초 걸립니다. 제안일 뿐이니 확인하고 고치세요";
+  }
   // summary.ai 인계 창은 그 한 가지 일만 한다. 필기 옮기기로 새어 나가면 인계를 끝내지
   // 않은 채 창이 남고, summary.ai 는 결과를 영영 기다린다.
   lockToMergeTool();
@@ -1860,7 +1866,14 @@ async function addPdfs() {
   finally { setBusy(false); }
   // 강의록을 함께 받은 인계 세션이면 **묻지 않고 바로 짚어 준다.** 사용자가 원한 것은
   // "넣으면 알아서 범위를 잡는 것"이고, 결과는 어차피 화면에서 확인하고 고칠 수 있다.
-  if (added && state.mergePlan?.can_suggest_ranges) await suggestRanges({auto: true});
+  if (added) await suggestForPlan({auto: true});
+}
+
+// 이 세션이 짚을 수 있는 범위를 짚는다. 족첵은 이 앱이 직접(그림 맞추기), 강의록은
+// summary.ai 에 물어서(전사본 판단, LLM). 둘이 함께 켜지는 세션은 없다.
+async function suggestForPlan({auto = false} = {}) {
+  if (state.mergePlan?.can_suggest_ranges) { await suggestRanges({auto}); return; }
+  if (state.mergePlan?.can_suggest_scope) { await suggestScope({auto}); }
 }
 
 // 족첵에서 이 강의에 해당하는 쪽을 골라 넣는다. **제안일 뿐이다** — 쪽 선택에 채워 넣어
@@ -1890,6 +1903,40 @@ async function suggestRanges({auto = false} = {}) {
   } catch (error) {
     // 자동 실행이 실패했다고 합치기를 못 하게 만들지 않는다 — 손으로 고르면 된다.
     toast(auto ? `범위 자동 인식을 건너뜁니다: ${error.message}` : error.message, "error");
+  } finally { setBusy(false); }
+}
+
+// 강의록에서 이번 차시가 나간 쪽을 골라 넣는다. **판단은 summary.ai 가** 한다 —
+// 전사본을 읽고 강의의 흐름을 보는 일이라 LLM 이 필요하고, 인증·사용량 관리가 거기 있다.
+// 실측: 통계만으로 짚던 방식이 크게 빗나간 세 건에서 이 방식은 모두 2쪽 안에 들어왔다.
+async function suggestScope({auto = false} = {}) {
+  if (!state.mergePlan?.can_suggest_scope) return;
+  const candidates = state.documents;      // 진도 범위는 합치기 모드에만 온다(기준 문서가 없다)
+  if (candidates.length !== 1) {
+    // 여러 PDF 를 올렸으면 어느 것이 이번 차시의 강의록인지 알 수 없다. 물어보는 것은
+    // LLM 한 번씩이라, 짐작으로 여러 번 부르지 않는다.
+    const message = "강의록 PDF 가 하나일 때만 진도 범위를 자동으로 짚습니다.";
+    if (!auto) toast(message, "warn");
+    return;
+  }
+  const doc = candidates[0];
+  setBusy(true, "전사본과 대조해 진도 범위를 짚는 중… (수십 초)");
+  try {
+    const response = await callApi("suggest_scope", doc.id);
+    if (!response.ok) throw new Error(response.error);
+    if (!response.pages) {
+      toast(`${doc.name}: 이번 차시의 범위를 못 찾아 그대로 두었습니다`, "warn");
+      return;
+    }
+    const parsed = await callApi("parse_range", response.pages, doc.page_count);
+    if (!parsed.ok) throw new Error(parsed.error);
+    setDocumentSelection(doc, parsed.indices);
+    toast(`진도 범위 제안\n${doc.name}: ${response.pages}`
+      + (response.uncertain ? " (확신이 낮습니다 — 양끝을 확인해 주세요)" : ""),
+      response.uncertain ? "warn" : "success");
+  } catch (error) {
+    // 자동 실행이 실패했다고 합치기를 못 하게 만들지 않는다 — 손으로 고르면 된다.
+    toast(auto ? `진도 범위 자동 인식을 건너뜁니다: ${error.message}` : error.message, "error");
   } finally { setBusy(false); }
 }
 
@@ -1938,7 +1985,7 @@ async function saveResult() {
 
 refs.add.addEventListener("click", addPdfs);
 refs.emptyAdd.addEventListener("click", addPdfs);
-refs.suggestRanges.addEventListener("click", () => { void suggestRanges(); });
+refs.suggestRanges.addEventListener("click", () => { void suggestForPlan(); });
 refs.save.addEventListener("click", saveResult);
 REVIEW_BUTTONS().forEach((button) => {
   button.addEventListener("click", () => { void finishSourceReview(button.dataset.change); });

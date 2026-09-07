@@ -103,7 +103,10 @@ class StaticUiContractTests(unittest.TestCase):
         """사용자가 원한 것은 "넣으면 알아서 범위를 잡는 것"이다 — 묻지 않고 바로 짚는다."""
         self.assertIn('id="suggestRangesButton"', self.html)
         self.assertIn("범위 자동 인식", self.html)
-        self.assertIn("if (added && state.mergePlan?.can_suggest_ranges)", self.js)
+        # 판 4 부터 짚을 수 있는 것이 둘(족첵 범위·강의록 진도 범위)이라 분기가 함수로 나갔다.
+        self.assertIn("if (added) await suggestForPlan({auto: true});", self.js)
+        self.assertIn("if (state.mergePlan?.can_suggest_ranges) { await suggestRanges({auto}); return; }",
+                      self.js)
         self.assertIn('callApi("suggest_ranges")', self.js)
         # 제안일 뿐이다 — 쪽 선택에 채워 넣어 사용자가 보고 고치게 한다.
         self.assertIn("setDocumentSelection(doc, parsed.indices)", self.js)

@@ -34,10 +34,16 @@ from .ranges import format_page_ranges
 
 LEGACY_CONTRACT_VERSION = 1
 REVIEW_CONTRACT_VERSION = 2      # collection-started merges and source page review
-CONTRACT_VERSION = 3             # review outcome split into decision + change
+RANGE_CONTRACT_VERSION = 3       # review outcome split into decision + change
+CONTRACT_VERSION = 4             # lecture scope ask-back (``scope_api``)
 SUPPORTED_CONTRACT_VERSIONS = (
-    LEGACY_CONTRACT_VERSION, REVIEW_CONTRACT_VERSION, CONTRACT_VERSION,
+    LEGACY_CONTRACT_VERSION, REVIEW_CONTRACT_VERSION, RANGE_CONTRACT_VERSION,
+    CONTRACT_VERSION,
 )
+# 진도 범위를 물어볼 곳은 **이 PC 의 summary.ai** 뿐이다. 계획 파일이 바뀌어도 바깥으로
+# 나가지 않게, 받아들이는 주소를 localhost 로 못 박는다.
+SCOPE_API_HOSTS = ("127.0.0.1", "localhost")
+SCOPE_API_TIMEOUT_SECONDS = 240   # LLM 한 번 호출(실측 25~55초)에 넉넉한 상한
 SIDECAR_SUFFIX = ".merge.json"
 
 DECISIONS = ("refresh", "merge", "skip")
@@ -63,6 +69,21 @@ class RangeHint:
 
 
 @dataclass(frozen=True)
+class ScopeApi:
+    """강의록의 **진도 범위**를 summary.ai 에 물어볼 자리(판 4).
+
+    ``RangeHint`` 와 방향이 반대다. 족첵 범위는 그림을 맞추는 문제라 여기서 직접 계산하지만
+    (:mod:`noteditor.exam_range`), 강의록 진도 범위는 전사본을 읽고 강의의 흐름을 판단하는
+    문제라 LLM 이 필요하다. **LLM 호출은 summary.ai 만 한다** — 여기에는 API 인증도 사용량
+    관리도 없다. 그런데 대상 강의록은 이 화면에서 골라지므로, 답을 계획 파일에 실어 보낼 수
+    없고 대신 물어볼 주소를 받는다.
+    """
+
+    url: str
+    token: str
+
+
+@dataclass(frozen=True)
 class MergePlan:
     version: int
     mode: str
@@ -74,6 +95,7 @@ class MergePlan:
     origin: str | None = None
     decision_path: Path | None = None
     range_hint: RangeHint | None = None
+    scope_api: ScopeApi | None = None
 
 
 def paths_refer_to_same_file(left: Path, right: Path) -> bool:
@@ -138,6 +160,72 @@ def _range_hint(value: object) -> RangeHint | None:
     return RangeHint(lecture.resolve(), tuple(others))
 
 
+def _scope_api(value: object) -> ScopeApi | None:
+    """물어볼 주소도 **있으면 좋은 것**이다 — 없거나 이상하면 조용히 없는 셈 친다.
+
+    주소는 이 PC 의 summary.ai 만 허용한다. 계획 파일은 다른 프로그램이 만든 텍스트이므로,
+    거기 적힌 주소로 무엇이든 보내면 안 된다.
+    """
+    if not isinstance(value, dict):
+        return None
+    url = value.get("url")
+    token = value.get("token")
+    if not isinstance(url, str) or not isinstance(token, str) or not token.strip():
+        return None
+    from urllib.parse import urlparse
+
+    parsed = urlparse(url.strip())
+    if parsed.scheme != "http" or parsed.hostname not in SCOPE_API_HOSTS:
+        return None
+    if not parsed.path:
+        return None
+    return ScopeApi(url=url.strip(), token=token.strip())
+
+
+def request_scope(api: ScopeApi, lecture: Path) -> dict:
+    """summary.ai 에 이 강의록의 진도 범위를 물어본다. **제안일 뿐이다.**
+
+    돌려주는 값은 ``{"pages": "23-46", "confidence": 0.86, "uncertain": False}`` 이고,
+    못 짚었으면 ``pages`` 가 빈 문자열이다. LLM 한 번 호출이라 수십 초 걸린다.
+    """
+    import json as _json
+    import urllib.error
+    import urllib.request
+
+    body = _json.dumps({"token": api.token, "path": str(Path(lecture).resolve())}).encode("utf-8")
+    request = urllib.request.Request(
+        api.url, data=body, method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=SCOPE_API_TIMEOUT_SECONDS) as response:
+            payload = _json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        detail = ""
+        try:
+            detail = str(_json.loads(exc.read().decode("utf-8")).get("detail") or "")
+        except Exception:                                   # noqa: BLE001
+            detail = ""
+        raise PdfComposerError(
+            detail or f"summary.ai 가 범위를 주지 못했습니다(HTTP {exc.code})."
+        ) from exc
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        raise PdfComposerError(
+            f"summary.ai 에 범위를 물어보지 못했습니다: {exc}"
+        ) from exc
+    except (ValueError, UnicodeError) as exc:
+        raise PdfComposerError(f"범위 응답을 읽을 수 없습니다: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise PdfComposerError("범위 응답이 JSON 객체가 아닙니다.")
+    pages = payload.get("pages")
+    confidence = payload.get("confidence")
+    return {
+        "pages": pages.strip() if isinstance(pages, str) else "",
+        "confidence": float(confidence) if isinstance(confidence, (int, float)) else 0.0,
+        "uncertain": bool(payload.get("uncertain")),
+    }
+
+
 def load_merge_plan(path: str | Path) -> MergePlan:
     plan_path = Path(path).expanduser().resolve()
     if not plan_path.is_file():
@@ -185,7 +273,14 @@ def load_merge_plan(path: str | Path) -> MergePlan:
                 payload.get("decision_path"), "비교 계획의 decision_path"
             )
 
-    range_hint = _range_hint(payload.get("range_hint")) if version >= CONTRACT_VERSION else None
+    # **판을 도입한 번호로 묻는다.** `range_hint` 는 판 3, `scope_api` 는 판 4 에서 생겼다.
+    # `>= CONTRACT_VERSION` 으로 물으면 판을 올릴 때마다(판 4 는 전혀 다른 이유로 올랐다)
+    # 앞 판의 칸이 조용히 무시된다.
+    range_hint = (_range_hint(payload.get("range_hint"))
+                  if version >= RANGE_CONTRACT_VERSION else None)
+    # 진도 범위는 합치기 모드에서만 뜻이 있다 — 검토 모드에는 고칠 범위가 이미 기록되어 있다.
+    scope = (_scope_api(payload.get("scope_api"))
+             if version >= CONTRACT_VERSION and mode == "merge" else None)
 
     raw_parts = payload.get("parts")
     if not isinstance(raw_parts, list):
@@ -229,6 +324,7 @@ def load_merge_plan(path: str | Path) -> MergePlan:
         origin=origin,
         decision_path=decision_path,
         range_hint=range_hint,
+        scope_api=scope,
     )
 
 
