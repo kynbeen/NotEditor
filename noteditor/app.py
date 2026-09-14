@@ -762,7 +762,7 @@ class ComposerApi:
         except Exception as exc:
             return self._error(exc)
 
-    def suggest_scope(self, document_id: str | list[str]) -> dict:
+    def suggest_scope(self, document_id: str | list[str], refresh: bool = False) -> dict:
         """올린 **강의록**에서 이번 차시가 나간 쪽 범위를 summary.ai 에 물어 돌려준다.
 
         여기서 계산하지 않는다. 전사본을 읽고 강의의 흐름을 판단하는 일이라 LLM 이 필요하고,
@@ -793,12 +793,13 @@ class ComposerApi:
                 raise PdfComposerError("올린 PDF를 찾지 못했습니다.")
             if len(sources) == 1:
                 source = sources[0]
-                answer = request_scope(api, source.path)
+                answer = request_scope(api, source.path, refresh=bool(refresh))
                 return self._ok(document_id=source.id,
                                 document_name=source.name,
                                 page_count=source.page_count,
                                 **answer)
-            answer = request_scope(api, [source.path for source in sources])
+            answer = request_scope(api, [source.path for source in sources],
+                                   refresh=bool(refresh))
             ranges: dict[Path, str] = {}
             for part in answer.pop("parts", []):
                 try:

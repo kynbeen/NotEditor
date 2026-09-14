@@ -182,7 +182,7 @@ def _scope_api(value: object) -> ScopeApi | None:
     return ScopeApi(url=url.strip(), token=token.strip())
 
 
-def request_scope(api: ScopeApi, lecture: Path | list[Path]) -> dict:
+def request_scope(api: ScopeApi, lecture: Path | list[Path], *, refresh: bool = False) -> dict:
     """summary.ai 에 이 강의록의 진도 범위를 물어본다. **제안일 뿐이다.**
 
     돌려주는 값은 ``{"pages": "23-46", "confidence": 0.86, "uncertain": False}`` 이고,
@@ -202,6 +202,10 @@ def request_scope(api: ScopeApi, lecture: Path | list[Path]) -> dict:
         request_body["paths"] = [str(p.resolve()) for p in lectures]
     else:
         request_body["path"] = str(lectures[0].resolve())
+    if refresh:
+        # 자동 최초 제안은 기존 캐시를 쓰고, 사람이 버튼을 다시 눌렀을 때만 새 계산을
+        # 명시한다. 생략이 기본이라 이 필드를 모르는 옛 summary.ai 와도 호환된다.
+        request_body["refresh"] = True
     body = _json.dumps(request_body).encode("utf-8")
     request = urllib.request.Request(
         api.url, data=body, method="POST",

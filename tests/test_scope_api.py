@@ -160,6 +160,32 @@ class RequestScopeTests(unittest.TestCase):
         self.assertEqual(got["parts"], [{"path": "A.pdf", "pages": "21-30"},
                                         {"path": "B.pdf", "pages": "1-8"}])
 
+    def test_only_an_explicit_retry_requests_a_fresh_answer(self):
+        sent = []
+
+        class FakeResponse:
+            def __enter__(self_inner):
+                return self_inner
+
+            def __exit__(self_inner, *args):
+                return False
+
+            def read(self_inner):
+                return json.dumps({"pages": "2-3", "confidence": 0.9,
+                                   "uncertain": False}).encode("utf-8")
+
+        def fake_urlopen(request, timeout=None):
+            sent.append(json.loads(request.data.decode("utf-8")))
+            return FakeResponse()
+
+        api = ScopeApi("http://127.0.0.1:8700/api/scope-hint", "t")
+        with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            request_scope(api, Path("강의록.pdf"))
+            request_scope(api, Path("강의록.pdf"), refresh=True)
+
+        self.assertNotIn("refresh", sent[0])
+        self.assertIs(sent[1]["refresh"], True)
+
     def test_an_old_summary_ai_without_per_file_ranges_is_not_guessed_from(self):
         with self.assertRaisesRegex(Exception, "파일별 범위"):
             self._ask_several({"pages": "21-38", "confidence": 0.8, "uncertain": False})
@@ -214,6 +240,21 @@ class SuggestScopeApiTests(unittest.TestCase):
             self.assertEqual(got["pages"], "23-46")
             self.assertEqual(got["document_id"], document_id)
             self.assertEqual(Path(ask.call_args.args[1]), self.lecture.resolve())
+            self.assertFalse(ask.call_args.kwargs["refresh"])
+        finally:
+            api._close()
+
+    def test_an_explicit_retry_is_forwarded_to_summary_ai(self):
+        api = ComposerApi(ComposerSession(), self.plan_path)
+        try:
+            plan = api.startup_plan()["plan"]
+            document_id = plan["sources"][0]["id"]
+            with patch("noteditor.app.request_scope",
+                       return_value={"pages": "1-3", "confidence": 0.9,
+                                     "uncertain": False}) as ask:
+                got = api.suggest_scope(document_id, True)
+            self.assertTrue(got["ok"], got)
+            self.assertTrue(ask.call_args.kwargs["refresh"])
         finally:
             api._close()
 
@@ -285,10 +326,15 @@ class ScopeScreenWiringTests(unittest.TestCase):
         cls.js = (static / "app.js").read_text(encoding="utf-8")
 
     def test_the_scope_is_asked_for_and_filled_into_the_selection(self):
-        self.assertIn('callApi("suggest_scope", ids.length === 1 ? ids[0] : ids)', self.js)
+        self.assertIn(
+            'callApi("suggest_scope", ids.length === 1 ? ids[0] : ids, !auto)', self.js)
         self.assertIn("setDocumentSelection(doc, parsed.indices)", self.js)
         # 제안일 뿐이므로 확신이 낮으면 그렇게 말한다.
         self.assertIn("확신이 낮습니다", self.js)
+
+    def test_an_uncertain_omission_preserves_the_existing_selection(self):
+        self.assertIn("if (response.uncertain)", self.js)
+        self.assertIn("확신이 낮아 기존 선택을 유지했습니다", self.js)
 
     def test_the_same_button_serves_both_kinds_of_range(self):
         self.assertIn("plan.can_suggest_ranges || plan.can_suggest_scope", self.js)

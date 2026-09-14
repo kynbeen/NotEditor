@@ -1921,7 +1921,9 @@ async function suggestScope({auto = false} = {}) {
   setBusy(true, "전사본과 대조해 진도 범위를 짚는 중… (수십 초)");
   try {
     const ids = candidates.map((doc) => doc.id);
-    const response = await callApi("suggest_scope", ids.length === 1 ? ids[0] : ids);
+    // 파일을 올린 직후 자동 호출은 캐시를 쓴다. 사람이 버튼을 눌러 다시 부른 경우에는
+    // summary.ai 의 세션·영속 캐시를 모두 건너뛰고 새 LLM 답을 받는다.
+    const response = await callApi("suggest_scope", ids.length === 1 ? ids[0] : ids, !auto);
     if (!response.ok) throw new Error(response.error);
     if (!response.pages) {
       toast(`${candidates.map((doc) => doc.name).join(", ")}: 이번 차시의 범위를 못 찾아 그대로 두었습니다`, "warn");
@@ -1934,9 +1936,14 @@ async function suggestScope({auto = false} = {}) {
       const doc = documentById(proposal.document_id);
       if (!doc) continue;
       if (!proposal.pages) {
-        // 범위가 걸치지 않은 파일 — 강의 추가에서 이 파일이 빠지는 것과 같다.
-        setDocumentSelection(doc, []);
-        notes.push(`${doc.name}: 이번 차시가 쓰지 않아 선택을 비웠습니다`);
+        if (response.uncertain) {
+          // 확신 없는 모델 답이 사람이 이미 고른 범위를 파괴하면 안 된다.
+          notes.push(`${doc.name}: 범위에서 빠졌지만 확신이 낮아 기존 선택을 유지했습니다`);
+        } else {
+          // 확신한 답에서 범위가 걸치지 않은 파일 — 강의 추가에서 빠지는 것과 같다.
+          setDocumentSelection(doc, []);
+          notes.push(`${doc.name}: 이번 차시가 쓰지 않아 선택을 비웠습니다`);
+        }
         continue;
       }
       const parsed = await callApi("parse_range", proposal.pages, doc.page_count);
