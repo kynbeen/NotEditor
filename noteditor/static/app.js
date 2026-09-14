@@ -3,6 +3,9 @@
 const state = {
   documents: [],
   selected: new Set(),
+  // 사람이 쪽 선택을 손댄 문서 id. PDF 를 올린 직후의 전체 선택은 기본값일 뿐이라 여기 없다 —
+  // 확신 낮은 범위 제안이 파일을 빠뜨렸을 때 지켜야 하는 것은 사람의 선택뿐이다.
+  humanSelection: new Set(),
   order: [],
   orderDirty: false,
   mergeOutputNameDirty: false,
@@ -361,6 +364,8 @@ function applyStartupPlan(plan) {
   state.documents = plan.sources || [];
   state.order = (plan.order || []).map((item) => ({ ...item }));
   state.selected = new Set(state.order.map(refKey));
+  // 계획에 실려 온 쪽 선택은 기록된 합치기 방법 — 사람이 예전에 고른 것이다.
+  state.humanSelection = new Set(state.order.map((ref) => ref.document_id));
   // 계획이 문서·쪽 순서 그대로면 사용자가 순서를 손댄 것이 아니다. 무조건 dirty 로 두면
   // 그 뒤 선택을 바꿀 때마다 새 쪽이 결과 목록 맨 끝으로 밀린다(빈 계획이 특히 그렇다).
   state.orderDirty = state.order.map(refKey).join("\u0000")
@@ -1335,6 +1340,7 @@ async function resetDocuments() {
     if (!response.ok) throw new Error(response.error);
     state.documents = [];
     state.selected.clear();
+    state.humanSelection.clear();
     state.order = [];
     state.orderDirty = false;
     state.mergeOutputNameDirty = false;
@@ -1569,8 +1575,14 @@ function renderDocuments() {
       </div>
       <div class="thumbnail-grid"></div>`;
     card.querySelector(".remove-document").addEventListener("click", () => removeDocument(doc.id));
-    card.querySelector(".all-pages").addEventListener("click", () => setDocumentSelection(doc, doc.pages.map((page) => page.index)));
-    card.querySelector(".no-pages").addEventListener("click", () => setDocumentSelection(doc, []));
+    card.querySelector(".all-pages").addEventListener("click", () => {
+      state.humanSelection.add(doc.id);
+      setDocumentSelection(doc, doc.pages.map((page) => page.index));
+    });
+    card.querySelector(".no-pages").addEventListener("click", () => {
+      state.humanSelection.add(doc.id);
+      setDocumentSelection(doc, []);
+    });
     const input = card.querySelector(".range-input");
     input.addEventListener("change", () => applyRange(doc, input, card.querySelector(".range-error")));
     input.addEventListener("keydown", (event) => { if (event.key === "Enter") input.blur(); });
@@ -1625,6 +1637,7 @@ async function applyRange(doc, input, errorNode) {
       return;
     }
     errorNode.textContent = "";
+    state.humanSelection.add(doc.id);
     setDocumentSelection(doc, response.indices);
   } catch (error) {
     errorNode.textContent = error.message;
@@ -1634,6 +1647,7 @@ async function applyRange(doc, input, errorNode) {
 
 function togglePage(doc, page, tile) {
   const key = pageKey(doc.id, page.index);
+  state.humanSelection.add(doc.id);
   if (state.selected.has(key)) state.selected.delete(key); else state.selected.add(key);
   syncOrder();
   tile.classList.toggle("selected", state.selected.has(key));
@@ -1926,6 +1940,12 @@ async function suggestScope({auto = false} = {}) {
     const response = await callApi("suggest_scope", ids.length === 1 ? ids[0] : ids, !auto);
     if (!response.ok) throw new Error(response.error);
     if (!response.pages) {
+      if (response.reason) {
+        // summary.ai 가 모델 답을 검증에서 거절했다. 선택은 건드리지 않고 왜인지 보여 준다.
+        toast(`진도 범위 제안을 적용하지 않았습니다\n${response.reason}`
+          + "\n쪽을 직접 고르거나 [범위 자동 인식]을 다시 눌러 주세요.", "warn");
+        return;
+      }
       toast(`${candidates.map((doc) => doc.name).join(", ")}: 이번 차시의 범위를 못 찾아 그대로 두었습니다`, "warn");
       return;
     }
@@ -1936,11 +1956,12 @@ async function suggestScope({auto = false} = {}) {
       const doc = documentById(proposal.document_id);
       if (!doc) continue;
       if (!proposal.pages) {
-        if (response.uncertain) {
+        if (response.uncertain && state.humanSelection.has(doc.id)) {
           // 확신 없는 모델 답이 사람이 이미 고른 범위를 파괴하면 안 된다.
-          notes.push(`${doc.name}: 범위에서 빠졌지만 확신이 낮아 기존 선택을 유지했습니다`);
+          notes.push(`${doc.name}: 범위에서 빠졌지만 확신이 낮아 직접 고른 선택을 유지했습니다`);
         } else {
-          // 확신한 답에서 범위가 걸치지 않은 파일 — 강의 추가에서 빠지는 것과 같다.
+          // 범위가 걸치지 않은 파일 — 강의 추가에서 빠지는 것과 같다. PDF 를 올린 직후의 전체
+          // 선택은 사람이 고른 것이 아니라서, 남겨 두면 모델이 파일 전체를 제안한 것처럼 보인다.
           setDocumentSelection(doc, []);
           notes.push(`${doc.name}: 이번 차시가 쓰지 않아 선택을 비웠습니다`);
         }
@@ -1965,6 +1986,7 @@ async function removeDocument(id) {
     const response = await callApi("remove_document", id);
     if (!response.ok) { toast(response.error, "error"); return; }
     state.documents = state.documents.filter((doc) => doc.id !== id);
+    state.humanSelection.delete(id);
     updateMergeOutputName(false);
     [...state.selected].filter((key) => key.startsWith(`${id}:`)).forEach((key) => state.selected.delete(key));
     state.order = state.order.filter((ref) => ref.document_id !== id);

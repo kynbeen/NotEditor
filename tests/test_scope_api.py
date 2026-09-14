@@ -129,6 +129,14 @@ class RequestScopeTests(unittest.TestCase):
         got = self._answer({"pages": None, "confidence": None, "uncertain": True})
         self.assertEqual(got, {"pages": "", "confidence": 0.0, "uncertain": True})
 
+    def test_a_rejected_answer_carries_its_reason_and_no_range(self):
+        """summary.ai 가 검증에서 거절한 답은 범위 없이 사유만 온다 — 화면이 그대로 보여 준다."""
+        got = self._answer({"pages": "", "confidence": 0.4, "uncertain": True,
+                            "reason": " 마지막 전사본에서 근거를 찾지 못했습니다 ",
+                            "rejected_pages": "123-138"})
+        self.assertEqual(got, {"pages": "", "confidence": 0.4, "uncertain": True,
+                               "reason": "마지막 전사본에서 근거를 찾지 못했습니다"})
+
     def _ask_several(self, payload: dict) -> tuple[dict, dict]:
         sent = {}
 
@@ -332,9 +340,18 @@ class ScopeScreenWiringTests(unittest.TestCase):
         # 제안일 뿐이므로 확신이 낮으면 그렇게 말한다.
         self.assertIn("확신이 낮습니다", self.js)
 
-    def test_an_uncertain_omission_preserves_the_existing_selection(self):
-        self.assertIn("if (response.uncertain)", self.js)
-        self.assertIn("확신이 낮아 기존 선택을 유지했습니다", self.js)
+    def test_an_uncertain_omission_preserves_only_a_human_selection(self):
+        """올린 직후의 전체 선택까지 지키면 모델이 그 파일 전체를 제안한 것처럼 보인다(실측)."""
+        self.assertIn("response.uncertain && state.humanSelection.has(doc.id)", self.js)
+        self.assertIn("확신이 낮아 직접 고른 선택을 유지했습니다", self.js)
+        # 사람이 손대는 네 자리(쪽 클릭·범위 입력·전체·없음)가 모두 표시를 남긴다.
+        self.assertGreaterEqual(self.js.count("state.humanSelection.add(doc.id)"), 4)
+        self.assertIn("state.humanSelection.delete(id)", self.js)
+        self.assertIn("state.humanSelection.clear()", self.js)
+
+    def test_a_rejected_answer_shows_its_reason_without_touching_the_selection(self):
+        self.assertIn("if (response.reason)", self.js)
+        self.assertIn("진도 범위 제안을 적용하지 않았습니다", self.js)
 
     def test_the_same_button_serves_both_kinds_of_range(self):
         self.assertIn("plan.can_suggest_ranges || plan.can_suggest_scope", self.js)

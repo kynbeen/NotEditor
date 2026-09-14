@@ -238,6 +238,11 @@ def request_scope(api: ScopeApi, lecture: Path | list[Path], *, refresh: bool = 
         "confidence": float(confidence) if isinstance(confidence, (int, float)) else 0.0,
         "uncertain": bool(payload.get("uncertain")),
     }
+    reason = payload.get("reason")
+    if isinstance(reason, str) and reason.strip():
+        # summary.ai 가 모델 답을 검증에서 거절했다. 그때 `pages` 는 비어 있으므로 옛 화면도
+        # 선택을 건드리지 않고, 새 화면은 왜 적용하지 않았는지를 그대로 보여 준다.
+        answer["reason"] = reason.strip()
     if several:
         parts = payload.get("parts")
         if not isinstance(parts, list):
