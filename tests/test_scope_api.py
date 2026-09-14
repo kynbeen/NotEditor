@@ -129,6 +129,41 @@ class RequestScopeTests(unittest.TestCase):
         got = self._answer({"pages": None, "confidence": None, "uncertain": True})
         self.assertEqual(got, {"pages": "", "confidence": 0.0, "uncertain": True})
 
+    def _ask_several(self, payload: dict) -> tuple[dict, dict]:
+        sent = {}
+
+        class FakeResponse:
+            def __enter__(self_inner):
+                return self_inner
+
+            def __exit__(self_inner, *args):
+                return False
+
+            def read(self_inner):
+                return json.dumps(payload).encode("utf-8")
+
+        def fake_urlopen(request, timeout=None):
+            sent.update(json.loads(request.data.decode("utf-8")))
+            return FakeResponse()
+
+        with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            got = request_scope(ScopeApi("http://127.0.0.1:8700/api/scope-hint", "t"),
+                                [Path("A.pdf"), Path("B.pdf")])
+        return sent, got
+
+    def test_several_lectures_are_sent_in_order_and_come_back_per_file(self):
+        sent, got = self._ask_several({
+            "pages": "21-38", "confidence": 0.8, "uncertain": False,
+            "parts": [{"path": "A.pdf", "pages": "21-30"}, {"path": "B.pdf", "pages": "1-8"}]})
+        self.assertNotIn("path", sent)
+        self.assertEqual([Path(p).name for p in sent["paths"]], ["A.pdf", "B.pdf"])
+        self.assertEqual(got["parts"], [{"path": "A.pdf", "pages": "21-30"},
+                                        {"path": "B.pdf", "pages": "1-8"}])
+
+    def test_an_old_summary_ai_without_per_file_ranges_is_not_guessed_from(self):
+        with self.assertRaisesRegex(Exception, "파일별 범위"):
+            self._ask_several({"pages": "21-38", "confidence": 0.8, "uncertain": False})
+
     def test_a_network_failure_is_reported_as_a_readable_error(self):
         with patch("urllib.request.urlopen", side_effect=OSError("연결 거부")):
             with self.assertRaisesRegex(Exception, "물어보지 못했습니다"):
@@ -182,6 +217,37 @@ class SuggestScopeApiTests(unittest.TestCase):
         finally:
             api._close()
 
+    def test_several_documents_are_asked_together_and_split_back(self):
+        second = self.input_root / "강의록2.pdf"
+        make_pdf(second, ["B1", "B2"])
+        third = self.input_root / "강의록3.pdf"
+        make_pdf(third, ["C1"])
+        self.plan_path.write_text(json.dumps({
+            "version": CONTRACT_VERSION, "mode": "merge", "title": "강의록 합치기",
+            "input_root": str(self.input_root.resolve()),
+            "output_path": str(self.output.resolve()),
+            "parts": [{"path": str(p.resolve()), "pages": ""}
+                      for p in (self.lecture, second, third)],
+            "scope_api": {"url": "http://127.0.0.1:8700/api/scope-hint", "token": "tok"},
+        }, ensure_ascii=False), encoding="utf-8")
+        api = ComposerApi(ComposerSession(), self.plan_path)
+        try:
+            plan = api.startup_plan()["plan"]
+            ids = [source["id"] for source in plan["sources"]]
+            answer = {"pages": "3-4", "confidence": 0.8, "uncertain": False,
+                      "parts": [{"path": str(self.lecture.resolve()), "pages": "3-3"},
+                                {"path": str(second.resolve()), "pages": "1-1"}]}
+            with patch("noteditor.app.request_scope", return_value=answer) as ask:
+                got = api.suggest_scope(ids)
+            self.assertTrue(got["ok"], got)
+            self.assertEqual([Path(p) for p in ask.call_args.args[1]],
+                             [self.lecture.resolve(), second.resolve(), third.resolve()])
+            self.assertEqual([(p["document_id"], p["pages"]) for p in got["proposals"]],
+                             [(ids[0], "3-3"), (ids[1], "1-1"), (ids[2], "")])
+            self.assertEqual(got["pages"], "3-4")
+        finally:
+            api._close()
+
     def test_an_unknown_document_is_refused(self):
         api = ComposerApi(ComposerSession(), self.plan_path)
         try:
@@ -219,7 +285,7 @@ class ScopeScreenWiringTests(unittest.TestCase):
         cls.js = (static / "app.js").read_text(encoding="utf-8")
 
     def test_the_scope_is_asked_for_and_filled_into_the_selection(self):
-        self.assertIn('callApi("suggest_scope", doc.id)', self.js)
+        self.assertIn('callApi("suggest_scope", ids.length === 1 ? ids[0] : ids)', self.js)
         self.assertIn("setDocumentSelection(doc, parsed.indices)", self.js)
         # 제안일 뿐이므로 확신이 낮으면 그렇게 말한다.
         self.assertIn("확신이 낮습니다", self.js)
@@ -228,9 +294,10 @@ class ScopeScreenWiringTests(unittest.TestCase):
         self.assertIn("plan.can_suggest_ranges || plan.can_suggest_scope", self.js)
         self.assertIn('void suggestForPlan();', self.js)
 
-    def test_several_pdfs_are_not_guessed_between(self):
-        """물어보는 것은 LLM 한 번씩이다. 어느 것이 이번 차시인지 짐작해 여러 번 부르지 않는다."""
-        self.assertIn("강의록 PDF 가 하나일 때만", self.js)
+    def test_several_pdfs_are_asked_together_like_adding_a_lecture(self):
+        """여러 PDF 도 한 번에 묻는다. 범위가 걸치지 않은 파일은 선택을 비운다."""
+        self.assertNotIn("강의록 PDF 가 하나일 때만", self.js)
+        self.assertIn("setDocumentSelection(doc, [])", self.js)
 
 
 if __name__ == "__main__":

@@ -1912,27 +1912,40 @@ async function suggestRanges({auto = false} = {}) {
 async function suggestScope({auto = false} = {}) {
   if (!state.mergePlan?.can_suggest_scope) return;
   const candidates = state.documents;      // 진도 범위는 합치기 모드에만 온다(기준 문서가 없다)
-  if (candidates.length !== 1) {
-    // 여러 PDF 를 올렸으면 어느 것이 이번 차시의 강의록인지 알 수 없다. 물어보는 것은
-    // LLM 한 번씩이라, 짐작으로 여러 번 부르지 않는다.
-    const message = "강의록 PDF 가 하나일 때만 진도 범위를 자동으로 짚습니다.";
-    if (!auto) toast(message, "warn");
+  if (!candidates.length) {
+    if (!auto) toast("강의록 PDF 를 먼저 올려 주세요.", "warn");
     return;
   }
-  const doc = candidates[0];
+  // 여러 PDF 면 강의 추가의 범위 인식과 같다 — 올린 순서대로 이어붙여 LLM 한 번에 짚고,
+  // 답을 파일별 쪽 범위로 받는다.
   setBusy(true, "전사본과 대조해 진도 범위를 짚는 중… (수십 초)");
   try {
-    const response = await callApi("suggest_scope", doc.id);
+    const ids = candidates.map((doc) => doc.id);
+    const response = await callApi("suggest_scope", ids.length === 1 ? ids[0] : ids);
     if (!response.ok) throw new Error(response.error);
     if (!response.pages) {
-      toast(`${doc.name}: 이번 차시의 범위를 못 찾아 그대로 두었습니다`, "warn");
+      toast(`${candidates.map((doc) => doc.name).join(", ")}: 이번 차시의 범위를 못 찾아 그대로 두었습니다`, "warn");
       return;
     }
-    const parsed = await callApi("parse_range", response.pages, doc.page_count);
-    if (!parsed.ok) throw new Error(parsed.error);
-    setDocumentSelection(doc, parsed.indices);
-    toast(`진도 범위 제안\n${doc.name}: ${response.pages}`
-      + (response.uncertain ? " (확신이 낮습니다 — 양끝을 확인해 주세요)" : ""),
+    const proposals = response.proposals
+      || [{document_id: response.document_id, pages: response.pages}];
+    const notes = [];
+    for (const proposal of proposals) {
+      const doc = documentById(proposal.document_id);
+      if (!doc) continue;
+      if (!proposal.pages) {
+        // 범위가 걸치지 않은 파일 — 강의 추가에서 이 파일이 빠지는 것과 같다.
+        setDocumentSelection(doc, []);
+        notes.push(`${doc.name}: 이번 차시가 쓰지 않아 선택을 비웠습니다`);
+        continue;
+      }
+      const parsed = await callApi("parse_range", proposal.pages, doc.page_count);
+      if (!parsed.ok) throw new Error(parsed.error);
+      setDocumentSelection(doc, parsed.indices);
+      notes.push(`${doc.name}: ${proposal.pages}`);
+    }
+    toast(`진도 범위 제안\n${notes.join("\n")}`
+      + (response.uncertain ? "\n(확신이 낮습니다 — 양끝을 확인해 주세요)" : ""),
       response.uncertain ? "warn" : "success");
   } catch (error) {
     // 자동 실행이 실패했다고 합치기를 못 하게 만들지 않는다 — 손으로 고르면 된다.

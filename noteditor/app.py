@@ -762,12 +762,16 @@ class ComposerApi:
         except Exception as exc:
             return self._error(exc)
 
-    def suggest_scope(self, document_id: str) -> dict:
+    def suggest_scope(self, document_id: str | list[str]) -> dict:
         """올린 **강의록**에서 이번 차시가 나간 쪽 범위를 summary.ai 에 물어 돌려준다.
 
         여기서 계산하지 않는다. 전사본을 읽고 강의의 흐름을 판단하는 일이라 LLM 이 필요하고,
         그 호출은 summary.ai 만 한다(인증·사용량 관리가 거기 있다). 실측으로 통계 방식이
         크게 빗나가던 세 건에서 이 방식은 2쪽 안에 들어왔다.
+
+        ``document_id`` 가 **목록(올린 순서)** 이면 강의 추가의 범위 인식처럼 전부를 이어붙여
+        한 번에 묻고, 문서마다의 범위를 ``proposals`` 로 돌려준다. 범위가 걸치지 않은 문서는
+        ``pages`` 가 빈 문자열이다 — 이번 차시가 쓰지 않은 파일이다.
 
         **제안일 뿐이다.** 결과를 바로 저장하지 않고 화면의 쪽 선택에 채워 넣는다.
         """
@@ -777,15 +781,37 @@ class ComposerApi:
             if api is None:
                 raise PdfComposerError(
                     "이 창에는 진도 범위를 물어볼 곳이 없습니다(전사본을 함께 받지 못했습니다).")
-            source = next((item for item in self._session.sources
-                           if item.id == document_id), None)
-            if source is None:
+            ids = list(document_id) if isinstance(document_id, (list, tuple)) else [document_id]
+            sources = []
+            for wanted in ids:
+                source = next((item for item in self._session.sources
+                               if item.id == wanted), None)
+                if source is None:
+                    raise PdfComposerError("올린 PDF를 찾지 못했습니다.")
+                sources.append(source)
+            if not sources:
                 raise PdfComposerError("올린 PDF를 찾지 못했습니다.")
-            answer = request_scope(api, source.path)
-            return self._ok(document_id=document_id,
-                            document_name=source.name,
-                            page_count=source.page_count,
-                            **answer)
+            if len(sources) == 1:
+                source = sources[0]
+                answer = request_scope(api, source.path)
+                return self._ok(document_id=source.id,
+                                document_name=source.name,
+                                page_count=source.page_count,
+                                **answer)
+            answer = request_scope(api, [source.path for source in sources])
+            ranges: dict[Path, str] = {}
+            for part in answer.pop("parts", []):
+                try:
+                    ranges[Path(part["path"]).resolve()] = part["pages"]
+                except (OSError, ValueError):
+                    continue
+            proposals = [{
+                "document_id": source.id,
+                "document_name": source.name,
+                "page_count": source.page_count,
+                "pages": ranges.get(Path(source.path).resolve(), ""),
+            } for source in sources]
+            return self._ok(proposals=proposals, **answer)
         except Exception as exc:
             return self._error(exc)
 

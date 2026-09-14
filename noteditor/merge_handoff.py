@@ -182,17 +182,27 @@ def _scope_api(value: object) -> ScopeApi | None:
     return ScopeApi(url=url.strip(), token=token.strip())
 
 
-def request_scope(api: ScopeApi, lecture: Path) -> dict:
+def request_scope(api: ScopeApi, lecture: Path | list[Path]) -> dict:
     """summary.ai 에 이 강의록의 진도 범위를 물어본다. **제안일 뿐이다.**
 
     돌려주는 값은 ``{"pages": "23-46", "confidence": 0.86, "uncertain": False}`` 이고,
     못 짚었으면 ``pages`` 가 빈 문자열이다. LLM 한 번 호출이라 수십 초 걸린다.
+
+    ``lecture`` 가 **여러 파일(올린 순서)** 이면 summary.ai 가 강의 추가와 같은 방식으로
+    이어붙여 한 번에 짚고, 값에 파일별 범위 ``parts`` (``[{"path", "pages"}]``)가 붙는다.
     """
     import json as _json
     import urllib.error
     import urllib.request
 
-    body = _json.dumps({"token": api.token, "path": str(Path(lecture).resolve())}).encode("utf-8")
+    lectures = [Path(p) for p in lecture] if isinstance(lecture, (list, tuple)) else [Path(lecture)]
+    several = len(lectures) > 1
+    request_body: dict = {"token": api.token}
+    if several:
+        request_body["paths"] = [str(p.resolve()) for p in lectures]
+    else:
+        request_body["path"] = str(lectures[0].resolve())
+    body = _json.dumps(request_body).encode("utf-8")
     request = urllib.request.Request(
         api.url, data=body, method="POST",
         headers={"Content-Type": "application/json"},
@@ -219,11 +229,24 @@ def request_scope(api: ScopeApi, lecture: Path) -> dict:
         raise PdfComposerError("범위 응답이 JSON 객체가 아닙니다.")
     pages = payload.get("pages")
     confidence = payload.get("confidence")
-    return {
+    answer = {
         "pages": pages.strip() if isinstance(pages, str) else "",
         "confidence": float(confidence) if isinstance(confidence, (int, float)) else 0.0,
         "uncertain": bool(payload.get("uncertain")),
     }
+    if several:
+        parts = payload.get("parts")
+        if not isinstance(parts, list):
+            # 옛 summary.ai 는 `paths` 를 모른다. 파일별 범위 없이 짐작해 채우지 않는다.
+            raise PdfComposerError(
+                "summary.ai 가 여러 강의록의 파일별 범위를 주지 못했습니다. "
+                "summary.ai 를 다시 시작한 뒤 다시 눌러 주세요.")
+        answer["parts"] = [
+            {"path": str(item.get("path") or ""),
+             "pages": str(item.get("pages") or "").strip()}
+            for item in parts if isinstance(item, dict)
+        ]
+    return answer
 
 
 def load_merge_plan(path: str | Path) -> MergePlan:
