@@ -190,7 +190,7 @@ class MergeHandoffTests(unittest.TestCase):
             api._close()
 
     def test_a_handoff_window_can_close_itself_but_a_plain_one_cannot(self):
-        """저장한 뒤 summary.ai 로 돌아가려면 이 창이 스스로 닫혀야 한다.
+        """저장한 뒤 Sleek 으로 돌아가려면 이 창이 스스로 닫혀야 한다.
 
         다만 사용자가 그냥 실행한 NotEditor 까지 웹 화면이 닫을 수 있으면 안 된다.
         """

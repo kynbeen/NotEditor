@@ -58,7 +58,7 @@ class StaticUiContractTests(unittest.TestCase):
         self.assertIn("state.orderDirty = true", self.js)
         self.assertIn("function insertNearOwnPages(ref)", self.js)
 
-    def test_summary_ai_handoff_keeps_the_reproducible_contract_order(self):
+    def test_sleek_handoff_keeps_the_reproducible_contract_order(self):
         render_result = self.js.split("function renderResult()", 1)[1].split(
             "function renderSummary()", 1
         )[0]
@@ -78,14 +78,14 @@ class StaticUiContractTests(unittest.TestCase):
         self.assertIn("NotEditor 연결을 확인할 수 없습니다", self.js)
         self.assertIn('window.location.hash === "#desktop"', self.js)
 
-    def test_summary_ai_startup_plan_populates_the_desktop_merge_ui(self):
+    def test_sleek_startup_plan_populates_the_desktop_merge_ui(self):
         self.assertIn("startup_plan: async () => ({ ok: true, plan: null })", self.js)
         self.assertIn('callApi("startup_plan")', self.js)
         self.assertIn("function applyStartupPlan(plan)", self.js)
         self.assertIn("state.selected = new Set(state.order.map(refKey))", self.js)
         self.assertIn("Boolean(state.mergePlan)", self.js)
 
-    def test_summary_ai_source_review_combines_page_pairs_with_merge_selection(self):
+    def test_sleek_source_review_combines_page_pairs_with_merge_selection(self):
         self.assertIn('id="sourceReview"', self.html)
         self.assertIn('id="sourceReviewRows"', self.html)
         self.assertIn("실제 사용한 파일", self.html)
@@ -94,7 +94,7 @@ class StaticUiContractTests(unittest.TestCase):
         self.assertIn('callApi("page_image", pageRef.document_id', self.js)
         self.assertIn(
             'callApi("finish_review", decision, state.order, change, changedPages)', self.js)
-        self.assertIn("function changedPagesForSummaryAi()", self.js)
+        self.assertIn("function changedPagesForSleek()", self.js)
         self.assertIn("변화 없음", self.html)
         self.assertIn(".workspace.review-mode", self.css)
         self.assertIn("수집함 PDF 쪽 선택", self.js)
@@ -148,7 +148,7 @@ class StaticUiContractTests(unittest.TestCase):
         self.assertIn(".source-review .review-cell.target-cell.excluded .review-page", self.css)
 
     def test_source_review_offers_four_outcomes_instead_of_a_yes_or_no(self):
-        """무엇이 바뀌었는지에 따라 summary.ai 가 다시 도는 범위가 달라진다."""
+        """무엇이 바뀌었는지에 따라 Sleek 이 다시 도는 범위가 달라진다."""
         for label in ("변화 없음", "문제 수정됨", "내용 수정됨", "문제와 내용 수정됨"):
             self.assertIn(label, self.html)
         for change in ("none", "questions", "content", "both"):
@@ -174,21 +174,21 @@ class StaticUiContractTests(unittest.TestCase):
         app = (Path(__file__).parents[1] / "noteditor" / "app.py").read_text(encoding="utf-8")
         self.assertIn('"recorded_ranges": recorded', app)
 
-    def test_a_handoff_session_stays_on_merge_and_returns_to_summary_ai(self):
+    def test_a_handoff_session_stays_on_merge_and_returns_to_sleek(self):
         self.assertIn("function lockToMergeTool()", self.js)
         self.assertIn("refs.handwriting.disabled = true", self.js)
-        self.assertIn('refs.save.textContent = "저장하고 summary.ai로 돌아가기"', self.js)
-        self.assertIn("async function returnToSummaryAi(message)", self.js)
+        self.assertIn('refs.save.textContent = "저장하고 Sleek으로 돌아가기"', self.js)
+        self.assertIn("async function returnToSleek(message)", self.js)
         self.assertIn('callApi("close_window")', self.js)
         app = (Path(__file__).parents[1] / "noteditor" / "app.py").read_text(encoding="utf-8")
         self.assertIn("def close_window(self) -> dict:", app)
-        self.assertIn("summary.ai 인계로 열린 창에서만 쓸 수 있습니다.", app)
+        self.assertIn("Sleek 인계로 열린 창에서만 쓸 수 있습니다.", app)
 
-    def test_empty_summary_ai_merge_plan_opens_the_inbox_picker_immediately(self):
+    def test_empty_sleek_merge_plan_opens_the_inbox_picker_immediately(self):
         self.assertIn('if (plan.auto_choose) setTimeout(() => { void addPdfs(); }, 0)', self.js)
         app = (Path(__file__).parents[1] / "noteditor" / "app.py").read_text(encoding="utf-8")
         self.assertIn('directory=str(self._input_root or "")', app)
-        self.assertIn("summary.ai 수집함 밖의 PDF는 사용할 수 없습니다", app)
+        self.assertIn("Sleek 수집함 밖의 PDF는 사용할 수 없습니다", app)
 
     def test_merge_and_handwriting_are_peer_tabs(self):
         self.assertIn('id="handwritingButton"', self.html)

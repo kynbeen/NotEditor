@@ -1,12 +1,12 @@
-"""summary.ai ↔ NotEditor merge/review handoff contracts (versions 1, 2 and 3).
+"""Sleek ↔ NotEditor merge/review handoff contracts (versions 1, 2 and 3).
 
 Version 3 splits the review outcome into two independent axes. ``decision`` still
 says **how the file is swapped** (``refresh`` / ``merge`` / ``skip``); the new
 ``change`` says **what actually changed**, which is what decides how much of
-summary.ai's eight-step pipeline has to run again:
+Sleek's eight-step pipeline has to run again:
 
 ===============  ==========================================================
-``change``       what summary.ai does
+``change``       what Sleek does
 ===============  ==========================================================
 ``none``         nothing — the reviewer confirmed the pages look the same
 ``questions``    re-reads only ``changed_pages`` of the exam PDF and re-uploads
@@ -15,7 +15,7 @@ summary.ai's eight-step pipeline has to run again:
 ===============  ==========================================================
 
 ``changed_pages`` are 1-based page numbers **in the current collection file**.
-The review screen already computes them, so summary.ai never recomputes the
+The review screen already computes them, so Sleek never recomputes the
 comparison — that would risk disagreeing with what the reviewer saw.
 """
 from __future__ import annotations
@@ -40,7 +40,7 @@ SUPPORTED_CONTRACT_VERSIONS = (
     LEGACY_CONTRACT_VERSION, REVIEW_CONTRACT_VERSION, RANGE_CONTRACT_VERSION,
     CONTRACT_VERSION,
 )
-# 진도 범위를 물어볼 곳은 **이 PC 의 summary.ai** 뿐이다. 계획 파일이 바뀌어도 바깥으로
+# 진도 범위를 물어볼 곳은 **이 PC 의 Sleek** 뿐이다. 계획 파일이 바뀌어도 바깥으로
 # 나가지 않게, 받아들이는 주소를 localhost 로 못 박는다.
 SCOPE_API_HOSTS = ("127.0.0.1", "localhost")
 SCOPE_API_TIMEOUT_SECONDS = 240   # LLM 한 번 호출(실측 25~55초)에 넉넉한 상한
@@ -70,11 +70,11 @@ class RangeHint:
 
 @dataclass(frozen=True)
 class ScopeApi:
-    """강의록의 **진도 범위**를 summary.ai 에 물어볼 자리(판 4).
+    """강의록의 **진도 범위**를 Sleek 에 물어볼 자리(판 4).
 
     ``RangeHint`` 와 방향이 반대다. 족첵 범위는 그림을 맞추는 문제라 여기서 직접 계산하지만
     (:mod:`noteditor.exam_range`), 강의록 진도 범위는 전사본을 읽고 강의의 흐름을 판단하는
-    문제라 LLM 이 필요하다. **LLM 호출은 summary.ai 만 한다** — 여기에는 API 인증도 사용량
+    문제라 LLM 이 필요하다. **LLM 호출은 Sleek 만 한다** — 여기에는 API 인증도 사용량
     관리도 없다. 그런데 대상 강의록은 이 화면에서 골라지므로, 답을 계획 파일에 실어 보낼 수
     없고 대신 물어볼 주소를 받는다.
     """
@@ -163,7 +163,7 @@ def _range_hint(value: object) -> RangeHint | None:
 def _scope_api(value: object) -> ScopeApi | None:
     """물어볼 주소도 **있으면 좋은 것**이다 — 없거나 이상하면 조용히 없는 셈 친다.
 
-    주소는 이 PC 의 summary.ai 만 허용한다. 계획 파일은 다른 프로그램이 만든 텍스트이므로,
+    주소는 이 PC 의 Sleek 만 허용한다. 계획 파일은 다른 프로그램이 만든 텍스트이므로,
     거기 적힌 주소로 무엇이든 보내면 안 된다.
     """
     if not isinstance(value, dict):
@@ -183,12 +183,12 @@ def _scope_api(value: object) -> ScopeApi | None:
 
 
 def request_scope(api: ScopeApi, lecture: Path | list[Path], *, refresh: bool = False) -> dict:
-    """summary.ai 에 이 강의록의 진도 범위를 물어본다. **제안일 뿐이다.**
+    """Sleek 에 이 강의록의 진도 범위를 물어본다. **제안일 뿐이다.**
 
     돌려주는 값은 ``{"pages": "23-46", "confidence": 0.86, "uncertain": False}`` 이고,
     못 짚었으면 ``pages`` 가 빈 문자열이다. LLM 한 번 호출이라 수십 초 걸린다.
 
-    ``lecture`` 가 **여러 파일(올린 순서)** 이면 summary.ai 가 강의 추가와 같은 방식으로
+    ``lecture`` 가 **여러 파일(올린 순서)** 이면 Sleek 이 강의 추가와 같은 방식으로
     이어붙여 한 번에 짚고, 값에 파일별 범위 ``parts`` (``[{"path", "pages"}]``)가 붙는다.
     """
     import json as _json
@@ -204,7 +204,7 @@ def request_scope(api: ScopeApi, lecture: Path | list[Path], *, refresh: bool = 
         request_body["path"] = str(lectures[0].resolve())
     if refresh:
         # 자동 최초 제안은 기존 캐시를 쓰고, 사람이 버튼을 다시 눌렀을 때만 새 계산을
-        # 명시한다. 생략이 기본이라 이 필드를 모르는 옛 summary.ai 와도 호환된다.
+        # 명시한다. 생략이 기본이라 이 필드를 모르는 옛 Sleek 과도 호환된다.
         request_body["refresh"] = True
     body = _json.dumps(request_body).encode("utf-8")
     request = urllib.request.Request(
@@ -221,11 +221,11 @@ def request_scope(api: ScopeApi, lecture: Path | list[Path], *, refresh: bool = 
         except Exception:                                   # noqa: BLE001
             detail = ""
         raise PdfComposerError(
-            detail or f"summary.ai 가 범위를 주지 못했습니다(HTTP {exc.code})."
+            detail or f"Sleek 이 범위를 주지 못했습니다(HTTP {exc.code})."
         ) from exc
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         raise PdfComposerError(
-            f"summary.ai 에 범위를 물어보지 못했습니다: {exc}"
+            f"Sleek 에 범위를 물어보지 못했습니다: {exc}"
         ) from exc
     except (ValueError, UnicodeError) as exc:
         raise PdfComposerError(f"범위 응답을 읽을 수 없습니다: {exc}") from exc
@@ -240,16 +240,16 @@ def request_scope(api: ScopeApi, lecture: Path | list[Path], *, refresh: bool = 
     }
     reason = payload.get("reason")
     if isinstance(reason, str) and reason.strip():
-        # summary.ai 가 모델 답을 검증에서 거절했다. 그때 `pages` 는 비어 있으므로 옛 화면도
+        # Sleek 이 모델 답을 검증에서 거절했다. 그때 `pages` 는 비어 있으므로 옛 화면도
         # 선택을 건드리지 않고, 새 화면은 왜 적용하지 않았는지를 그대로 보여 준다.
         answer["reason"] = reason.strip()
     if several:
         parts = payload.get("parts")
         if not isinstance(parts, list):
-            # 옛 summary.ai 는 `paths` 를 모른다. 파일별 범위 없이 짐작해 채우지 않는다.
+            # 옛 Sleek 은 `paths` 를 모른다. 파일별 범위 없이 짐작해 채우지 않는다.
             raise PdfComposerError(
-                "summary.ai 가 여러 강의록의 파일별 범위를 주지 못했습니다. "
-                "summary.ai 를 다시 시작한 뒤 다시 눌러 주세요.")
+                "Sleek 이 여러 강의록의 파일별 범위를 주지 못했습니다. "
+                "Sleek 을 다시 시작한 뒤 다시 눌러 주세요.")
         answer["parts"] = [
             {"path": str(item.get("path") or ""),
              "pages": str(item.get("pages") or "").strip()}
@@ -451,7 +451,7 @@ def normalize_changed_pages(value: object) -> list[int]:
     """1-based page numbers, sorted and de-duplicated. Junk entries are dropped.
 
     A bad entry must not sink the whole decision: the page list only narrows the
-    work, and an empty list makes summary.ai fall back to reading the whole file.
+    work, and an empty list makes Sleek fall back to reading the whole file.
     """
     if not isinstance(value, (list, tuple, set)):
         return []

@@ -61,15 +61,15 @@
   단위 테스트를 추가한다.
 - [x] PyInstaller 이중 실행 파일 빌드, 설치 정적 계약, 실제 Edge 루프백·재사용·종료를 검증한다.
 
-## 모듈: summary.ai 합치기 인계 (summary-ai-merge-handoff)
+## 모듈: Sleek 합치기 인계 (sleek-merge-handoff)
 
 - [x] workspace 계약 판 1을 기준으로 `--open-plan` 입력과 시작 계획 검증을 구현한다.
 - [x] 계획의 절대 PDF 경로를 새 세션 문서 ID에 매핑하고 선택 쪽·순서·제목·고정 출력 경로를
   데스크톱 첫 화면에 적용한다.
 - [x] 지정한 결과 PDF를 먼저 저장한 뒤 실제 순서를 표현하는 `.merge.json` 사이드카를 원자적으로
   기록하며, 원본 덮어쓰기와 손실 표현이 필요한 순서는 저장 전에 거부한다.
-- [x] NotEditor 전체 회귀, summary.ai 연동 계약, 실제 handoff → 저장 → 재현 왕복과 최종 패키지
-  인자 실행을 검증한다. summary.ai와 workspace는 읽기 전용으로 유지한다.
+- [x] NotEditor 전체 회귀, Sleek 연동 계약, 실제 handoff → 저장 → 재현 왕복과 최종 패키지
+  인자 실행을 검증한다. Sleek과 workspace는 읽기 전용으로 유지한다.
 
 ## 모듈: Goodnotes 6 필기 옮기기 (goodnotes-transfer)
 

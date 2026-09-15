@@ -168,7 +168,7 @@ class ComposerApi:
         return self._ok(version=__version__)
 
     def startup_plan(self) -> dict:
-        """Load a summary.ai handoff once and map paths to this session's IDs."""
+        """Load a Sleek handoff once and map paths to this session's IDs."""
         try:
             if self._startup_plan_path is None:
                 return self._ok(plan=None)
@@ -236,7 +236,7 @@ class ComposerApi:
                 # 강의록을 함께 받았으면 족첵에서 이 강의 몫을 스스로 짚어 볼 수 있다.
                 # 화면은 이 값으로 [범위 자동 인식] 버튼을 켤지 정한다.
                 "can_suggest_ranges": plan.range_hint is not None,
-                # 강의록 진도 범위는 summary.ai 에 물어본다(판 4). 이 값으로 화면이
+                # 강의록 진도 범위는 Sleek 에 물어본다(판 4). 이 값으로 화면이
                 # [범위 자동 인식] 을 켤지 정한다 — 족첵 쪽과 같은 버튼을 쓴다.
                 "can_suggest_scope": plan.scope_api is not None,
             }
@@ -680,7 +680,7 @@ class ComposerApi:
                 outside = [path for path in resolved if not path_is_within(path, self._input_root)]
                 if outside:
                     raise PdfComposerError(
-                        f"summary.ai 수집함 밖의 PDF는 사용할 수 없습니다: {outside[0].name}"
+                        f"Sleek 수집함 밖의 PDF는 사용할 수 없습니다: {outside[0].name}"
                     )
             added = self._session.add_files(resolved)
             return self._ok(
@@ -763,10 +763,10 @@ class ComposerApi:
             return self._error(exc)
 
     def suggest_scope(self, document_id: str | list[str], refresh: bool = False) -> dict:
-        """올린 **강의록**에서 이번 차시가 나간 쪽 범위를 summary.ai 에 물어 돌려준다.
+        """올린 **강의록**에서 이번 차시가 나간 쪽 범위를 Sleek 에 물어 돌려준다.
 
         여기서 계산하지 않는다. 전사본을 읽고 강의의 흐름을 판단하는 일이라 LLM 이 필요하고,
-        그 호출은 summary.ai 만 한다(인증·사용량 관리가 거기 있다). 실측으로 통계 방식이
+        그 호출은 Sleek 만 한다(인증·사용량 관리가 거기 있다). 실측으로 통계 방식이
         크게 빗나가던 세 건에서 이 방식은 2쪽 안에 들어왔다.
 
         ``document_id`` 가 **목록(올린 순서)** 이면 강의 추가의 범위 인식처럼 전부를 이어붙여
@@ -878,12 +878,12 @@ class ComposerApi:
 
         ``decision`` says how the file is swapped, ``change`` says what actually
         changed — see :mod:`noteditor.merge_handoff`. ``changed_pages`` come from
-        the comparison already on screen, so summary.ai never has to redo it.
+        the comparison already on screen, so Sleek never has to redo it.
         """
         try:
             plan = self._review_plan
             if plan is None:
-                raise PdfComposerError("summary.ai 원본 비교 계획이 아닙니다.")
+                raise PdfComposerError("Sleek 원본 비교 계획이 아닙니다.")
             allowed = {"selected": {"refresh", "skip"}, "merged": {"merge", "skip"}}
             if decision not in allowed.get(plan.origin, set()):
                 raise PdfComposerError(
@@ -914,7 +914,7 @@ class ComposerApi:
             return self._error(exc)
 
     def close_window(self) -> dict:
-        """summary.ai 인계를 끝낸 창을 스스로 닫는다.
+        """Sleek 인계를 끝낸 창을 스스로 닫는다.
 
         결과를 넘기고 나면 이 창이 더 할 일이 없다. 사용자가 직접 닫게 두면 창이 쌓이고,
         다음 합치기에서 어느 창이 지금 것인지 헷갈린다. **인계로 열린 창에만** 허용한다 —
@@ -922,7 +922,7 @@ class ComposerApi:
         """
         try:
             if self._startup_plan is None:
-                raise PdfComposerError("summary.ai 인계로 열린 창에서만 쓸 수 있습니다.")
+                raise PdfComposerError("Sleek 인계로 열린 창에서만 쓸 수 있습니다.")
             if self._window is None:
                 raise PdfComposerError("앱 창이 아직 준비되지 않았습니다.")
             self._window.destroy()

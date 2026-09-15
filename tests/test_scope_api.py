@@ -1,7 +1,7 @@
-"""판 4 — 강의록 진도 범위를 summary.ai 에 물어보는 자리.
+"""판 4 — 강의록 진도 범위를 Sleek 에 물어보는 자리.
 
 족첵 범위(`range_hint`)는 이 앱이 직접 짚지만(그림 맞추기), 강의록 진도 범위는 전사본을
-읽고 강의의 흐름을 판단하는 문제라 LLM 이 필요하다. LLM 호출은 summary.ai 만 하므로
+읽고 강의의 흐름을 판단하는 문제라 LLM 이 필요하다. LLM 호출은 Sleek 만 하므로
 여기서는 **물어보고 받아 채우는 것**까지만 한다.
 """
 from __future__ import annotations
@@ -130,7 +130,7 @@ class RequestScopeTests(unittest.TestCase):
         self.assertEqual(got, {"pages": "", "confidence": 0.0, "uncertain": True})
 
     def test_a_rejected_answer_carries_its_reason_and_no_range(self):
-        """summary.ai 가 검증에서 거절한 답은 범위 없이 사유만 온다 — 화면이 그대로 보여 준다."""
+        """Sleek 이 검증에서 거절한 답은 범위 없이 사유만 온다 — 화면이 그대로 보여 준다."""
         got = self._answer({"pages": "", "confidence": 0.4, "uncertain": True,
                             "reason": " 마지막 전사본에서 근거를 찾지 못했습니다 ",
                             "rejected_pages": "123-138"})
@@ -194,7 +194,7 @@ class RequestScopeTests(unittest.TestCase):
         self.assertNotIn("refresh", sent[0])
         self.assertIs(sent[1]["refresh"], True)
 
-    def test_an_old_summary_ai_without_per_file_ranges_is_not_guessed_from(self):
+    def test_an_old_sleek_without_per_file_ranges_is_not_guessed_from(self):
         with self.assertRaisesRegex(Exception, "파일별 범위"):
             self._ask_several({"pages": "21-38", "confidence": 0.8, "uncertain": False})
 
@@ -252,7 +252,7 @@ class SuggestScopeApiTests(unittest.TestCase):
         finally:
             api._close()
 
-    def test_an_explicit_retry_is_forwarded_to_summary_ai(self):
+    def test_an_explicit_retry_is_forwarded_to_sleek(self):
         api = ComposerApi(ComposerSession(), self.plan_path)
         try:
             plan = api.startup_plan()["plan"]

@@ -54,7 +54,7 @@ foreach ($Definition in $ShortcutDefinitions) {
 }
 
 # --- 5. PATH 등록 ---------------------------------------------------------------
-# 이 폴더를 사용자 PATH 에 넣으면 어디서나 `noteditor` 로 실행할 수 있고, summary.ai 처럼
+# 이 폴더를 사용자 PATH 에 넣으면 어디서나 `noteditor` 로 실행할 수 있고, Sleek 처럼
 # 연동하는 앱이 **바로가기를 파싱하지 않고** 설치 위치를 곧바로 찾을 수 있다.
 # (바로가기는 COM 으로만 읽을 수 있어 확인할 때마다 PowerShell 프로세스가 하나씩 뜬다.)
 Write-Host "[5/5] PATH 에 등록하는 중..." -ForegroundColor Cyan

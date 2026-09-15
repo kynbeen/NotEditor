@@ -372,21 +372,21 @@ function applyStartupPlan(plan) {
     !== defaultOrder().map(refKey).join("\u0000");
   state.mergeOutputNameDirty = true;
   refs.mergeOutputName.value = withoutKnownExtension(plan.output_name || "merged.pdf");
-  refs.mergeOutputName.title = `summary.ai 지정 저장 경로: ${plan.output_path}`;
+  refs.mergeOutputName.title = `Sleek 지정 저장 경로: ${plan.output_path}`;
   refs.mergeWorkspace.classList.toggle("review-mode", plan.mode === "review");
   refs.sourceReview.hidden = plan.mode !== "review";
   // 강의록(또는 전사본)을 함께 받은 합치기 세션에서만 [범위 자동 인식]이 뜻이 있다.
-  // 족첵이면 여기서 직접 짚고, 강의록이면 summary.ai 에 물어본다 — 버튼은 하나다.
+  // 족첵이면 여기서 직접 짚고, 강의록이면 Sleek 에 물어본다 — 버튼은 하나다.
   refs.suggestRanges.hidden = !(plan.mode === "merge"
     && (plan.can_suggest_ranges || plan.can_suggest_scope));
   if (plan.can_suggest_scope && !plan.can_suggest_ranges) {
     refs.suggestRanges.title = "전사본과 대조해 이번 차시가 나간 강의록 쪽을 골라 줍니다."
-      + " summary.ai 가 판단하며 수십 초 걸립니다. 제안일 뿐이니 확인하고 고치세요";
+      + " Sleek 이 판단하며 수십 초 걸립니다. 제안일 뿐이니 확인하고 고치세요";
   }
-  // summary.ai 인계 창은 그 한 가지 일만 한다. 필기 옮기기로 새어 나가면 인계를 끝내지
-  // 않은 채 창이 남고, summary.ai 는 결과를 영영 기다린다.
+  // Sleek 인계 창은 그 한 가지 일만 한다. 필기 옮기기로 새어 나가면 인계를 끝내지
+  // 않은 채 창이 남고, Sleek 은 결과를 영영 기다린다.
   lockToMergeTool();
-  // 인계 결과 경로는 summary.ai가 정한다. 편집할 수 없는 파일명 칸을 숨겨 긴 복귀 버튼이
+  // 인계 결과 경로는 Sleek이 정한다. 편집할 수 없는 파일명 칸을 숨겨 긴 복귀 버튼이
   // 눌리거나 여러 줄로 접히지 않게 공간을 돌려준다.
   refs.mergeOutputName.parentElement.hidden = true;
   if (plan.mode === "review") {
@@ -398,12 +398,12 @@ function applyStartupPlan(plan) {
     // 합쳐서 갱신)는 자료 생성 방식이 이미 정해 놓은 것이라 사용자가 고를 일이 아니다.
     refs.sourceReviewMessage.textContent = plan.origin === "merged"
       ? "오른쪽에서 결과에 넣을 쪽을 확인한 뒤, 무엇이 달라졌는지 고르세요. 고른 쪽으로 다시 합쳐 갱신합니다."
-      : "무엇이 달라졌는지 고르면 summary.ai가 그만큼만 다시 실행합니다.";
+      : "무엇이 달라졌는지 고르면 Sleek이 그만큼만 다시 실행합니다.";
     renderSourceReview();
   } else {
-    // 인계 합치기는 여기서 파일을 내려받는 것이 아니라 summary.ai 로 돌아가는 일이다.
-    refs.save.textContent = "저장하고 summary.ai로 돌아가기";
-    refs.save.title = `저장한 뒤 summary.ai 창으로 돌아가고 이 창은 닫습니다: ${plan.output_path}`;
+    // 인계 합치기는 여기서 파일을 내려받는 것이 아니라 Sleek 으로 돌아가는 일이다.
+    refs.save.textContent = "저장하고 Sleek으로 돌아가기";
+    refs.save.title = `저장한 뒤 Sleek 창으로 돌아가고 이 창은 닫습니다: ${plan.output_path}`;
   }
   if (plan.title) document.title = `NotEditor — ${plan.title}`;
   render();
@@ -411,7 +411,7 @@ function applyStartupPlan(plan) {
   if (first) showPreview(first.document_id, first.page_index, "인계 계획 미리보기");
   toast(plan.mode === "review"
     ? "실제 사용 파일과 현재 수집함 파일을 비교했습니다. 같은 쪽과 다른 쪽을 확인해 주세요."
-    : "summary.ai 합치기 계획을 불러왔습니다. 쪽 선택과 순서를 확인해 주세요.", "success");
+    : "Sleek 합치기 계획을 불러왔습니다. 쪽 선택과 순서를 확인해 주세요.", "success");
   if (plan.auto_choose) setTimeout(() => { void addPdfs(); }, 0);
 }
 
@@ -606,19 +606,19 @@ const REVIEW_BUTTONS = () => [
 ];
 
 const CHANGE_DONE_MESSAGE = {
-  none: "파일은 유지하고 현재 수집함 버전을 원본 최신으로 확인했습니다. summary.ai로 돌아갑니다.",
-  questions: "바뀐 쪽의 문제만 다시 뽑도록 전달했습니다. summary.ai가 이어서 처리합니다.",
+  none: "파일은 유지하고 현재 수집함 버전을 원본 최신으로 확인했습니다. Sleek으로 돌아갑니다.",
+  questions: "바뀐 쪽의 문제만 다시 뽑도록 전달했습니다. Sleek이 이어서 처리합니다.",
   content: "본문 갱신을 전달했습니다. 문제 추출과 예상문제는 건너뜁니다.",
-  both: "갱신 결정을 전달했습니다. summary.ai가 결과를 반영합니다.",
+  both: "갱신 결정을 전달했습니다. Sleek이 결과를 반영합니다.",
 };
 
-// summary.ai 가 "수정된 페이지만 대상으로" 다시 읽으려면 어느 쪽이 바뀌었는지 알아야 한다.
+// Sleek 이 "수정된 페이지만 대상으로" 다시 읽으려면 어느 쪽이 바뀌었는지 알아야 한다.
 // **그 계산은 이 화면이 이미 하고 있다** — 다시 계산하게 두면 사용자가 본 것과 어긋날 수 있다.
 //
-// 쪽 번호의 기준은 **갱신 뒤 summary.ai 가 갖게 될 파일**이다. 온전한 파일을 통째로 갈아
+// 쪽 번호의 기준은 **갱신 뒤 Sleek 이 갖게 될 파일**이다. 온전한 파일을 통째로 갈아
 // 끼우면 그건 수집함 파일이라 대상 쪽 번호를 그대로 쓰면 되고, 합쳐서 갱신하면 결과 PDF 의
 // 쪽 번호는 오른쪽에서 고른 순서라 그 자리를 찾아 줘야 한다.
-function changedPagesForSummaryAi() {
+function changedPagesForSleek() {
   const comparison = state.sourceReview;
   if (!comparison) return [];
   const changed = comparison.pairs
@@ -640,16 +640,16 @@ async function finishSourceReview(change) {
   const decision = change === "none"
     ? "skip"
     : (state.mergePlan.origin === "merged" ? "merge" : "refresh");
-  const changedPages = change === "none" ? [] : changedPagesForSummaryAi();
+  const changedPages = change === "none" ? [] : changedPagesForSleek();
   refs.sourceReviewMessage.className = "source-review-message";
-  refs.sourceReviewMessage.textContent = "summary.ai에 결정을 전달하는 중…";
+  refs.sourceReviewMessage.textContent = "Sleek에 결정을 전달하는 중…";
   REVIEW_BUTTONS().forEach((button) => { button.disabled = true; });
   try {
     const response = await callApi("finish_review", decision, state.order, change, changedPages);
     if (!response.ok) throw new Error(response.error);
     refs.sourceReviewMessage.classList.add("success");
     refs.sourceReviewMessage.textContent = CHANGE_DONE_MESSAGE[change] || CHANGE_DONE_MESSAGE.both;
-    await returnToSummaryAi(refs.sourceReviewMessage.textContent);
+    await returnToSleek(refs.sourceReviewMessage.textContent);
   } catch (error) {
     refs.sourceReviewMessage.classList.add("error");
     refs.sourceReviewMessage.textContent = error.message;
@@ -665,24 +665,24 @@ async function reportClientError(value) {
   } catch (_) { /* Logging must never hide the original UI error. */ }
 }
 
-// summary.ai 인계 세션에서는 도구 전환을 막는다. 탭을 지우지 않고 비활성으로 두어,
+// Sleek 인계 세션에서는 도구 전환을 막는다. 탭을 지우지 않고 비활성으로 두어,
 // 왜 못 쓰는지 그 자리에서 읽을 수 있게 한다.
 function lockToMergeTool() {
   showTool("merge");
   refs.handwriting.disabled = true;
   refs.handwriting.classList.add("locked");
-  refs.handwriting.title = "summary.ai에서 넘어온 작업 중에는 필기 옮기기를 쓸 수 없습니다.";
+  refs.handwriting.title = "Sleek에서 넘어온 작업 중에는 필기 옮기기를 쓸 수 없습니다.";
 }
 
 function isHandoffSession() { return !!state.mergePlan; }
 
-// 인계가 끝나면 summary.ai 로 돌아간다. summary.ai 는 결과 파일을 2초마다 지켜보다
+// 인계가 끝나면 Sleek 으로 돌아간다. Sleek 은 결과 파일을 2초마다 지켜보다
 // 자기 창을 앞으로 가져오므로, 여기서는 그 시간을 조금 주고 이 창을 닫는다.
-async function returnToSummaryAi(message) {
+async function returnToSleek(message) {
   if (!isHandoffSession()) return;
   toast(message, "success");
   if (state.runtime !== "desktop") return;
-  setBusy(true, "summary.ai로 돌아가는 중…");
+  setBusy(true, "Sleek으로 돌아가는 중…");
   await new Promise((resolve) => setTimeout(resolve, 1200));
   try {
     const response = await callApi("close_window");
@@ -1884,7 +1884,7 @@ async function addPdfs() {
 }
 
 // 이 세션이 짚을 수 있는 범위를 짚는다. 족첵은 이 앱이 직접(그림 맞추기), 강의록은
-// summary.ai 에 물어서(전사본 판단, LLM). 둘이 함께 켜지는 세션은 없다.
+// Sleek 에 물어서(전사본 판단, LLM). 둘이 함께 켜지는 세션은 없다.
 async function suggestForPlan({auto = false} = {}) {
   if (state.mergePlan?.can_suggest_ranges) { await suggestRanges({auto}); return; }
   if (state.mergePlan?.can_suggest_scope) { await suggestScope({auto}); }
@@ -1920,7 +1920,7 @@ async function suggestRanges({auto = false} = {}) {
   } finally { setBusy(false); }
 }
 
-// 강의록에서 이번 차시가 나간 쪽을 골라 넣는다. **판단은 summary.ai 가** 한다 —
+// 강의록에서 이번 차시가 나간 쪽을 골라 넣는다. **판단은 Sleek 이** 한다 —
 // 전사본을 읽고 강의의 흐름을 보는 일이라 LLM 이 필요하고, 인증·사용량 관리가 거기 있다.
 // 실측: 통계만으로 짚던 방식이 크게 빗나간 세 건에서 이 방식은 모두 2쪽 안에 들어왔다.
 async function suggestScope({auto = false} = {}) {
@@ -1936,12 +1936,12 @@ async function suggestScope({auto = false} = {}) {
   try {
     const ids = candidates.map((doc) => doc.id);
     // 파일을 올린 직후 자동 호출은 캐시를 쓴다. 사람이 버튼을 눌러 다시 부른 경우에는
-    // summary.ai 의 세션·영속 캐시를 모두 건너뛰고 새 LLM 답을 받는다.
+    // Sleek 의 세션·영속 캐시를 모두 건너뛰고 새 LLM 답을 받는다.
     const response = await callApi("suggest_scope", ids.length === 1 ? ids[0] : ids, !auto);
     if (!response.ok) throw new Error(response.error);
     if (!response.pages) {
       if (response.reason) {
-        // summary.ai 가 모델 답을 검증에서 거절했다. 선택은 건드리지 않고 왜인지 보여 준다.
+        // Sleek 이 모델 답을 검증에서 거절했다. 선택은 건드리지 않고 왜인지 보여 준다.
         toast(`진도 범위 제안을 적용하지 않았습니다\n${response.reason}`
           + "\n쪽을 직접 고르거나 [범위 자동 인식]을 다시 눌러 주세요.", "warn");
         return;
@@ -2019,7 +2019,7 @@ async function saveResult() {
   if (!saved) return;
   (saved.warnings || []).forEach((warning) => toast(warning));
   if (isHandoffSession()) {
-    await returnToSummaryAi(`${saved.page_count}쪽을 합쳤습니다. summary.ai로 돌아갑니다.`);
+    await returnToSleek(`${saved.page_count}쪽을 합쳤습니다. Sleek으로 돌아갑니다.`);
     return;
   }
   toast(`${saved.page_count}쪽을 저장했습니다.\n${saved.path}`, "success");
